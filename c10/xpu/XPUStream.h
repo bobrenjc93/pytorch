@@ -29,6 +29,33 @@ namespace c10::xpu {
 
 static constexpr int max_compile_time_stream_priorities = 2;
 
+// The ExternalXPUStreamImpl class represents an external XPU stream
+// implementation. It inherits from c10::intrusive_ptr_target to enable
+// reference counting and automatic memory management. This class manages an
+// external SYCL queue and associates it with a specific device index.
+class ExternalXPUStreamImpl : public c10::intrusive_ptr_target {
+ public:
+  // Constructor that initializes the stored external SYCL queue and device
+  // index.
+  ExternalXPUStreamImpl(sycl::queue ext_queue, DeviceIndex device_index)
+      : ext_queue_(ext_queue), device_index_(device_index) {}
+
+  // Destructor to clean up resources.
+  ~ExternalXPUStreamImpl();
+
+  // Fetch the external SYCL queue.
+  sycl::queue& queue() {
+    return ext_queue_;
+  }
+
+ private:
+  // External SYCL queue stored by PyTorch.
+  sycl::queue ext_queue_;
+
+  // Index of the associated device.
+  DeviceIndex device_index_;
+};
+
 /*
  * This serves as a wrapper around c10::Stream and acts as a representation for
  * a SYCL queue, which allows asynchronous execution of XPU tasks.
@@ -45,6 +72,16 @@ class C10_XPU_API XPUStream {
 
   /// Construct a XPUStream from a Stream with no error checking.
   explicit XPUStream(Unchecked, Stream stream) : stream_(stream) {}
+
+  /// Construct a XPUStream from an external SYCL queue and a given device
+  /// index.
+  explicit XPUStream(sycl::queue ext_queue, DeviceIndex device_index)
+      : stream_(
+            Stream::UNSAFE,
+            c10::Device(DeviceType::XPU, device_index),
+            reinterpret_cast<StreamId>(
+                get_external_stream_impl(ext_queue, device_index).get())),
+        impl_(get_external_stream_impl(ext_queue, device_index)) {}
 
   bool operator==(const XPUStream& other) const noexcept {
     return unwrap() == other.unwrap();
@@ -136,7 +173,12 @@ class C10_XPU_API XPUStream {
   }
 
  private:
+  c10::intrusive_ptr<ExternalXPUStreamImpl> get_external_stream_impl(
+      sycl::queue ext_queue,
+      DeviceIndex device_index) const;
+
   Stream stream_;
+  c10::intrusive_ptr<ExternalXPUStreamImpl> impl_;
 };
 
 /**
@@ -176,6 +218,17 @@ C10_XPU_API std::ostream& operator<<(std::ostream& stream, const XPUStream& s);
  * for their synchronizations.
  */
 C10_XPU_API void syncStreamsOnDevice(DeviceIndex device = -1);
+
+/**
+ * Get an XPUStream from an external SYCL queue.
+ *
+ * This function allows interoperability with other libraries by enabling
+ * the use of an external SYCL queue that was not created by PyTorch. This
+ * can be useful for data exchange or other operations where integration
+ * with non-PyTorch queues is required.
+ */
+C10_XPU_API XPUStream
+getStreamFromExternal(sycl::queue ext_queue, DeviceIndex device_index);
 
 } // namespace c10::xpu
 

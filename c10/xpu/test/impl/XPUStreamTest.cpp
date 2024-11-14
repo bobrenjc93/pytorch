@@ -1,6 +1,8 @@
 #include <gtest/gtest.h>
 
+#include <c10/util/intrusive_ptr.h>
 #include <c10/util/irange.h>
+#include <c10/xpu/XPUException.h>
 #include <c10/xpu/XPUStream.h>
 #include <c10/xpu/test/impl/XPUTest.h>
 #include <optional>
@@ -177,4 +179,50 @@ TEST(XPUStreamTest, StreamFunction) {
 
   validateHostData(hostData, numel);
   sycl::free(deviceData, c10::xpu::get_device_context());
+}
+
+// c10::xpu::XPUStream get_external_stream(sycl::queue queue) {
+//   sycl::queue queue1 = queue;
+//   std::cout << "queue: " << &queue << std::endl;
+//   std::cout << "queue1: " << &queue1 << std::endl;
+//   // return c10::xpu::getStreamFromExternal(&queue1, 0);
+// }
+
+class MyClass : public c10::intrusive_ptr_target {
+ public:
+  MyClass() {
+    std::cout << "MyClass constructor" << std::endl;
+  }
+  ~MyClass() {
+    std::cout << "MyClass destructor" << std::endl;
+  }
+
+  void foo() {
+    std::cout << "foo" << std::endl;
+  }
+};
+
+TEST(XPUStreamTest, ExternalStream) {
+  sycl::queue queue1;
+  std::cout << "queue1: " << &queue1 << std::endl;
+  {
+    sycl::queue queue2 = sycl::queue(sycl::gpu_selector{});
+    std::cout << "queue2: " << &queue2 << std::endl;
+    queue1 = queue2;
+    std::cout << "queue1: " << &queue2 << std::endl;
+    // c10::xpu::XPUStream stream = c10::xpu::getStreamFromExternal(&queue1, 0);
+  }
+  sycl::queue ext_queue = sycl::queue(
+      c10::xpu::get_device_context(),
+      c10::xpu::get_raw_device(0),
+      c10::xpu::asyncHandler,
+      {sycl::property::queue::in_order()});
+  c10::xpu::XPUStream stream = c10::xpu::getStreamFromExternal(ext_queue, 0);
+  std::cout << "stream id: " << stream.id() << std::endl;
+  std::cout << "stream equal: " << (stream.queue() == ext_queue) << std::endl;
+  std::cout << "stream priority: " << stream.priority() << std::endl;
+  {
+    auto stream1 = stream;
+    std::cout << "stream1 id: " << stream1.id() << std::endl;
+  }
 }
