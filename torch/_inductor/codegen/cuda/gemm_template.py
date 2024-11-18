@@ -893,8 +893,11 @@ class CUTLASSGemmTemplate(CUTLASSTemplate, ABC):
 
         assert len(self.input_nodes) >= 2 and self.output_node is not None
         X, W = self.input_nodes[0], self.input_nodes[1]
-        assert isinstance(X.layout, FixedLayout), "X.layout is not fixed"
-        assert isinstance(W.layout, FixedLayout), "W.layout is not fixed"
+        try:
+            assert isinstance(X.layout, FixedLayout), "X.layout is not fixed"
+            assert isinstance(W.layout, FixedLayout), "W.layout is not fixed"
+        except AssertionError:
+            raise NotImplementedError
         Y = self.output_node
         if template_buffer_node is not None:
             Y = template_buffer_node
