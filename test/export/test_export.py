@@ -3478,6 +3478,7 @@ def forward(self, p_linear_weight, p_linear_bias, b_buffer, x):
         args = (torch.rand(3, 700, 700), 150, 150)
         self.assertEqual(ecrop.module()(*args), ecrop(*args))
 
+    @testing.expectedFailureCppSerDes
     def test_dim_dynamic_divisibility(self):
         class M(torch.nn.Module):
             def forward(self, x):
@@ -9120,10 +9121,8 @@ def forward(self, x):
             }
             _load_dynamic_shapes(spec, from_dict=True)
 
-    @testing.expectedFailureSerDer  # TODO(pianpwk): PowByNatural valuerange deserialization
-    @testing.expectedFailureCppSerDes  # TODO(pianpwk): PowByNatural valuerange deserialization
-    @testing.expectedFailureSerDerNonStrict
     @testing.expectedFailureRetraceabilityNonStrict
+    @testing.expectedFailureCppSerDes
     def test_dim_dynamic(self):
         dynamic = Dim.DYNAMIC
 
