@@ -5,7 +5,18 @@ import itertools
 import logging
 import re
 import typing
-from typing import Any, Callable, Dict, List, Optional, Set, Tuple, TypeVar, Union
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    List,
+    Optional,
+    Sequence,
+    Set,
+    Tuple,
+    TypeVar,
+    Union,
+)
 from unittest.mock import patch
 
 import sympy
@@ -221,10 +232,13 @@ class MemoryDep(Dep):
             )
         return self
 
-    def numbytes_hint(self):
-        return V.graph.sizevars.size_hint(self.get_numel()) * get_dtype_size(
-            V.graph.get_dtype(self.name)
-        )
+    def numbytes_hint(self) -> int:
+        try:
+            return V.graph.sizevars.size_hint(self.get_numel()) * get_dtype_size(
+                V.graph.get_dtype(self.name)
+            )
+        except NotImplementedError:  # NoneLayout
+            return 0
 
     def has_unbacked_symbols(self):
         return len(free_unbacked_symbols(self.get_numel())) > 0
@@ -291,9 +305,12 @@ class StarDep(Dep):
         return self
 
     def numbytes_hint(self):
-        return V.graph.sizevars.size_hint(self.get_numel()) * get_dtype_size(
-            V.graph.get_dtype(self.name)
-        )
+        try:
+            return V.graph.sizevars.size_hint(self.get_numel()) * get_dtype_size(
+                V.graph.get_dtype(self.name)
+            )
+        except NotImplementedError:
+            return 0  # NoneLayout, MultiOutputLayout, etc
 
     def has_unbacked_symbols(self):
         return len(free_unbacked_symbols(self.get_numel())) > 0
@@ -545,7 +562,7 @@ def var_builder(prefix: str) -> Tuple[VarRanges, Callable[[sympy.Expr], sympy.Sy
     return var_ranges, add_var
 
 
-def index_vars_no_squeeze(*argsizes: Tuple[sympy.Expr, ...], prefix: str):
+def index_vars_no_squeeze(*argsizes: Sequence[sympy.Expr], prefix: str):
     var_ranges, add_var = var_builder(prefix)
     args: List[List[sympy.Symbol]] = []
     for size in argsizes:
@@ -553,7 +570,7 @@ def index_vars_no_squeeze(*argsizes: Tuple[sympy.Expr, ...], prefix: str):
     return args, var_ranges
 
 
-def index_vars_squeeze(*argsizes: Tuple[sympy.Expr, ...], prefix: str = "d"):
+def index_vars_squeeze(*argsizes: Sequence[sympy.Expr], prefix: str = "d"):
     from .ir import SqueezeView
 
     var_ranges, add_var = var_builder(prefix)
@@ -568,7 +585,7 @@ def index_vars_squeeze(*argsizes: Tuple[sympy.Expr, ...], prefix: str = "d"):
 
 def extract_read_writes(
     fn: Callable[..., Any],
-    *argsizes: Tuple[sympy.Expr, ...],
+    *argsizes: Sequence[sympy.Expr],
     normalize: bool = False,
     prefix: str = "d",
     hidden_args=(),
