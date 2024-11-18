@@ -1396,7 +1396,7 @@ utils_device.CURRENT_DEVICE == None""".split(
         cfg2.val = 2.0
         v = opt_fn(v, cfg2)  # 7
         self.assertEqual(v[0], 7)
-        self.assertEqual(cnts.op_count, 8)
+        self.assertEqual(cnts.op_count, 6)
 
     def test_config_getattr_default(self):
         class Cfg:
@@ -1491,7 +1491,7 @@ utils_device.CURRENT_DEVICE == None""".split(
         self.assertEqual(opt_fn_ret(1.5)[0], -459)
         self.assertEqual(out[0], 2100)
         self.assertEqual(cnts.frame_count, 2)
-        self.assertEqual(cnts.op_count, 7)
+        self.assertEqual(cnts.op_count, 9)
 
     def test_tensor_dict1(self):
         def fn(inputs):
