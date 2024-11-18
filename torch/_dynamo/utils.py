@@ -1001,7 +1001,7 @@ class ChromiumEventLogger:
         self.id_ = str(uuid.uuid4())
 
         # TODO: log to init/id tlparse after I add support for it
-        log.info("ChromiumEventLogger initialized with id %s", self.id_)
+        # TODO (put this back): log.info("ChromiumEventLogger initialized with id %s", self.id_)
 
     def add_event_data(
         self,

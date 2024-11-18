@@ -1,6 +1,7 @@
 # mypy: allow-untyped-defs
 from __future__ import annotations
 
+import atexit
 import functools
 import logging
 import multiprocessing
@@ -138,6 +139,9 @@ def get_compile_threads() -> int:
     """
     if config.compile_threads is None:
         config.compile_threads = config.decide_compile_threads()
+    if config.fx_graph_async_compile:
+        # TODO: fix this - but it's much faster because of the caching or something?
+        return 2
     return config.compile_threads
 
 
@@ -341,3 +345,10 @@ if (
     pass
 else:
     AsyncCompile.warm_pool()
+
+# On exit give the workers a chance to clean themselves up. Without this the
+# resource_tracker can complain about leaked semaphores coming from the
+# ProcessPoolExecutor:
+#   UserWarning: resource_tracker: There appear to be 5 leaked semaphore objects
+#   to clean up at shutdown
+atexit.register(shutdown_compile_workers)
