@@ -2205,6 +2205,9 @@ class DeletedGuardManagerWrapper(GuardManagerWrapper):
         super().__init__()
         self.invalidation_reason = reason
 
+    def populate_diff_guard_manager(self):
+        self.diff_guard_root = None
+
 
 # NB: Naively, you'd expect this to only be a function that produces
 # the callable that constitutes the guard.  However, there is some
