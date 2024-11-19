@@ -96,14 +96,6 @@ TORCH_API void record_kernel_function_dtype(std::string name);
     return __VA_ARGS__();                                                   \
   }
 
-namespace detail {
-
-inline at::ScalarType scalar_type(at::ScalarType s) {
-  return s;
-}
-
-} // namespace detail
-
 // The AT_DISPATCH_* family of macros provides the ability to
 // conveniently generate specializations of a kernel over all of the
 // dtypes we care about in PyTorch.  We call it "dispatch" because
@@ -193,12 +185,11 @@ inline at::ScalarType scalar_type(at::ScalarType s) {
 
 #define AT_DISPATCH_SWITCH(TYPE, NAME, ...)                                 \
   [&] {                                                                     \
-    const auto& the_type = TYPE;                                            \
+    const at::ScalarType the_type = TYPE;                                   \
     constexpr const char* at_dispatch_name = NAME;                          \
     /* don't use TYPE again in case it is an expensive or side-effect op */ \
-    at::ScalarType _st = ::detail::scalar_type(the_type);                   \
-    RECORD_KERNEL_FUNCTION_DTYPE(at_dispatch_name, _st);                    \
-    switch (_st) {                                                          \
+    RECORD_KERNEL_FUNCTION_DTYPE(at_dispatch_name, the_type);               \
+    switch (the_type) {                                                     \
       __VA_ARGS__                                                           \
       default:                                                              \
         TORCH_CHECK(                                                        \
@@ -206,7 +197,7 @@ inline at::ScalarType scalar_type(at::ScalarType s) {
             '"',                                                            \
             at_dispatch_name,                                               \
             "\" not implemented for '",                                     \
-            toString(_st),                                                  \
+            toString(the_type),                                             \
             "'");                                                           \
     }                                                                       \
   }()
