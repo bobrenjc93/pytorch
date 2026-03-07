@@ -1,9 +1,25 @@
+from __future__ import annotations
+
 import os
 import re
 import subprocess
 import sys
 import traceback
 import warnings
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Literal, TypeAlias, cast
+
+
+if TYPE_CHECKING:
+    from torch import Tensor
+    from torch.torch_version import TorchVersion
+
+
+Backend: TypeAlias = Literal["eager", "aot_eager", "inductor"]
+Device: TypeAlias = Literal["cpu", "cuda"]
+PythonVersionInfo: TypeAlias = tuple[int, int, int, str, int]
+SanityCheckArgs: TypeAlias = tuple[Backend, Device, str]
+TensorFn: TypeAlias = Callable[["Tensor"], "Tensor"]
 
 
 MIN_CUDA_VERSION = "11.6"
@@ -15,23 +31,23 @@ class VerifyDynamoError(BaseException):
     pass
 
 
-def check_python():
+def check_python() -> PythonVersionInfo:
     if sys.version_info < MIN_PYTHON_VERSION:
         raise VerifyDynamoError(
             f"Python version not supported: {sys.version_info} "
             f"- minimum requirement: {MIN_PYTHON_VERSION}"
         )
-    return sys.version_info
+    return cast(PythonVersionInfo, sys.version_info)
 
 
-def check_torch():
+def check_torch() -> str:
     import torch
 
     return torch.__version__
 
 
 # based on torch/utils/cpp_extension.py
-def get_cuda_version():
+def get_cuda_version() -> TorchVersion:
     from torch.torch_version import TorchVersion
     from torch.utils import cpp_extension
 
@@ -53,7 +69,7 @@ def get_cuda_version():
     return TorchVersion(cuda_str_version)
 
 
-def get_rocm_version():
+def get_rocm_version() -> TorchVersion:
     from torch.torch_version import TorchVersion
     from torch.utils import cpp_extension
 
@@ -79,14 +95,20 @@ def get_rocm_version():
     return TorchVersion(hip_str_version)
 
 
-def check_cuda():
+def check_cuda() -> TorchVersion | None:
     import torch
     from torch.torch_version import TorchVersion
 
     if not torch.cuda.is_available() or torch.version.hip is not None:
         return None
 
-    torch_cuda_ver = TorchVersion(torch.version.cuda)
+    torch_cuda_version = torch.version.cuda
+    if torch_cuda_version is None:
+        raise VerifyDynamoError(
+            "CUDA is available, but `torch.version.cuda` is unexpectedly None"
+        )
+
+    torch_cuda_ver = TorchVersion(torch_cuda_version)
 
     # check if torch cuda version matches system cuda version
     cuda_ver = get_cuda_version()
@@ -109,18 +131,19 @@ def check_cuda():
             f"- minimum requirement: {MIN_CUDA_VERSION}"
         )
 
-    return cuda_ver if torch.version.hip is None else "None"
+    return cuda_ver
 
 
-def check_rocm():
+def check_rocm() -> TorchVersion | None:
     import torch
     from torch.torch_version import TorchVersion
 
-    if not torch.cuda.is_available() or torch.version.hip is None:
+    torch_rocm_version = torch.version.hip
+    if not torch.cuda.is_available() or torch_rocm_version is None:
         return None
 
     # Extracts main ROCm version from full string
-    torch_rocm_ver = TorchVersion(".".join(list(torch.version.hip.split(".")[0:2])))
+    torch_rocm_ver = TorchVersion(".".join(torch_rocm_version.split(".")[0:2]))
 
     # check if torch rocm version matches system rocm version
     rocm_ver = get_rocm_version()
@@ -139,10 +162,10 @@ def check_rocm():
             f"- minimum requirement: {MIN_ROCM_VERSION}"
         )
 
-    return rocm_ver if torch.version.hip else "None"
+    return rocm_ver
 
 
-def check_dynamo(backend, device, err_msg) -> None:
+def check_dynamo(backend: Backend, device: Device, err_msg: str) -> None:
     import torch
 
     if device == "cuda" and not torch.cuda.is_available():
@@ -166,16 +189,16 @@ def check_dynamo(backend, device, err_msg) -> None:
         dynamo.reset()
 
         @dynamo.optimize(backend, nopython=True)
-        def fn(x):
+        def fn(x: Tensor) -> Tensor:
             return x + x
 
         class Module(torch.nn.Module):
-            def forward(self, x):
+            def forward(self, x: Tensor) -> Tensor:
                 return x + x
 
         mod = Module()
         # pyrefly: ignore [bad-argument-type]
-        opt_mod = dynamo.optimize(backend, nopython=True)(mod)
+        opt_mod = cast(TensorFn, dynamo.optimize(backend, nopython=True)(mod))
 
         for f in (fn, opt_mod):
             x = torch.randn(10, 10).to(device)
@@ -190,7 +213,7 @@ def check_dynamo(backend, device, err_msg) -> None:
         sys.exit(1)
 
 
-_SANITY_CHECK_ARGS = (
+_SANITY_CHECK_ARGS: tuple[SanityCheckArgs, ...] = (
     ("eager", "cpu", "CPU eager sanity check failed"),
     ("eager", "cuda", "CUDA eager sanity check failed"),
     ("aot_eager", "cpu", "CPU aot_eager sanity check failed"),
@@ -211,7 +234,7 @@ def main() -> None:
     cuda_ver = check_cuda()
     rocm_ver = check_rocm()
     print(
-        f"Python version: {python_ver.major}.{python_ver.minor}.{python_ver.micro}\n"
+        f"Python version: {python_ver[0]}.{python_ver[1]}.{python_ver[2]}\n"
         f"`torch` version: {torch_ver}\n"
         f"CUDA version: {cuda_ver}\n"
         f"ROCM version: {rocm_ver}\n"
