@@ -6,7 +6,7 @@ import argparse
 import json
 import sys
 from argparse import Namespace
-from typing import TYPE_CHECKING, Literal, TypedDict, cast
+from typing import cast, Literal, TYPE_CHECKING, TypedDict
 
 import yaml
 

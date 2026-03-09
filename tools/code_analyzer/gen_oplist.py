@@ -7,7 +7,7 @@ import json
 import os
 import sys
 from functools import reduce
-from typing import TYPE_CHECKING, TypedDict, cast
+from typing import cast, TYPE_CHECKING, TypedDict
 
 import yaml
 from tools.lite_interpreter.gen_selected_mobile_ops_header import (
