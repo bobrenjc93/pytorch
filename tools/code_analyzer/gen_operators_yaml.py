@@ -267,9 +267,7 @@ def fill_output(output: dict[str, object], options: Namespace) -> None:
     dept_graph = load_op_dep_graph(typed_options.dep_graph_yaml_path)
 
     model_versions = _split_csv_arg(typed_options.model_versions, drop_empty=False)
-    model_assets_values = _split_csv_arg(
-        typed_options.model_assets, drop_empty=False
-    )
+    model_assets_values = _split_csv_arg(typed_options.model_assets, drop_empty=False)
     model_assets = model_assets_values or None
 
     all_models_yaml: list[ModelConfig] = []
