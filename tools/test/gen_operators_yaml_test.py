@@ -3,10 +3,13 @@
 
 import argparse
 import json
+import tempfile
 import unittest
 from collections import defaultdict
 from typing import cast, TypedDict
 from unittest.mock import Mock, patch
+
+import yaml
 
 # pyrefly: ignore [import-error, missing-import]
 from gen_operators_yaml import (
@@ -210,6 +213,55 @@ class GenOperatorsYAMLTest(unittest.TestCase):
                 model_name="abcd",
                 new_style_rule=True,
             )
+
+    @patch(
+        "gen_operators_yaml.load_op_dep_graph", return_value=_mock_load_op_dep_graph()
+    )
+    def test_fill_output_rejects_empty_model_versions(
+        self, mock_load_op_dep_graph: Mock
+    ) -> None:
+        options = _mock_options()
+        options.model_versions = ""
+        with tempfile.NamedTemporaryFile("w", suffix=".yaml") as model_yaml:
+            yaml.safe_dump(
+                _make_model_config(
+                    "test_model",
+                    100,
+                    "asset-1",
+                    include_traced_operators=False,
+                ),
+                model_yaml,
+            )
+            model_yaml.flush()
+            options.models_yaml_path = [model_yaml.name]
+
+            with self.assertRaises(RuntimeError):
+                fill_output({}, options)
+
+    @patch(
+        "gen_operators_yaml.load_op_dep_graph", return_value=_mock_load_op_dep_graph()
+    )
+    def test_fill_output_rejects_empty_model_assets(
+        self, mock_load_op_dep_graph: Mock
+    ) -> None:
+        options = _mock_options()
+        options.model_versions = "100"
+        options.model_assets = ""
+        with tempfile.NamedTemporaryFile("w", suffix=".yaml") as model_yaml:
+            yaml.safe_dump(
+                _make_model_config(
+                    "test_model",
+                    100,
+                    "asset-1",
+                    include_traced_operators=False,
+                ),
+                model_yaml,
+            )
+            model_yaml.flush()
+            options.models_yaml_path = [model_yaml.name]
+
+            with self.assertRaises(RuntimeError):
+                fill_output({}, options)
 
     @patch("gen_operators_yaml.parse_options", return_value=_mock_options())
     @patch(

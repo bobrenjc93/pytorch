@@ -130,13 +130,14 @@ def canonical_opnames(opnames: list[str]) -> list[str]:
     return [canonical_name(opname) for opname in opnames]
 
 
-def _split_csv_arg(raw_value: object) -> list[str]:
+def _split_csv_arg(raw_value: object, *, drop_empty: bool = True) -> list[str]:
     if raw_value is None:
         return []
     if isinstance(raw_value, str):
-        return [value for value in raw_value.split(",") if value]
+        values = raw_value.split(",")
+        return [value for value in values if value] if drop_empty else values
     if isinstance(raw_value, list):
-        return [value for value in raw_value if value]
+        return [value for value in raw_value if value] if drop_empty else raw_value
     raise TypeError(
         f"Expected a comma-separated string or list[str], got {type(raw_value)}"
     )
@@ -265,8 +266,10 @@ def fill_output(output: dict[str, object], options: Namespace) -> None:
     typed_options = cast(_Options, options)
     dept_graph = load_op_dep_graph(typed_options.dep_graph_yaml_path)
 
-    model_versions = _split_csv_arg(typed_options.model_versions)
-    model_assets_values = _split_csv_arg(typed_options.model_assets)
+    model_versions = _split_csv_arg(typed_options.model_versions, drop_empty=False)
+    model_assets_values = _split_csv_arg(
+        typed_options.model_assets, drop_empty=False
+    )
     model_assets = model_assets_values or None
 
     all_models_yaml: list[ModelConfig] = []
