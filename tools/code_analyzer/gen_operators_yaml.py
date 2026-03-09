@@ -6,8 +6,7 @@ import argparse
 import json
 import sys
 from argparse import Namespace
-from collections.abc import Callable, Sequence
-from typing import Literal, TypedDict, cast
+from typing import TYPE_CHECKING, Literal, TypedDict, cast
 
 import yaml
 
@@ -23,6 +22,10 @@ from torchgen.selective_build.operator import (
     SelectiveBuildOperator,
 )
 from torchgen.selective_build.selector import merge_kernel_metadata
+
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Sequence
 
 
 KernelMetadata = dict[str, list[str]]
@@ -160,9 +163,7 @@ def make_filter_from_options(
 
 
 # Returns if a the specified rule is a new or old style pt_operator_library
-def is_new_style_rule(
-    model_name: str | None, model_versions: list[str] | None
-) -> bool:
+def is_new_style_rule(model_name: str | None, model_versions: list[str] | None) -> bool:
     return model_name is not None and model_versions is not None
 
 
@@ -347,7 +348,9 @@ def fill_output(output: dict[str, object], options: Namespace) -> None:
                 traced_ops |= set(cast(list[str], model_info["traced_operators"]))
 
         if "kernel_metadata" in model_info:
-            all_kernel_metadata.append(cast(KernelMetadata, model_info["kernel_metadata"]))
+            all_kernel_metadata.append(
+                cast(KernelMetadata, model_info["kernel_metadata"])
+            )
 
         if "custom_classes" in model_info:
             all_custom_classes |= set(cast(list[str], model_info["custom_classes"]))

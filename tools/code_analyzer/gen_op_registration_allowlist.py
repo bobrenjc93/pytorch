@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import argparse
 from collections import defaultdict
-from typing import TypedDict, cast
+from typing import cast, TypedDict
 
 import yaml
 

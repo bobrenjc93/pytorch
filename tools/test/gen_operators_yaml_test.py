@@ -5,7 +5,7 @@ import argparse
 import json
 import unittest
 from collections import defaultdict
-from typing import TypedDict, cast
+from typing import cast, TypedDict
 from unittest.mock import Mock, patch
 
 # pyrefly: ignore [import-error, missing-import]
@@ -109,18 +109,10 @@ class GenOperatorsYAMLTest(unittest.TestCase):
             model_backends=None,
         )
         config = [
-            _make_model_config(
-                "abc", 100, "asset-1", include_traced_operators=True
-            ),
-            _make_model_config(
-                "abc", 102, "asset-1", include_traced_operators=False
-            ),
-            _make_model_config(
-                "abcd", 100, "asset-1", include_traced_operators=True
-            ),
-            _make_model_config(
-                "abc", 101, "asset-2", include_traced_operators=False
-            ),
+            _make_model_config("abc", 100, "asset-1", include_traced_operators=True),
+            _make_model_config("abc", 102, "asset-1", include_traced_operators=False),
+            _make_model_config("abcd", 100, "asset-1", include_traced_operators=True),
+            _make_model_config("abc", 101, "asset-2", include_traced_operators=False),
         ]
 
         filtered_configs = list(filter(filter_func, config))
@@ -138,9 +130,7 @@ class GenOperatorsYAMLTest(unittest.TestCase):
         )
         config = [
             _make_model_config("abc", 100, "asset-1", include_traced_operators=True),
-            _make_model_config(
-                "abc", 101, "asset-2", include_traced_operators=False
-            ),
+            _make_model_config("abc", 101, "asset-2", include_traced_operators=False),
         ]
         filtered_configs = list(filter(filter_func, config))
         try:
@@ -160,9 +150,7 @@ class GenOperatorsYAMLTest(unittest.TestCase):
     def test_verification_fail(self) -> None:
         config = [
             _make_model_config("abc", 100, "asset-1", include_traced_operators=True),
-            _make_model_config(
-                "abc", 101, "asset-2", include_traced_operators=False
-            ),
+            _make_model_config("abc", 101, "asset-2", include_traced_operators=False),
         ]
 
         good_assets = ["asset-1", "asset-2"]

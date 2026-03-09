@@ -6,9 +6,8 @@ import argparse
 import json
 import os
 import sys
-from collections.abc import Sequence
 from functools import reduce
-from typing import TypedDict, cast
+from typing import TYPE_CHECKING, TypedDict, cast
 
 import yaml
 from tools.lite_interpreter.gen_selected_mobile_ops_header import (
@@ -19,6 +18,10 @@ from torchgen.selective_build.selector import (
     combine_selective_builders,
     SelectiveBuilder,
 )
+
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 
 ModelConfig = dict[str, object]

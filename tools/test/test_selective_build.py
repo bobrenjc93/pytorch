@@ -1,10 +1,7 @@
 import unittest
 
 from torchgen.model import Location, NativeFunction
-from torchgen.selective_build.operator import (
-    combine_operators,
-    SelectiveBuildOperator,
-)
+from torchgen.selective_build.operator import combine_operators, SelectiveBuildOperator
 from torchgen.selective_build.selector import (
     combine_selective_builders,
     SelectiveBuilder,
