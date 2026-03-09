@@ -2,33 +2,50 @@
 # Copyright 2004-present Facebook. All Rights Reserved.
 
 import unittest
-from unittest.mock import MagicMock
 
 from tools.code_analyzer.gen_oplist import throw_if_any_op_includes_overloads
+from torchgen.selective_build.selector import SelectiveBuilder
 
 
 class GenOplistTest(unittest.TestCase):
-    def setUp(self) -> None:
-        pass
-
     def test_throw_if_any_op_includes_overloads(self) -> None:
-        selective_builder = MagicMock()
-        selective_builder.operators = MagicMock()
-        selective_builder.operators.items.return_value = [
-            ("op1", MagicMock(include_all_overloads=True)),
-            ("op2", MagicMock(include_all_overloads=False)),
-            ("op3", MagicMock(include_all_overloads=True)),
-        ]
-
-        self.assertRaises(
-            Exception, throw_if_any_op_includes_overloads, selective_builder
+        selective_builder = SelectiveBuilder.from_yaml_str(
+            """
+operators:
+  aten::op1:
+    is_root_operator: No
+    is_used_for_training: No
+    include_all_overloads: Yes
+  aten::op2:
+    is_root_operator: No
+    is_used_for_training: No
+    include_all_overloads: No
+  aten::op3:
+    is_root_operator: No
+    is_used_for_training: No
+    include_all_overloads: Yes
+"""
         )
+        with self.assertRaises(Exception):
+            throw_if_any_op_includes_overloads(selective_builder)
 
-        selective_builder.operators.items.return_value = [
-            ("op1", MagicMock(include_all_overloads=False)),
-            ("op2", MagicMock(include_all_overloads=False)),
-            ("op3", MagicMock(include_all_overloads=False)),
-        ]
+        selective_builder = SelectiveBuilder.from_yaml_str(
+            """
+operators:
+  aten::op1:
+    is_root_operator: No
+    is_used_for_training: No
+    include_all_overloads: No
+  aten::op2:
+    is_root_operator: No
+    is_used_for_training: No
+    include_all_overloads: No
+  aten::op3:
+    is_root_operator: No
+    is_used_for_training: No
+    include_all_overloads: No
+"""
+        )
 
         # Here we do not expect it to throw an exception since none of the ops
         # include all overloads.
