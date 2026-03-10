@@ -1,7 +1,7 @@
 import unittest
 
 from torchgen.model import Location, NativeFunction
-from torchgen.selective_build.operator import *  # noqa: F403
+from torchgen.selective_build.operator import combine_operators, SelectiveBuildOperator
 from torchgen.selective_build.selector import (
     combine_selective_builders,
     SelectiveBuilder,
@@ -69,7 +69,7 @@ operators:
         # Overload name is not used for checking in v1.
         self.assertTrue(selector1.is_operator_selected("aten::add.float"))
 
-        def gen():
+        def gen() -> SelectiveBuilder:
             return SelectiveBuilder.from_yaml_str(yaml_config_invalid)
 
         self.assertRaises(Exception, gen)
@@ -175,7 +175,7 @@ operators:
         self.assertTrue(op6.is_root_operator)
         self.assertTrue(op6.is_used_for_training)
 
-        def gen_new_op():
+        def gen_new_op() -> SelectiveBuildOperator:
             return combine_operators(op1, op3)
 
         self.assertRaises(Exception, gen_new_op)

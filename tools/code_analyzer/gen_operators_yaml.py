@@ -6,7 +6,7 @@ import argparse
 import json
 import sys
 from argparse import Namespace
-from typing import Any
+from typing import cast, Literal, TYPE_CHECKING, TypedDict
 
 import yaml
 
@@ -22,6 +22,41 @@ from torchgen.selective_build.operator import (
     SelectiveBuildOperator,
 )
 from torchgen.selective_build.selector import merge_kernel_metadata
+
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Sequence
+
+
+KernelMetadata = dict[str, list[str]]
+ModelConfig = dict[str, object]
+OperatorBucket = dict[str, SelectiveBuildOperator]
+ModelField = Literal["asset", "version"]
+
+
+class _AssetDebugInfo(TypedDict):
+    md5_hash: list[str]
+
+
+class _ModelDebugInfo(TypedDict):
+    asset_info: dict[str, _AssetDebugInfo]
+    is_new_style_rule: bool
+
+
+class _Options(argparse.Namespace):
+    root_ops: str | None
+    training_root_ops: str | None
+    output_path: str
+    dep_graph_yaml_path: str
+    model_name: str
+    model_versions: str | None
+    model_assets: str | None
+    model_backends: str | None
+    models_yaml_path: list[str] | None
+    include_all_operators: bool
+    rule_name: str
+    not_include_all_overloads_static_root_ops: bool
+    not_include_all_overloads_closure_ops: bool
 
 
 # Generate YAML file containing the operators used for a specific PyTorch model.
@@ -95,19 +130,32 @@ def canonical_opnames(opnames: list[str]) -> list[str]:
     return [canonical_name(opname) for opname in opnames]
 
 
+def _split_csv_arg(raw_value: object, *, drop_empty: bool = True) -> list[str]:
+    if raw_value is None:
+        return []
+    if isinstance(raw_value, str):
+        values = raw_value.split(",")
+        return [value for value in values if value] if drop_empty else values
+    if isinstance(raw_value, list):
+        return [value for value in raw_value if value] if drop_empty else raw_value
+    raise TypeError(
+        f"Expected a comma-separated string or list[str], got {type(raw_value)}"
+    )
+
+
 def make_filter_from_options(
     model_name: str,
     model_versions: list[str],
     model_assets: list[str] | None,
-    model_backends: list[str] | None,
-):
-    def is_model_included(model_info) -> bool:
-        model = model_info["model"]
-        if model["name"] != model_name:
+    model_backends: str | None,
+) -> Callable[[ModelConfig], bool]:
+    def is_model_included(model_info: ModelConfig) -> bool:
+        model = cast(dict[str, object], model_info["model"])
+        if cast(str, model["name"]) != model_name:
             return False
         if str(model["version"]) not in model_versions:
             return False
-        if model_assets is not None and model["asset"] not in model_assets:
+        if model_assets is not None and cast(str, model["asset"]) not in model_assets:
             return False
         # TODO: Handle backend later
         return True
@@ -116,7 +164,7 @@ def make_filter_from_options(
 
 
 # Returns if a the specified rule is a new or old style pt_operator_library
-def is_new_style_rule(model_name: str, model_versions: list[str] | None):
+def is_new_style_rule(model_name: str | None, model_versions: list[str] | None) -> bool:
     return model_name is not None and model_versions is not None
 
 
@@ -126,19 +174,24 @@ def is_new_style_rule(model_name: str, model_versions: list[str] | None):
 def verify_all_specified_present(
     model_assets: list[str] | None,
     model_versions: list[str],
-    selected_models_yaml: list[dict[str, Any]],
+    selected_models_yaml: Sequence[ModelConfig],
     rule_name: str,
     model_name: str,
     new_style_rule: bool,
 ) -> None:
-    def find_missing_items(model_items, key, selected_models_yaml):
+    def find_missing_items(
+        model_items: list[str] | None,
+        key: ModelField,
+        selected_models_yaml: Sequence[ModelConfig],
+    ) -> list[str]:
         missing_items = []
         if not new_style_rule or not model_items:
             return missing_items
         for item in model_items:
             found = False
             for model in selected_models_yaml:
-                if str(model["model"][key]) == item:
+                model_info = cast(dict[str, object], model["model"])
+                if str(model_info[key]) == item:
                     found = True
             if not found:
                 missing_items.append(item)
@@ -187,24 +240,20 @@ def verify_all_specified_present(
 # formats them as a string, and places the string into output as a top level debug_info
 def create_debug_info_from_selected_models(
     output: dict[str, object],
-    selected_models: list[dict],
+    selected_models: Sequence[ModelConfig],
     new_style_rule: bool,
 ) -> None:
-    model_dict = {
+    model_dict: _ModelDebugInfo = {
         "asset_info": {},  # maps asset name -> dict of asset metadata like hashes
         "is_new_style_rule": new_style_rule,
     }
 
     for model in selected_models:
-        model_info = model["model"]
-        asset = model_info["asset"]
-        hash = model_info["md5_hash"]
-
-        # pyrefly: ignore [missing-attribute]
-        asset_info = model_dict["asset_info"].setdefault(asset, {})
-
-        # pyrefly: ignore [missing-attribute]
-        asset_info.setdefault("md5_hash", []).append(hash)
+        model_info = cast(dict[str, object], model["model"])
+        asset = cast(str, model_info["asset"])
+        md5_hash = cast(str, model_info["md5_hash"])
+        asset_info = model_dict["asset_info"].setdefault(asset, {"md5_hash": []})
+        asset_info["md5_hash"].append(md5_hash)
 
     # Will later be used in gen_oplist to generate the model/version/asset checking
     output["debug_info"] = [json.dumps(model_dict)]
@@ -214,65 +263,61 @@ def fill_output(output: dict[str, object], options: Namespace) -> None:
     """Populate the output dict with the information required to serialize
     the YAML file used for selective build.
     """
-    dept_graph = load_op_dep_graph(options.dep_graph_yaml_path)
+    typed_options = cast(_Options, options)
+    dept_graph = load_op_dep_graph(typed_options.dep_graph_yaml_path)
 
-    model_versions = (
-        options.model_versions.split(",") if options.model_versions is not None else []
-    )
-    model_assets = (
-        options.model_assets.split(",") if options.model_assets is not None else None
-    )
+    model_versions = _split_csv_arg(typed_options.model_versions, drop_empty=False)
+    model_assets_values = _split_csv_arg(typed_options.model_assets, drop_empty=False)
+    model_assets = model_assets_values or None
 
-    all_models_yaml = []
-    if options.models_yaml_path:
-        for yaml_path in options.models_yaml_path:
+    all_models_yaml: list[ModelConfig] = []
+    if typed_options.models_yaml_path:
+        for yaml_path in typed_options.models_yaml_path:
             with open(yaml_path, "rb") as f:
-                all_models_yaml.append(yaml.safe_load(f))
+                all_models_yaml.append(cast(ModelConfig, yaml.safe_load(f)))
 
     model_filter_func = make_filter_from_options(
-        options.model_name, model_versions, model_assets, options.model_backends
+        typed_options.model_name,
+        model_versions,
+        model_assets,
+        typed_options.model_backends,
     )
 
     selected_models_yaml = list(filter(model_filter_func, all_models_yaml))
+    new_style_rule = is_new_style_rule(
+        typed_options.model_name,
+        model_versions if typed_options.model_versions is not None else None,
+    )
 
     verify_all_specified_present(
         model_assets=model_assets,
         model_versions=model_versions,
         selected_models_yaml=selected_models_yaml,
-        rule_name=options.rule_name,
-        model_name=options.model_name,
-        new_style_rule=is_new_style_rule(options.model_name, options.model_versions),
+        rule_name=typed_options.rule_name,
+        model_name=typed_options.model_name,
+        new_style_rule=new_style_rule,
     )
 
     create_debug_info_from_selected_models(
         output,
         selected_models_yaml,
-        is_new_style_rule(options.model_name, options.model_versions),
+        new_style_rule,
     )
 
     # initialize variables for static build from the pt_operator_library rule
-    if options.root_ops is not None:
-        static_root_ops = set(filter(lambda x: len(x) > 0, options.root_ops.split(",")))
-    else:
-        static_root_ops = set()
-
-    static_training_root_ops = set(
-        filter(
-            lambda x: len(x) > 0,
-            (options.training_root_ops or "").split(","),
-        )
-    )
+    static_root_ops = set(_split_csv_arg(typed_options.root_ops))
+    static_training_root_ops = set(_split_csv_arg(typed_options.training_root_ops))
     if len(static_training_root_ops) > 0:
         static_root_ops = static_root_ops | static_training_root_ops
     # end if
 
-    root_ops_unexpand = set()
-    traced_ops = set()
-    training_root_ops_unexpand = set()
-    traced_training_ops = set()
-    all_kernel_metadata = []
-    all_custom_classes = set()
-    all_build_features = set()
+    root_ops_unexpand: set[str] = set()
+    traced_ops: set[str] = set()
+    training_root_ops_unexpand: set[str] = set()
+    traced_training_ops: set[str] = set()
+    all_kernel_metadata: list[KernelMetadata] = []
+    all_custom_classes: set[str] = set()
+    all_build_features: set[str] = set()
 
     # Go through each yaml file and retrieve operator information.
     for model_info in selected_models_yaml:
@@ -283,7 +328,7 @@ def fill_output(output: dict[str, object], options: Namespace) -> None:
             # operators, all of whose overloads must be included. In addition, these
             # root_ops will be further expanded using the transitive closure of
             # operator dependencies.
-            static_root_ops = static_root_ops | set(model_info["root_operators"])
+            static_root_ops |= set(cast(list[str], model_info["root_operators"]))
         else:
             # If this YAML file specifies traced operators, then it is using
             # the tracing based selective build approach of finding used
@@ -292,41 +337,39 @@ def fill_output(output: dict[str, object], options: Namespace) -> None:
             # root_ops_unexpand will NOT be further expanded. If the train flag is
             # set then the ops will be used for training, so we put them in a separate
             # set
-            if model_info["train"]:
-                training_root_ops_unexpand = training_root_ops_unexpand | set(
-                    model_info["root_operators"]
+            if cast(bool, model_info["train"]):
+                training_root_ops_unexpand |= set(
+                    cast(list[str], model_info["root_operators"])
                 )
-                traced_training_ops = traced_training_ops | set(
-                    model_info["traced_operators"]
+                traced_training_ops |= set(
+                    cast(list[str], model_info["traced_operators"])
                 )
             else:
-                root_ops_unexpand = root_ops_unexpand | set(
-                    model_info["root_operators"]
-                )
-                traced_ops = traced_ops | set(model_info["traced_operators"])
+                root_ops_unexpand |= set(cast(list[str], model_info["root_operators"]))
+                traced_ops |= set(cast(list[str], model_info["traced_operators"]))
 
         if "kernel_metadata" in model_info:
-            all_kernel_metadata.append(model_info["kernel_metadata"])
+            all_kernel_metadata.append(
+                cast(KernelMetadata, model_info["kernel_metadata"])
+            )
 
         if "custom_classes" in model_info:
-            all_custom_classes = all_custom_classes | set(model_info["custom_classes"])
+            all_custom_classes |= set(cast(list[str], model_info["custom_classes"]))
 
         if "build_features" in model_info:
-            all_build_features = all_build_features | set(model_info["build_features"])
+            all_build_features |= set(cast(list[str], model_info["build_features"]))
 
     # This following section on transitive closure is relevant to static build only
-    # pyrefly: ignore [bad-argument-type]
-    canonical_root_ops = canonical_opnames(static_root_ops)
+    canonical_root_ops = canonical_opnames(list(static_root_ops))
     # If no canonical_root_ops exist, don't compute the transitive closure
     # otherwise, we will include __BASE__ and __ROOT__ ops and mark them as required
     # for inference.
     if len(canonical_root_ops) > 0:
         closure_op_list = gen_transitive_closure(dept_graph, canonical_root_ops)
     else:
-        closure_op_list = set()
+        closure_op_list = []
 
-    # pyrefly: ignore [bad-argument-type]
-    canonical_training_root_ops = canonical_opnames(static_training_root_ops)
+    canonical_training_root_ops = canonical_opnames(list(static_training_root_ops))
     # If no canonical_training_root_ops exist, don't compute the transitive closure
     # otherwise, we will include __BASE__ and __ROOT__ ops and mark them as required
     # for training.
@@ -335,7 +378,7 @@ def fill_output(output: dict[str, object], options: Namespace) -> None:
             dept_graph, canonical_training_root_ops, train=True
         )
     else:
-        closure_training_op_list = set()
+        closure_training_op_list = []
 
     # bucketed_ops holds sets of operators that correspond to specific semantic buckets. For
     # example:
@@ -350,38 +393,38 @@ def fill_output(output: dict[str, object], options: Namespace) -> None:
     # Basically for each of the 3 boolean conditional, there are 2
     # options (True/False).
     #
-    bucketed_ops = []
+    bucketed_ops: list[OperatorBucket] = []
 
     # START STATIC BUILD OPS
-    static_root_ops_bucket = {}
+    static_root_ops_bucket: OperatorBucket = {}
     for op_name in static_root_ops:
         op = SelectiveBuildOperator.from_yaml_dict(
             op_name,
             {
                 "is_root_operator": True,
                 "is_used_for_training": False,
-                "include_all_overloads": not options.not_include_all_overloads_static_root_ops,
-                "debug_info": [options.model_name],
+                "include_all_overloads": not typed_options.not_include_all_overloads_static_root_ops,
+                "debug_info": [typed_options.model_name],
             },
         )
         static_root_ops_bucket[op_name] = op
     bucketed_ops.append(static_root_ops_bucket)
 
-    closure_ops_bucket = {}
+    closure_ops_bucket: OperatorBucket = {}
     for op_name in closure_op_list:
         op = SelectiveBuildOperator.from_yaml_dict(
             op_name,
             {
                 "is_root_operator": False,
                 "is_used_for_training": False,
-                "include_all_overloads": not options.not_include_all_overloads_closure_ops,
-                "debug_info": [options.model_name],
+                "include_all_overloads": not typed_options.not_include_all_overloads_closure_ops,
+                "debug_info": [typed_options.model_name],
             },
         )
         closure_ops_bucket[op_name] = op
     bucketed_ops.append(closure_ops_bucket)
 
-    static_training_root_ops_bucket = {}
+    static_training_root_ops_bucket: OperatorBucket = {}
     for op_name in static_training_root_ops:
         op = SelectiveBuildOperator.from_yaml_dict(
             op_name,
@@ -389,13 +432,13 @@ def fill_output(output: dict[str, object], options: Namespace) -> None:
                 "is_root_operator": True,
                 "is_used_for_training": True,
                 "include_all_overloads": True,
-                "debug_info": [options.model_name],
+                "debug_info": [typed_options.model_name],
             },
         )
         static_training_root_ops_bucket[op_name] = op
     bucketed_ops.append(static_training_root_ops_bucket)
 
-    closure_training_ops_bucket = {}
+    closure_training_ops_bucket: OperatorBucket = {}
     for op_name in closure_training_op_list:
         op = SelectiveBuildOperator.from_yaml_dict(
             op_name,
@@ -403,7 +446,7 @@ def fill_output(output: dict[str, object], options: Namespace) -> None:
                 "is_root_operator": False,
                 "is_used_for_training": True,
                 "include_all_overloads": True,
-                "debug_info": [options.model_name],
+                "debug_info": [typed_options.model_name],
             },
         )
         closure_training_ops_bucket[op_name] = op
@@ -411,7 +454,7 @@ def fill_output(output: dict[str, object], options: Namespace) -> None:
     # END STATIC BUILD OPS
 
     # START TRACING BASED BUILD OPS
-    root_ops_unexpand_bucket = {}
+    root_ops_unexpand_bucket: OperatorBucket = {}
     for op_name in root_ops_unexpand:
         op = SelectiveBuildOperator.from_yaml_dict(
             op_name,
@@ -419,13 +462,13 @@ def fill_output(output: dict[str, object], options: Namespace) -> None:
                 "is_root_operator": True,
                 "is_used_for_training": False,
                 "include_all_overloads": False,
-                "debug_info": [options.model_name],
+                "debug_info": [typed_options.model_name],
             },
         )
         root_ops_unexpand_bucket[op_name] = op
     bucketed_ops.append(root_ops_unexpand_bucket)
 
-    traced_ops_bucket = {}
+    traced_ops_bucket: OperatorBucket = {}
     for op_name in traced_ops:
         op = SelectiveBuildOperator.from_yaml_dict(
             op_name,
@@ -433,13 +476,13 @@ def fill_output(output: dict[str, object], options: Namespace) -> None:
                 "is_root_operator": False,
                 "is_used_for_training": False,
                 "include_all_overloads": False,
-                "debug_info": [options.model_name],
+                "debug_info": [typed_options.model_name],
             },
         )
         traced_ops_bucket[op_name] = op
     bucketed_ops.append(traced_ops_bucket)
 
-    training_root_ops_unexpand_bucket = {}
+    training_root_ops_unexpand_bucket: OperatorBucket = {}
     for op_name in training_root_ops_unexpand:
         op = SelectiveBuildOperator.from_yaml_dict(
             op_name,
@@ -447,13 +490,13 @@ def fill_output(output: dict[str, object], options: Namespace) -> None:
                 "is_root_operator": True,
                 "is_used_for_training": True,
                 "include_all_overloads": False,
-                "debug_info": [options.model_name],
+                "debug_info": [typed_options.model_name],
             },
         )
         training_root_ops_unexpand_bucket[op_name] = op
     bucketed_ops.append(training_root_ops_unexpand_bucket)
 
-    traced_training_ops_bucket = {}
+    traced_training_ops_bucket: OperatorBucket = {}
     for op_name in traced_training_ops:
         op = SelectiveBuildOperator.from_yaml_dict(
             op_name,
@@ -461,7 +504,7 @@ def fill_output(output: dict[str, object], options: Namespace) -> None:
                 "is_root_operator": False,
                 "is_used_for_training": True,
                 "include_all_overloads": False,
-                "debug_info": [options.model_name],
+                "debug_info": [typed_options.model_name],
             },
         )
         traced_training_ops_bucket[op_name] = op
@@ -483,7 +526,7 @@ def fill_output(output: dict[str, object], options: Namespace) -> None:
             include_all_non_op_selectives or op_info.include_all_overloads
         )
 
-    operators_as_dict = {}
+    operators_as_dict: dict[str, dict[str, object]] = {}
     for k, v in operators.items():
         operators_as_dict[k] = v.to_dict()
 
@@ -495,7 +538,7 @@ def fill_output(output: dict[str, object], options: Namespace) -> None:
 
     output["include_all_non_op_selectives"] = include_all_non_op_selectives
     if len(all_kernel_metadata) > 0:
-        kernel_metadata = {}
+        kernel_metadata: KernelMetadata = {}
         for kt in all_kernel_metadata:
             kernel_metadata = merge_kernel_metadata(kernel_metadata, kt)
         output["kernel_metadata"] = kernel_metadata
@@ -598,16 +641,16 @@ def add_arguments_parser(parser: argparse.ArgumentParser) -> argparse.ArgumentPa
     return parser
 
 
-def parse_options(parser: argparse.ArgumentParser) -> argparse.Namespace:
-    return parser.parse_args()
+def parse_options(parser: argparse.ArgumentParser) -> _Options:
+    return parser.parse_args(namespace=_Options())
 
 
-def get_parser_options(parser: argparse.ArgumentParser) -> argparse.Namespace:
+def get_parser_options(parser: argparse.ArgumentParser) -> _Options:
     parser = add_arguments_parser(parser)
     return parse_options(parser)
 
 
-def main(argv) -> None:
+def main(_argv: Sequence[str]) -> None:
     parser = argparse.ArgumentParser(description="Generate used operators YAML")
     options = get_parser_options(parser)
 

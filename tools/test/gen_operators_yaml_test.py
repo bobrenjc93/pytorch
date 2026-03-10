@@ -3,9 +3,13 @@
 
 import argparse
 import json
+import tempfile
 import unittest
 from collections import defaultdict
+from typing import cast, TypedDict
 from unittest.mock import Mock, patch
+
+import yaml
 
 # pyrefly: ignore [import-error, missing-import]
 from gen_operators_yaml import (
@@ -16,8 +20,44 @@ from gen_operators_yaml import (
 )
 
 
-def _mock_options():
-    options = argparse.Namespace()
+DepGraph = dict[str, set[str]]
+
+
+class _MockOptions(argparse.Namespace):
+    root_ops: str
+    training_root_ops: list[str]
+    output_path: str
+    dep_graph_yaml_path: str
+    model_name: str
+    model_versions: str | None
+    model_assets: str | None
+    model_backends: str | None
+    models_yaml_path: list[str] | None
+    include_all_operators: bool
+    rule_name: str
+    not_include_all_overloads_static_root_ops: bool
+    not_include_all_overloads_closure_ops: bool
+
+
+class _ModelMetadata(TypedDict):
+    name: str
+    version: int
+    asset: str
+    backend: str
+
+
+class _ModelConfig(TypedDict, total=False):
+    model: _ModelMetadata
+    root_operators: list[str]
+    traced_operators: list[str]
+
+
+class _OperatorConfig(TypedDict):
+    include_all_overloads: bool
+
+
+def _mock_options() -> _MockOptions:
+    options = _MockOptions()
     options.root_ops = "aten::add,aten::cat"
     options.training_root_ops = []
     options.output_path = "/tmp"
@@ -35,17 +75,35 @@ def _mock_options():
     return options
 
 
-def _mock_load_op_dep_graph():
-    result = defaultdict(set)
+def _mock_load_op_dep_graph() -> DepGraph:
+    result: defaultdict[str, set[str]] = defaultdict(set)
     result["aten::add"] = {"aten::add", "aten::as_strided_"}
     result["aten::cat"] = {"aten::cat", "aten::as_strided_"}
     return dict(result)
 
 
-class GenOperatorsYAMLTest(unittest.TestCase):
-    def setUp(self) -> None:
-        pass
+def _make_model_config(
+    name: str,
+    version: int,
+    asset: str,
+    *,
+    include_traced_operators: bool,
+) -> _ModelConfig:
+    config: _ModelConfig = {
+        "model": {
+            "name": name,
+            "version": version,
+            "asset": asset,
+            "backend": "CPU",
+        },
+        "root_operators": [],
+    }
+    if include_traced_operators:
+        config["traced_operators"] = []
+    return config
 
+
+class GenOperatorsYAMLTest(unittest.TestCase):
     def test_filter_creation(self) -> None:
         filter_func = make_filter_from_options(
             model_name="abc",
@@ -54,44 +112,10 @@ class GenOperatorsYAMLTest(unittest.TestCase):
             model_backends=None,
         )
         config = [
-            {
-                "model": {
-                    "name": "abc",
-                    "version": 100,
-                    "asset": "asset-1",
-                    "backend": "CPU",
-                },
-                "root_operators": [],
-                "traced_operators": [],
-            },
-            {
-                "model": {
-                    "name": "abc",
-                    "version": 102,
-                    "asset": "asset-1",
-                    "backend": "CPU",
-                },
-                "root_operators": [],
-            },
-            {
-                "model": {
-                    "name": "abcd",
-                    "version": 100,
-                    "asset": "asset-1",
-                    "backend": "CPU",
-                },
-                "root_operators": [],
-                "traced_operators": [],
-            },
-            {
-                "model": {
-                    "name": "abc",
-                    "version": 101,
-                    "asset": "asset-2",
-                    "backend": "CPU",
-                },
-                "root_operators": [],
-            },
+            _make_model_config("abc", 100, "asset-1", include_traced_operators=True),
+            _make_model_config("abc", 102, "asset-1", include_traced_operators=False),
+            _make_model_config("abcd", 100, "asset-1", include_traced_operators=True),
+            _make_model_config("abc", 101, "asset-2", include_traced_operators=False),
         ]
 
         filtered_configs = list(filter(filter_func, config))
@@ -108,25 +132,8 @@ class GenOperatorsYAMLTest(unittest.TestCase):
             model_backends=None,
         )
         config = [
-            {
-                "model": {
-                    "name": "abc",
-                    "version": 100,
-                    "asset": "asset-1",
-                    "backend": "CPU",
-                },
-                "root_operators": [],
-                "traced_operators": [],
-            },
-            {
-                "model": {
-                    "name": "abc",
-                    "version": 101,
-                    "asset": "asset-2",
-                    "backend": "CPU",
-                },
-                "root_operators": [],
-            },
+            _make_model_config("abc", 100, "asset-1", include_traced_operators=True),
+            _make_model_config("abc", 101, "asset-2", include_traced_operators=False),
         ]
         filtered_configs = list(filter(filter_func, config))
         try:
@@ -145,25 +152,8 @@ class GenOperatorsYAMLTest(unittest.TestCase):
 
     def test_verification_fail(self) -> None:
         config = [
-            {
-                "model": {
-                    "name": "abc",
-                    "version": 100,
-                    "asset": "asset-1",
-                    "backend": "CPU",
-                },
-                "root_operators": [],
-                "traced_operators": [],
-            },
-            {
-                "model": {
-                    "name": "abc",
-                    "version": 101,
-                    "asset": "asset-2",
-                    "backend": "CPU",
-                },
-                "root_operators": [],
-            },
+            _make_model_config("abc", 100, "asset-1", include_traced_operators=True),
+            _make_model_config("abc", 101, "asset-2", include_traced_operators=False),
         ]
 
         good_assets = ["asset-1", "asset-2"]
@@ -224,6 +214,55 @@ class GenOperatorsYAMLTest(unittest.TestCase):
                 new_style_rule=True,
             )
 
+    @patch(
+        "gen_operators_yaml.load_op_dep_graph", return_value=_mock_load_op_dep_graph()
+    )
+    def test_fill_output_rejects_empty_model_versions(
+        self, mock_load_op_dep_graph: Mock
+    ) -> None:
+        options = _mock_options()
+        options.model_versions = ""
+        with tempfile.NamedTemporaryFile("w", suffix=".yaml") as model_yaml:
+            yaml.safe_dump(
+                _make_model_config(
+                    "test_model",
+                    100,
+                    "asset-1",
+                    include_traced_operators=False,
+                ),
+                model_yaml,
+            )
+            model_yaml.flush()
+            options.models_yaml_path = [model_yaml.name]
+
+            with self.assertRaises(RuntimeError):
+                fill_output({}, options)
+
+    @patch(
+        "gen_operators_yaml.load_op_dep_graph", return_value=_mock_load_op_dep_graph()
+    )
+    def test_fill_output_rejects_empty_model_assets(
+        self, mock_load_op_dep_graph: Mock
+    ) -> None:
+        options = _mock_options()
+        options.model_versions = "100"
+        options.model_assets = ""
+        with tempfile.NamedTemporaryFile("w", suffix=".yaml") as model_yaml:
+            yaml.safe_dump(
+                _make_model_config(
+                    "test_model",
+                    100,
+                    "asset-1",
+                    include_traced_operators=False,
+                ),
+                model_yaml,
+            )
+            model_yaml.flush()
+            options.models_yaml_path = [model_yaml.name]
+
+            with self.assertRaises(RuntimeError):
+                fill_output({}, options)
+
     @patch("gen_operators_yaml.parse_options", return_value=_mock_options())
     @patch(
         "gen_operators_yaml.load_op_dep_graph", return_value=_mock_load_op_dep_graph()
@@ -234,15 +273,15 @@ class GenOperatorsYAMLTest(unittest.TestCase):
         parser = argparse.ArgumentParser(description="Generate used operators YAML")
         options = get_parser_options(parser)
 
-        model_dict = {
+        model_dict: dict[str, object] = {
             "model_name": options.model_name,
             "asset_info": {},
             "is_new_style_rule": False,
         }
-        output = {"debug_info": [json.dumps(model_dict)]}
+        output: dict[str, object] = {"debug_info": [json.dumps(model_dict)]}
 
         fill_output(output, options)
 
-        # pyrefly: ignore [missing-attribute]
-        for op_val in output["operators"].values():
+        operators = cast(dict[str, _OperatorConfig], output["operators"])
+        for op_val in operators.values():
             self.assertFalse(op_val["include_all_overloads"])

@@ -12,11 +12,25 @@ from __future__ import annotations
 
 import argparse
 from collections import defaultdict
+from typing import cast, TypedDict
 
 import yaml
 
 
 DepGraph = dict[str, set[str]]
+
+
+class _NamedOperator(TypedDict):
+    name: str
+
+
+class _DependencyGraphEntry(_NamedOperator, total=False):
+    depends: list[_NamedOperator]
+
+
+class _Options(argparse.Namespace):
+    op_dependency: str | None
+    root_ops: str
 
 
 def canonical_name(opname: str) -> str:
@@ -26,8 +40,9 @@ def canonical_name(opname: str) -> str:
 
 def load_op_dep_graph(fname: str) -> DepGraph:
     with open(fname) as stream:
-        result = defaultdict(set)
-        for op in yaml.safe_load(stream):
+        entries = cast(list[_DependencyGraphEntry] | None, yaml.safe_load(stream)) or []
+        result: defaultdict[str, set[str]] = defaultdict(set)
+        for op in entries:
             op_name = canonical_name(op["name"])
             for dep in op.get("depends", []):
                 dep_name = canonical_name(dep["name"])
@@ -38,7 +53,8 @@ def load_op_dep_graph(fname: str) -> DepGraph:
 def load_root_ops(fname: str) -> list[str]:
     result = []
     with open(fname) as stream:
-        for op in yaml.safe_load(stream):
+        ops = cast(list[str] | None, yaml.safe_load(stream)) or []
+        for op in ops:
             result.append(canonical_name(op))
     return result
 
@@ -92,7 +108,7 @@ if __name__ == "__main__":
         required=True,
         help="input yaml file of root (directly used) operators",
     )
-    args = parser.parse_args()
+    args = parser.parse_args(namespace=_Options())
 
     deps = load_op_dep_graph(args.op_dependency) if args.op_dependency else {}
     root_ops = load_root_ops(args.root_ops)
