@@ -25,6 +25,7 @@ import types
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from typing import Any, Literal, Optional, TYPE_CHECKING, Union
 
+import torch
 from torch.utils._ordered_set import OrderedSet
 from torch.utils._pytree import MappingKey
 
@@ -129,6 +130,7 @@ class ConstDictVariable(VariableTracker):
     }
 
     class _HashableTracker:
+        _MISSING = object()
         """
         Auxiliary opaque internal class that wraps a VariableTracker and makes it hashable
         This should not be seen or touched by anything outside of ConstDictVariable and its children
@@ -143,6 +145,43 @@ class ConstDictVariable(VariableTracker):
             if not is_hashable(vt):
                 raise_unhashable(vt)
             self.vt = vt
+
+        @classmethod
+        def _maybe_constant_key(cls, vt: VariableTracker) -> object:
+            from .lists import SizeVariable
+            from .tensor import TensorVariable
+
+            if not isinstance(vt, SizeVariable):
+                return cls._MISSING
+
+            items = []
+            for item in vt.items:
+                if item.is_python_constant():
+                    items.append(item.as_python_constant())
+                    continue
+
+                if isinstance(item, TensorVariable):
+                    proxy = getattr(item, "proxy", None)
+                    node = getattr(proxy, "node", None)
+                    meta = getattr(node, "meta", None) if node is not None else None
+                    example_value = (
+                        meta.get("example_value") if isinstance(meta, dict) else None
+                    )
+
+                    if (
+                        isinstance(example_value, torch.Tensor)
+                        and example_value.numel() == 1
+                    ):
+                        items.append(example_value.item())
+                        continue
+
+                    if isinstance(example_value, (int, bool)):
+                        items.append(example_value)
+                        continue
+
+                return cls._MISSING
+
+            return torch.Size(items)
 
         def __hash__(self) -> int:
             """
@@ -161,6 +200,9 @@ class ConstDictVariable(VariableTracker):
                 and self.vt.is_hashable()
             ):
                 return hash(self.vt.original_value())
+            maybe_constant = self._maybe_constant_key(self.vt)
+            if maybe_constant is not self._MISSING:
+                return hash(maybe_constant)
             return self.vt.get_python_hash()
 
         def __eq__(self, other: object) -> bool:
@@ -180,6 +222,13 @@ class ConstDictVariable(VariableTracker):
                 return False
             if self.vt is other.vt:
                 return True
+            self_constant = self._maybe_constant_key(self.vt)
+            other_constant = self._maybe_constant_key(other.vt)
+            if (
+                self_constant is not self._MISSING
+                and other_constant is not self._MISSING
+            ):
+                return self_constant == other_constant
             return self.vt.is_python_equal(other.vt)
 
     def __init__(
@@ -267,10 +316,11 @@ class ConstDictVariable(VariableTracker):
     def __contains__(self, vt: VariableTracker) -> bool:
         assert isinstance(vt, VariableTracker)
         Hashable = ConstDictVariable._HashableTracker
-        return (
-            vt.is_python_hashable()
-            and Hashable(vt) in self.items
-            and not isinstance(self.items[Hashable(vt)], variables.DeletedVariable)
+        if not is_hashable(vt):
+            return False
+        key = Hashable(vt)
+        return key in self.items and not isinstance(
+            self.items[key], variables.DeletedVariable
         )
 
     def call_tree_map_branch(
@@ -773,12 +823,13 @@ class ConstDictVariable(VariableTracker):
                     f"{len(args)} args and {len(kwargs)} kwargs",
                 )
 
-            arg_hashable = args and is_hashable(args[0])
+            key = args[0]
+            arg_hashable = is_hashable(key)
             if not arg_hashable:
-                raise_unhashable(args[0], tx)
+                raise_unhashable(key, tx)
 
-            self.install_dict_contains_guard(tx, args)
-            contains = args[0] in self
+            self.install_dict_contains_guard(tx, [key])
+            contains = key in self
             return VariableTracker.build(tx, contains)
         elif name == "setdefault" and self.is_mutable():
             if len(args) not in (1, 2):
