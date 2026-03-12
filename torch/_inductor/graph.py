@@ -152,14 +152,25 @@ else:
         pass
 
 
-def may_get_constant_buffer_dtype(constant_buffer: sympy.Expr) -> torch.dtype | None:
+def may_get_constant_buffer_dtype(
+    constant_buffer: sympy.Expr | SympyBoolean,
+) -> torch.dtype | None:
     assert isinstance(
-        constant_buffer, (sympy.Symbol, sympy.Expr, sympy.core.numbers.Integer)
+        constant_buffer,
+        (
+            sympy.Symbol,
+            sympy.Expr,
+            sympy.logic.boolalg.Boolean,
+            sympy.core.numbers.Integer,
+        ),
     ), (
-        "get_constant_buffer_dtype only supports input of sympy.Symbol, sympy.Expr or sympy.core.numbers.Integer"
+        "get_constant_buffer_dtype only supports symbolic scalar inputs"
     )
     if isinstance(constant_buffer, sympy.core.numbers.Integer):
         return torch.int64
+
+    if getattr(constant_buffer, "is_Boolean", False):
+        return torch.bool
 
     if isinstance(constant_buffer, sympy.Expr):
         return get_sympy_Expr_dtype(constant_buffer)
@@ -399,7 +410,10 @@ class GraphLowering(torch.fx.Interpreter):
 
         self.sizevars = SizeVarAllocator(shape_env)
         self.graph_input_names: list[str] = []
-        self.graph_inputs: dict[str, TensorBox | TorchBindObject | sympy.Expr] = {}
+        self.graph_inputs: dict[
+            str,
+            TensorBox | TorchBindObject | sympy.Expr | SympyBoolean | ir.GeneratorState,
+        ] = {}
         self.graph_inputs_original: dict[str, InputBuffer] = {}
         self.partition_maps: list[GraphPartitionMap] | None = None
         self.zero_dim_cpu_tensor_list: OrderedSet[str] = OrderedSet()
@@ -1192,7 +1206,7 @@ class GraphLowering(torch.fx.Interpreter):
         target: str,  # type: ignore[override]
         args: tuple[object],  # type: ignore[override]
         kwargs: dict[str, object],
-    ) -> Expr | TensorBox | None:
+    ) -> Expr | SympyBoolean | TensorBox | ir.GeneratorState | None:
         self.placeholder_idx += 1
         example = super().placeholder(target, args, kwargs)  # type: ignore[arg-type]
         target = self.qualify_name(target)
@@ -1577,7 +1591,13 @@ class GraphLowering(torch.fx.Interpreter):
             if isinstance(value, TorchBindObject):
                 continue
             assert isinstance(
-                value, (TensorBox, sympy.Expr, torch._inductor.ir.GeneratorState)
+                value,
+                (
+                    TensorBox,
+                    sympy.Expr,
+                    sympy.logic.boolalg.Boolean,
+                    torch._inductor.ir.GeneratorState,
+                ),
             ), f"Unsupported inductor graph input type: {type(value)}"
             if not isinstance(value, TensorBox):
                 continue

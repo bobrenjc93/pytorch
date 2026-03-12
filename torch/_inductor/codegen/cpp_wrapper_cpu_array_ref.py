@@ -31,6 +31,7 @@ BufferName = str
 # - Windows: 1 MB
 # Just pick something comfortably smaller than the smallest for now.
 MAX_STACK_ALLOCATION_SIZE = 1024 * 100
+SYMBOLIC_SCALAR_TYPES = (sympy.Expr, sympy.logic.boolalg.Boolean)
 
 
 class CppWrapperCpuArrayRef(CppWrapperCpu):
@@ -62,11 +63,13 @@ class CppWrapperCpuArrayRef(CppWrapperCpu):
     def get_input_cpp_type(input):
         assert config.aot_inductor.use_minimal_arrayref_interface
 
-        if isinstance(input, sympy.Expr):
+        if isinstance(input, SYMBOLIC_SCALAR_TYPES):
             from ..graph import may_get_constant_buffer_dtype
 
             dtype = may_get_constant_buffer_dtype(input)
-            assert dtype is not None, f"Failed to get the dtype of sympy.Expr: {input}"
+            assert dtype is not None, (
+                f"Failed to get the dtype of symbolic scalar input: {input}"
+            )
             return DTYPE_TO_CPP[dtype]
         return f"ArrayRefTensor<{DTYPE_TO_CPP[input.get_dtype()]}>"
 
@@ -79,7 +82,7 @@ class CppWrapperCpuArrayRef(CppWrapperCpu):
 
     def codegen_input_numel_asserts(self):
         for name, buf in V.graph.graph_inputs.items():
-            if isinstance(buf, sympy.Expr):
+            if isinstance(buf, SYMBOLIC_SCALAR_TYPES):
                 continue
 
             # comparing strides for 0 size tensor is tricky. Ignore them for now.
@@ -314,14 +317,14 @@ class CppWrapperCpuArrayRef(CppWrapperCpu):
                         )
                         continue
                     # unwrap input tensor back to scalar
-                    if isinstance(V.graph.graph_inputs[input_key], sympy.Expr):
+                    if isinstance(V.graph.graph_inputs[input_key], SYMBOLIC_SCALAR_TYPES):
                         from ..graph import may_get_constant_buffer_dtype
 
                         dtype = may_get_constant_buffer_dtype(
                             V.graph.graph_inputs[input_key]  # type: ignore[arg-type]
                         )
                         assert dtype is not None, (
-                            "Fails to get the dtype of the sympy.Expr"
+                            "Fails to get the dtype of the symbolic scalar input"
                         )
                         self.codegen_tensor_item(
                             dtype, f"inputs[{idx}]", input_key, self.prefix

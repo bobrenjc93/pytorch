@@ -4,6 +4,7 @@ import importlib
 import math
 import operator
 import os
+import sympy
 import sys
 import unittest
 from functools import partial
@@ -135,6 +136,52 @@ if (HAS_GPU or HAS_MPS) and not TEST_WITH_ASAN:
     copy_tests(
         DynamicShapesCommonTemplate, DynamicShapesGPUTests, GPU_TYPE, test_failures
     )
+
+
+if HAS_CPU:
+
+    class TestInductorDynamicLowering(TestCase):
+        def test_graph_lowering_accepts_sympy_eq_graph_input(self):
+            from torch._inductor.debug import DebugContext
+            from torch._inductor.graph import GraphLowering
+            from torch.fx.experimental.symbolic_shapes import ShapeEnv
+
+            shape_env = ShapeEnv()
+            lhs = shape_env.create_unbacked_symint()
+            rhs = shape_env.create_unbacked_symint()
+            eq_pred = lhs == rhs
+            self.assertIsInstance(eq_pred.node.expr, sympy.Equality)
+
+            x_input = torch.randn(2, 3)
+            fake_mode = torch._subclasses.FakeTensorMode(shape_env=shape_env)
+            with fake_mode:
+                fake_x = fake_mode.from_tensor(x_input)
+                fake_y = torch.ops.aten.neg.default(fake_x)
+
+            graph = torch.fx.Graph()
+            x = graph.placeholder("x")
+            pred = graph.placeholder("pred")
+            y = graph.call_function(torch.ops.aten.neg.default, (x,))
+            graph.output((y,))
+
+            gm = torch.fx.GraphModule({}, graph)
+            x.meta["val"] = fake_x
+            pred.meta["val"] = eq_pred
+            y.meta["val"] = fake_y
+            gm.graph.lint()
+            gm.recompile()
+
+            graph_lowering = GraphLowering(gm, shape_env=shape_env)
+            with (
+                V.set_fake_mode(fake_mode),
+                V.set_graph_handler(graph_lowering),
+                V.set_debug_handler(DebugContext()),
+            ):
+                graph_lowering.run(x_input, eq_pred)
+                self.assertIsInstance(
+                    graph_lowering.graph_inputs["pred"], sympy.Equality
+                )
+                graph_lowering.codegen()
 
 
 class TestInductorDynamic(TestCase):

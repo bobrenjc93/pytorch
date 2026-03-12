@@ -17,7 +17,12 @@ import torch._higher_order_ops.torchbind
 import torch._inductor.async_compile  # noqa: F401 required to warm up AsyncCompile pools
 import torch._ops
 from torch._inductor.runtime.runtime_utils import dynamo_timed
-from torch.fx.experimental.symbolic_shapes import ConvertIntKey, DivideByKey, SymTypes
+from torch.fx.experimental.symbolic_shapes import (
+    ConvertIntKey,
+    DivideByKey,
+    SympyBoolean,
+    SymTypes,
+)
 from torch.utils._ordered_set import OrderedSet
 from torch.utils._sympy.functions import CleanDiv, FloorDiv, Mod, ModularIndexing
 from torch.utils._sympy.symbol import symbol_is_type, SymT
@@ -51,6 +56,9 @@ if TYPE_CHECKING:
 
 class HasWriteLine(Protocol):
     def writeline(self, line: LineContext | DeferredLineBase | str) -> None: ...
+
+
+SYMBOLIC_SCALAR_TYPES = (sympy.Expr, sympy.logic.boolalg.Boolean)
 
 
 class CppWrapperCpu(PythonWrapperCodegen):
@@ -358,10 +366,12 @@ class CppWrapperCpu(PythonWrapperCodegen):
                         str(sympy.Eq(sym_or_exp, size_symbol)) + " is not solvable"
                     )
 
-        if isinstance(value, sympy.Expr):
+        if isinstance(value, SYMBOLIC_SCALAR_TYPES):
             if not isinstance(value, sympy.Symbol) or value in bound_vars:
                 return
-            if value.is_integer:
+            if getattr(value, "is_Boolean", False):
+                decl = "bool"
+            elif value.is_integer:
                 decl = "int64_t"
             elif value.is_float:
                 decl = "double"
@@ -619,14 +629,14 @@ class CppWrapperCpu(PythonWrapperCodegen):
             if inputs_len != 0:
                 for idx, input_key in enumerate(V.graph.graph_inputs.keys()):
                     # unwrap input tensor back to scalar
-                    if isinstance(V.graph.graph_inputs[input_key], sympy.Expr):
+                    if isinstance(V.graph.graph_inputs[input_key], SYMBOLIC_SCALAR_TYPES):
                         from ..graph import may_get_constant_buffer_dtype
 
                         dtype = may_get_constant_buffer_dtype(
                             V.graph.graph_inputs[input_key]  # type: ignore[arg-type]
                         )
                         assert dtype is not None, (
-                            "Fails to get the dtype of the sympy.Expr"
+                            "Fails to get the dtype of the symbolic scalar input"
                         )
                         self.codegen_tensor_item(
                             dtype, f"inputs[{idx}]", input_key, self.prefix
@@ -1493,7 +1503,7 @@ class CppWrapperCpu(PythonWrapperCodegen):
         super().add_benchmark_harness(output)
 
     def _extract_divisors_from_expr(
-        self, expr: sympy.Expr
+        self, expr: sympy.Expr | SympyBoolean
     ) -> list[tuple[sympy.Expr, str]]:
         """
         Walk the sympy expression and extract all divisors/modulos from
@@ -1521,7 +1531,7 @@ class CppWrapperCpu(PythonWrapperCodegen):
                     seen.add(key)
                     divisors.append((divisor, op_name))
 
-        def walk(e: sympy.Expr) -> None:
+        def walk(e: sympy.Expr | SympyBoolean) -> None:
             if isinstance(e, (FloorDiv, CleanDiv)):
                 _, div = e.args
                 maybe_add_divisor(div, "floor division")
@@ -1536,13 +1546,15 @@ class CppWrapperCpu(PythonWrapperCodegen):
             # Recurse into arguments
             if hasattr(e, "args"):
                 for arg in e.args:
-                    if isinstance(arg, sympy.Expr):
+                    if isinstance(arg, SYMBOLIC_SCALAR_TYPES):
                         walk(arg)
 
         walk(expr)
         return divisors
 
-    def codegen_cpp_sizevar(self, x: sympy.Expr, *, simplify: bool = True) -> str:
+    def codegen_cpp_sizevar(
+        self, x: sympy.Expr | SympyBoolean, *, simplify: bool = True
+    ) -> str:
         maybe_simplified_x = V.graph.sizevars.simplify(x) if simplify else x
         # In AOT mode, emit runtime checks for potential division/modulo by zero
         # to prevent SIGFPE crashes when symbolic tensor shapes can be 0
@@ -1555,7 +1567,7 @@ class CppWrapperCpu(PythonWrapperCodegen):
                 )
         return cexpr(maybe_simplified_x)
 
-    def codegen_sizevar(self, x: sympy.Expr) -> str:
+    def codegen_sizevar(self, x: sympy.Expr | SympyBoolean) -> str:
         return self.codegen_cpp_sizevar(x)
 
     def codegen_tuple_access(self, basename: str, name: str, index: str) -> str:
@@ -2927,7 +2939,7 @@ if (!custom_op_wrapper) {
             return f"{{{', '.join(self.val_to_arg_str(x, None) for x in val)}}}"
         elif isinstance(val, SymTypes):
             return cexpr(val.node.expr)
-        elif isinstance(val, sympy.Expr):
+        elif isinstance(val, SYMBOLIC_SCALAR_TYPES):
             return cexpr(val)
         else:
             return repr(val)

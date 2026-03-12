@@ -35,6 +35,7 @@ from torch.fx.experimental.symbolic_shapes import (
     ConvertIntKey,
     DivideByKey,
     resolve_unbacked_bindings,
+    SympyBoolean,
     SymTypes,
 )
 from torch.fx.node import _get_qualified_name
@@ -91,6 +92,7 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 pexpr = PythonPrinter().doprint
+SYMBOLIC_SCALAR_TYPES = (sympy.Expr, sympy.logic.boolalg.Boolean)
 
 
 ReuseKey = tuple[torch.device, torch.dtype, str, bool]
@@ -1504,7 +1506,9 @@ class PythonWrapperCodegen(CodeGen):
 
     def get_graph_inputs(
         self,
-    ) -> dict[str, ir.TensorBox | ir.TorchBindObject | sympy.Expr]:
+    ) -> dict[
+        str, ir.TensorBox | ir.TorchBindObject | sympy.Expr | SympyBoolean
+    ]:
         return V.graph.graph_inputs
 
     def get_graph_outputs(self) -> list[IRNode]:
@@ -1512,7 +1516,7 @@ class PythonWrapperCodegen(CodeGen):
 
     def codegen_input_size_asserts(self) -> None:
         for name, buf in self.get_graph_inputs().items():
-            if isinstance(buf, (sympy.Expr, ir.TorchBindObject)):
+            if isinstance(buf, (*SYMBOLIC_SCALAR_TYPES, ir.TorchBindObject)):
                 continue
 
             # a graph partition may take an IRNode output from a previous partition
@@ -1531,7 +1535,7 @@ class PythonWrapperCodegen(CodeGen):
     def codegen_input_nan_asserts(self) -> None:
         self.prefix.writeline("# make sure graph inputs are not nan/inf")
         for name, buf in self.get_graph_inputs().items():
-            if isinstance(buf, (sympy.Expr, ir.TorchBindObject)):
+            if isinstance(buf, (*SYMBOLIC_SCALAR_TYPES, ir.TorchBindObject)):
                 continue
 
             line = f"assert not {name}.isnan().any().item()"
@@ -2143,7 +2147,7 @@ class PythonWrapperCodegen(CodeGen):
     def codegen_input_symbol_assignment(
         self,
         name: str,
-        value: ir.TensorBox,
+        value: ir.TensorBox | ir.TorchBindObject | sympy.Expr | SympyBoolean,
         bound_vars: OrderedSet[sympy.Symbol],
     ):
         code = self.prefix
@@ -2158,7 +2162,7 @@ class PythonWrapperCodegen(CodeGen):
             code.writeline(f"{name}_stride = {name}.stride()")
             return f"{name}_stride"
 
-        if isinstance(value, sympy.Expr):
+        if isinstance(value, SYMBOLIC_SCALAR_TYPES):
             if not isinstance(value, sympy.Symbol) or value in bound_vars:
                 return
             code.writeline(f"{value} = {name}")
@@ -2235,13 +2239,17 @@ class PythonWrapperCodegen(CodeGen):
     def finalize_prefix(self):
         pass
 
-    def codegen_cpp_sizevar(self, x: Expr, *, simplify: bool = True) -> str:
+    def codegen_cpp_sizevar(
+        self, x: Expr | SympyBoolean, *, simplify: bool = True
+    ) -> str:
         raise RuntimeError("codegen_cpp_sizevar is only implemented for cpp_wrapper!")
 
-    def codegen_python_sizevar(self, x: Expr, *, simplify: bool = True) -> str:
+    def codegen_python_sizevar(
+        self, x: Expr | SympyBoolean, *, simplify: bool = True
+    ) -> str:
         return pexpr(x, simplify=simplify)
 
-    def codegen_sizevar(self, x: Expr) -> str:
+    def codegen_sizevar(self, x: Expr | SympyBoolean) -> str:
         return self.codegen_python_sizevar(x)
 
     def codegen_tuple_access(self, basename: str, name: str, index: str) -> str:
@@ -2475,8 +2483,21 @@ class PythonWrapperCodegen(CodeGen):
                     # invalid benchmark code, because it's not guaranteed 42
                     # is actually a valid value for the kernel in question.
                     # See https://github.com/pytorch/pytorch/issues/124686
+                    if getattr(value, "is_Boolean", False):
+                        add_expr_input(
+                            name,
+                            V.graph.sizevars.evaluate_expr(
+                                value, fallback_value=False
+                            ),
+                        )
+                    else:
+                        add_expr_input(
+                            name, V.graph.sizevars.optimization_hint(value, fallback=42)
+                        )
+                elif isinstance(value, sympy.logic.boolalg.Boolean):
                     add_expr_input(
-                        name, V.graph.sizevars.optimization_hint(value, fallback=42)
+                        name,
+                        V.graph.sizevars.evaluate_expr(value, fallback_value=False),
                     )
                 elif isinstance(value, ir.GeneratorState):
                     add_expr_input(
@@ -3362,7 +3383,7 @@ class PythonWrapperCodegen(CodeGen):
 
         if isinstance(s, SymTypes):
             return pexpr(s.node.expr)
-        elif isinstance(s, sympy.Expr):
+        elif isinstance(s, SYMBOLIC_SCALAR_TYPES):
             return pexpr(s)
         elif isinstance(s, (tuple, list)):
 
@@ -4146,7 +4167,10 @@ class SubgraphPythonWrapperCodegen(PythonWrapperCodegen):
 
     def get_graph_inputs(
         self,
-    ) -> dict[str, ir.TensorBox | ir.TorchBindObject | sympy.Expr | None]:
+    ) -> dict[
+        str,
+        ir.TensorBox | ir.TorchBindObject | sympy.Expr | SympyBoolean | None,
+    ]:
         if signature := self.partition_signatures:
             inputs = signature.input_nodes | {
                 str(s): s for s in signature.symbol_inputs

@@ -264,6 +264,8 @@ class DeferredTritonCallWrapper:
             return f"const {name}_type_& {name}"
         elif issubclass(arg_type, (SymbolicCallArg, sympy.Expr, int)):
             return f"int64_t {name}"
+        elif issubclass(arg_type, sympy.logic.boolalg.Boolean):
+            return f"bool {name}"
         elif arg_type is float:
             return f"float {name}"
         elif arg_type is bool:

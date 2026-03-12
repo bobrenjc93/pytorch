@@ -218,9 +218,10 @@ class GraphPartitionSignature:
     # symbol inputs that are necessary for codegen
     symbol_inputs: OrderedSet[sympy.Symbol]
 
-    # mapping from partition input name to IRNode or Expr. Need the name str since
+    # mapping from partition input name to IRNode or symbolic scalar. Need the
+    # name str since
     # we cannot get name from Expr.
-    input_nodes: dict[str, IRNode | sympy.Expr | TorchBindObject]
+    input_nodes: dict[str, IRNode | sympy.Expr | SympyBoolean | TorchBindObject]
     output_nodes: list[IRNode]
 
     # mapping from partition input name to a boolean for whether deallocating it
@@ -4745,7 +4746,7 @@ class NoneAsConstantBuffer(IRNode):
 
 @ir_dataclass
 class ShapeAsConstantBuffer(IRNode):
-    expr: Expr
+    expr: Expr | SympyBoolean
 
     @cache_on_self_and_args("ShapeAsConstantBuffer")
     def get_free_symbol_uses(
