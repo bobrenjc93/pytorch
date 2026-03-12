@@ -8,6 +8,7 @@ import torch._inductor.config as inductor_config
 from torch._inductor.codegen import triton_utils
 from torch._inductor.codegen.common import CSEVariable, SizeArg
 from torch._inductor.codegen.triton import TritonKernelOverrides
+from torch._inductor.dtype_propagation import DtypePropagationOpsHandler, promote_types
 from torch._inductor.graph import GraphLowering
 from torch._inductor.test_case import TestCase as InductorTestCase
 from torch._inductor.virtualized import V
@@ -127,6 +128,14 @@ class TestCodegenTriton(InductorTestCase):
         self.assertEqual(
             TestTritonKernelOverrides.pow(2, exponent),
             "libdevice.pow(custom_constant(2, torch.float64), (ks0).to(tl.float64))",
+        )
+
+    def test_pow_preserves_integer_dtype_for_unsigned_scalar_exponents(self):
+        exponent = CSEVariable("ks0", ValueRanges.unknown(), torch.uint32)
+
+        self.assertEqual(
+            DtypePropagationOpsHandler().pow(2, exponent),
+            promote_types([2, exponent]),
         )
 
 
