@@ -73,7 +73,7 @@ from ..utils import (
 )
 from .base import AttributeMutationNew, ValueMutationNew, VariableTracker
 from .constant import CONSTANT_VARIABLE_NONE, CONSTANT_VARIABLE_TRUE, ConstantVariable
-from .lists import ListIteratorVariable, SizeVariable
+from .lists import ListIteratorVariable, ListVariable, SizeVariable, TupleVariable
 from .script_object import TorchScriptObjectVariable
 from .user_defined import UserDefinedClassVariable
 
@@ -97,6 +97,16 @@ if TYPE_CHECKING:
 
 
 log = logging.getLogger(__name__)
+
+
+def _contains_unspec_or_symnode_data(x: VariableTracker) -> bool:
+    # Mirror torch.tensor's handling so tensor constructors fed by symbolic
+    # scalar outputs avoid eager specialization in fake propagation.
+    if x.is_tensor() or isinstance(x, SymNodeVariable):
+        return True
+    if isinstance(x, (ListVariable, TupleVariable)):
+        return any(_contains_unspec_or_symnode_data(y) for y in x.items)
+    return False
 
 # Ops that allow tensor <op> tensor
 supported_tensor_comparison_ops = {
@@ -1869,6 +1879,47 @@ class TensorVariable(VariableTracker):
         ):
             return self.call_method(tx, "new_empty", args, kwargs)
         return None
+
+    def method_new_tensor(
+        self,
+        tx: "InstructionTranslator",
+        *args: VariableTracker,
+        **kwargs: VariableTracker,
+    ) -> VariableTracker | None:
+        data_arg = args[0] if args else kwargs.get("data")
+        if (
+            data_arg is None
+            or data_arg.is_tensor()
+            or not _contains_unspec_or_symnode_data(data_arg)
+        ):
+            return None
+
+        if self.layout not in (None, torch.strided):
+            return None
+
+        layout = kwargs.get("layout")
+        if layout is not None:
+            if (
+                not layout.is_python_constant()
+                or layout.as_python_constant() != torch.strided
+            ):
+                return None
+
+        rewritten_kwargs = {k: v for k, v in kwargs.items() if k != "layout"}
+
+        for attr in ("dtype", "device"):
+            if (
+                attr not in rewritten_kwargs
+                or (
+                    rewritten_kwargs[attr].is_python_constant()
+                    and rewritten_kwargs[attr].as_python_constant() is None
+                )
+            ):
+                rewritten_kwargs[attr] = self.var_getattr(tx, attr)
+
+        return variables.TorchInGraphFunctionVariable(
+            torch._refs.tensor
+        ).call_function(tx, [*args], rewritten_kwargs)
 
     def method_untyped_storage(
         self, tx: "InstructionTranslator"
