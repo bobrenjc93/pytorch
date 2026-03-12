@@ -122,6 +122,19 @@ class TestCodegenTriton(InductorTestCase):
             promote_types([2, exponent]),
         )
 
+    def test_pow_uses_integer_helper_for_unsigned_scalar_exponents(self):
+        exponent = CSEVariable("ks0", ValueRanges.unknown(), torch.uint32)
+
+        class TestTritonKernelOverrides(TritonKernelOverrides):
+            @classmethod
+            def constant(cls, value, dtype):
+                return f"custom_constant({value}, {dtype})"
+
+        self.assertEqual(
+            TestTritonKernelOverrides.pow(3, exponent),
+            "triton_helpers.pow_integer(custom_constant(3, torch.int64), ks0)",
+        )
+
 
 if __name__ == "__main__":
     from torch._inductor.test_case import run_tests
