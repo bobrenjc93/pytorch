@@ -163,9 +163,7 @@ def may_get_constant_buffer_dtype(
             sympy.logic.boolalg.Boolean,
             sympy.core.numbers.Integer,
         ),
-    ), (
-        "get_constant_buffer_dtype only supports symbolic scalar inputs"
-    )
+    ), "get_constant_buffer_dtype only supports symbolic scalar inputs"
     if isinstance(constant_buffer, sympy.core.numbers.Integer):
         return torch.int64
 
@@ -984,7 +982,10 @@ class GraphLowering(torch.fx.Interpreter):
         if buffer_name in self.name_to_buffer:
             return self.name_to_buffer[buffer_name]
         if buffer_name in self.graph_inputs:
-            return self.graph_inputs[buffer_name]
+            graph_input = self.graph_inputs[buffer_name]
+            if isinstance(graph_input, (ir.TensorBox, ir.TorchBindObject)):
+                return graph_input
+            return None
         if buffer_name in self.constants:
             data = V.graph.constants[buffer_name]
             return ir.ConstantBuffer(

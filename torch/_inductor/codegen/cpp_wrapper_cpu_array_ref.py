@@ -317,7 +317,9 @@ class CppWrapperCpuArrayRef(CppWrapperCpu):
                         )
                         continue
                     # unwrap input tensor back to scalar
-                    if isinstance(V.graph.graph_inputs[input_key], SYMBOLIC_SCALAR_TYPES):
+                    if isinstance(
+                        V.graph.graph_inputs[input_key], SYMBOLIC_SCALAR_TYPES
+                    ):
                         from ..graph import may_get_constant_buffer_dtype
 
                         dtype = may_get_constant_buffer_dtype(

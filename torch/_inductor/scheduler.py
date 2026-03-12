@@ -1115,7 +1115,12 @@ class BaseSchedulerNode:
             if buf_name in V.graph.name_to_buffer:
                 buf = V.graph.name_to_buffer[buf_name]
             elif buf_name in V.graph.graph_inputs:
-                buf = V.graph.graph_inputs[buf_name]
+                graph_input = V.graph.graph_inputs[buf_name]
+                if not isinstance(
+                    graph_input, (ir.Buffer, ir.TensorBox, ir.TorchBindObject)
+                ):
+                    continue
+                buf = graph_input
             else:
                 continue
 

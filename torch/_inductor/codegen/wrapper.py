@@ -1506,9 +1506,7 @@ class PythonWrapperCodegen(CodeGen):
 
     def get_graph_inputs(
         self,
-    ) -> dict[
-        str, ir.TensorBox | ir.TorchBindObject | sympy.Expr | SympyBoolean
-    ]:
+    ) -> dict[str, ir.TensorBox | ir.TorchBindObject | sympy.Expr | SympyBoolean]:
         return V.graph.graph_inputs
 
     def get_graph_outputs(self) -> list[IRNode]:
@@ -2485,10 +2483,7 @@ class PythonWrapperCodegen(CodeGen):
                     # See https://github.com/pytorch/pytorch/issues/124686
                     if getattr(value, "is_Boolean", False):
                         add_expr_input(
-                            name,
-                            V.graph.sizevars.evaluate_expr(
-                                value, fallback_value=False
-                            ),
+                            name, V.graph.sizevars.evaluate_expr(value, fallback_value=False)
                         )
                     else:
                         add_expr_input(

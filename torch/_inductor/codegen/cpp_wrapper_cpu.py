@@ -314,7 +314,7 @@ class CppWrapperCpu(PythonWrapperCodegen):
     def codegen_input_symbol_assignment(
         self,
         name: str,
-        value: ir.TensorBox,
+        value: ir.TensorBox | ir.TorchBindObject | sympy.Expr | SympyBoolean,
         bound_vars: OrderedSet[sympy.Symbol],
     ):
         code = self.prefix
@@ -629,7 +629,9 @@ class CppWrapperCpu(PythonWrapperCodegen):
             if inputs_len != 0:
                 for idx, input_key in enumerate(V.graph.graph_inputs.keys()):
                     # unwrap input tensor back to scalar
-                    if isinstance(V.graph.graph_inputs[input_key], SYMBOLIC_SCALAR_TYPES):
+                    if isinstance(
+                        V.graph.graph_inputs[input_key], SYMBOLIC_SCALAR_TYPES
+                    ):
                         from ..graph import may_get_constant_buffer_dtype
 
                         dtype = may_get_constant_buffer_dtype(
