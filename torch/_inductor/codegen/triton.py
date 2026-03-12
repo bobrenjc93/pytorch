@@ -1784,6 +1784,15 @@ class TritonOverrides(OpOverrides):
     @classmethod
     def pow(cls, a, b):
         result_dtype = get_dtype_handler().pow(a, b)
+        if result_dtype is not None and is_integer_dtype(result_dtype):
+            base = cls._cast_libdevice_arg(a, result_dtype)
+            exponent = (
+                cls.constant(b, torch.int64)
+                if isinstance(b, torch._prims_common.Number)
+                else f"{b}"
+            )
+            return f"triton_helpers.pow_integer({base}, {exponent})"
+
         any_needs_upcast = needs_upcast_to_float32(a) or needs_upcast_to_float32(b)
         pow_dtype = result_dtype
         if pow_dtype not in (torch.float32, torch.float64):
