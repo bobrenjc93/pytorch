@@ -108,6 +108,7 @@ def _contains_unspec_or_symnode_data(x: VariableTracker) -> bool:
         return any(_contains_unspec_or_symnode_data(y) for y in x.items)
     return False
 
+
 # Ops that allow tensor <op> tensor
 supported_tensor_comparison_ops = {
     ">": operator.gt,
@@ -1908,18 +1909,15 @@ class TensorVariable(VariableTracker):
         rewritten_kwargs = {k: v for k, v in kwargs.items() if k != "layout"}
 
         for attr in ("dtype", "device"):
-            if (
-                attr not in rewritten_kwargs
-                or (
-                    rewritten_kwargs[attr].is_python_constant()
-                    and rewritten_kwargs[attr].as_python_constant() is None
-                )
+            if attr not in rewritten_kwargs or (
+                rewritten_kwargs[attr].is_python_constant()
+                and rewritten_kwargs[attr].as_python_constant() is None
             ):
                 rewritten_kwargs[attr] = self.var_getattr(tx, attr)
 
-        return variables.TorchInGraphFunctionVariable(
-            torch._refs.tensor
-        ).call_function(tx, [*args], rewritten_kwargs)
+        return variables.TorchInGraphFunctionVariable(torch._refs.tensor).call_function(
+            tx, [*args], rewritten_kwargs
+        )
 
     def method_untyped_storage(
         self, tx: "InstructionTranslator"
