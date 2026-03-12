@@ -6,11 +6,13 @@ import sympy
 import torch
 import torch._inductor.config as inductor_config
 from torch._inductor.codegen import triton_utils
-from torch._inductor.codegen.common import SizeArg
+from torch._inductor.codegen.common import CSEVariable, SizeArg
+from torch._inductor.codegen.triton import TritonKernelOverrides
 from torch._inductor.graph import GraphLowering
 from torch._inductor.test_case import TestCase as InductorTestCase
 from torch._inductor.virtualized import V
 from torch.testing._internal.inductor_utils import HAS_CPU, HAS_GPU
+from torch.utils._sympy.value_ranges import ValueRanges
 
 
 class TestCodegenTriton(InductorTestCase):
@@ -96,6 +98,19 @@ class TestCodegenTriton(InductorTestCase):
                     SizeArg("G", two * eight * s0 * s1),  # 6: yes
                 ]
             ),
+        )
+
+    def test_pow_uses_active_override_constant_lowering(self):
+        exponent = CSEVariable("ks0", ValueRanges.unknown(), torch.int64)
+
+        class TestTritonKernelOverrides(TritonKernelOverrides):
+            @classmethod
+            def constant(cls, value, dtype):
+                return f"custom_constant({value}, {dtype})"
+
+        self.assertEqual(
+            TestTritonKernelOverrides.pow(2, exponent),
+            "libdevice.pow(custom_constant(2, torch.float64), (ks0).to(tl.float64))",
         )
 
 

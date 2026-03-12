@@ -1781,8 +1781,8 @@ class TritonOverrides(OpOverrides):
     def fmod(a, b):
         return f"libdevice.fmod({a}, {b})"
 
-    @staticmethod
-    def pow(a, b):
+    @classmethod
+    def pow(cls, a, b):
         result_dtype = get_dtype_handler().pow(a, b)
         any_needs_upcast = needs_upcast_to_float32(a) or needs_upcast_to_float32(b)
         pow_dtype = result_dtype
@@ -1796,8 +1796,8 @@ class TritonOverrides(OpOverrides):
                 else torch.float64
             )
 
-        cast_a = TritonOverrides._cast_libdevice_arg(a, pow_dtype)
-        cast_b = TritonOverrides._cast_libdevice_arg(b, pow_dtype)
+        cast_a = cls._cast_libdevice_arg(a, pow_dtype)
+        cast_b = cls._cast_libdevice_arg(b, pow_dtype)
         result = f"libdevice.pow({cast_a}, {cast_b})"
         if result_dtype is not None and result_dtype != pow_dtype:
             if low_precision_fp(result_dtype):
