@@ -757,6 +757,22 @@ class TestUnbackedSymints(InductorTestCase):
         expected = fn(*example_inputs)
         torch.testing.assert_close(actual, expected)
 
+    @skipCPUIf(True, "Triton codegen bug only affects GPU")
+    @skipGPUIf(not HAS_GPU, "requires gpu and triton")
+    @dynamo_config.patch({"capture_scalar_outputs": True})
+    def test_triton_pow_symbolic_negative_int_exponent(self, device):
+        def fn(x, exponent_src):
+            exponent = exponent_src.max().to(torch.int64) - 1
+            return x * (2**exponent)
+
+        example_inputs = (
+            torch.randn(128, device=device, dtype=torch.float16),
+            torch.tensor([0], device=device, dtype=torch.int64),
+        )
+        actual = torch.compile(fn, fullgraph=True, dynamic=True)(*example_inputs)
+        expected = fn(*example_inputs)
+        torch.testing.assert_close(actual, expected)
+
 
 instantiate_device_type_tests(TestUnbackedSymints, globals(), allow_xpu=True)
 
