@@ -1154,6 +1154,18 @@ test_libtorch_jit() {
   popd
 }
 
+test_libtorch_profiler() {
+  echo "Testing profiler C++ tests"
+  export CPP_TESTS_DIR="${TORCH_BIN_DIR}"
+  export LD_LIBRARY_PATH="${TORCH_LIB_DIR}:${LD_LIBRARY_PATH}"
+
+  # Run E2E test first (needs clean Kineto state)
+  python test/run_test.py --cpp --verbose -i cpp/test_privateuse1_profiler -k "EndToEndProfiling"
+
+  # Run all other tests
+  python test/run_test.py --cpp --verbose -i cpp/test_privateuse1_profiler -k "not EndToEndProfiling"
+}
+
 test_libtorch_api() {
   # Start background download
   MNIST_DIR="${PWD}/test/cpp/api/mnist"
@@ -1785,7 +1797,7 @@ test_linux_aarch64() {
        inductor/test_split_cat_fx_passes inductor/test_compile inductor/test_torchinductor \
        inductor/test_torchinductor_codegen_dynamic_shapes inductor/test_torchinductor_dynamic_shapes inductor/test_memory \
        inductor/test_triton_cpu_backend inductor/test_triton_extension_backend inductor/test_mkldnn_pattern_matcher inductor/test_cpu_cpp_wrapper \
-       inductor/test_cpu_select_algorithm \
+       inductor/test_cpu_select_algorithm inductor/test_cpu_repro \
        --shard "$SHARD_NUMBER" "$NUM_TEST_SHARDS" --verbose
 }
 
@@ -2018,6 +2030,7 @@ elif [[ "${SHARD_NUMBER}" == 2 && $NUM_TEST_SHARDS -gt 1 ]]; then
   test_custom_script_ops
   test_custom_backend
   test_torch_function_benchmark
+  test_libtorch_profiler
 elif [[ "${SHARD_NUMBER}" -gt 2 ]]; then
   # Handle arbitrary number of shards
   install_torchvision
