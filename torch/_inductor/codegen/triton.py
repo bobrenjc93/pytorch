@@ -1807,8 +1807,6 @@ class TritonOverrides(OpOverrides):
                 result = f"{result}.to({triton_type(result_dtype)})"
         return result
 
-    OpDtypeSupport.register_upcast(pow.__func__, True)
-
     @staticmethod
     @maybe_upcast_float32()
     def log(x):
@@ -1878,7 +1876,9 @@ class TritonOverrides(OpOverrides):
     def ceil(x):
         return f"libdevice.ceil({x})"
 
-
+# Register the custom pow override after class creation so type checkers see
+# a plain callable instead of the class-body staticmethod descriptor.
+OpDtypeSupport.register_upcast(TritonOverrides.pow, True)
 TritonOverrides._initialize_pointwise_overrides("triton")
 
 
