@@ -156,6 +156,8 @@ class ConstDictVariable(VariableTracker):
             except NotImplementedError:
                 python_constant = cls._MISSING
 
+            # Dict literals keep torch.Size keys as Python constants rather than
+            # SizeVariables, so normalize that form before the symbolic fallback.
             if isinstance(python_constant, torch.Size):
                 return python_constant
 
