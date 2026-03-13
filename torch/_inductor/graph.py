@@ -167,7 +167,9 @@ def may_get_constant_buffer_dtype(
     if isinstance(constant_buffer, sympy.core.numbers.Integer):
         return torch.int64
 
-    if getattr(constant_buffer, "is_Boolean", False):
+    if isinstance(constant_buffer, sympy.logic.boolalg.Boolean) or getattr(
+        constant_buffer, "is_Boolean", False
+    ):
         return torch.bool
 
     if isinstance(constant_buffer, sympy.Expr):

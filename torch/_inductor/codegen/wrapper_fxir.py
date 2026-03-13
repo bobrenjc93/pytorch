@@ -661,7 +661,9 @@ class FxConverter:
         )
         return self.expr_to_proxy[expr]
 
-    def _generate_sym_node(self, s: int | sympy.Expr) -> int | torch.fx.Node:
+    def _generate_sym_node(
+        self, s: int | sympy.Expr | SympyBoolean
+    ) -> int | torch.fx.Node:
         if isinstance(s, (int, sympy.Integer)):
             return int(s)
         elif isinstance(s, sympy.Symbol):
@@ -669,7 +671,9 @@ class FxConverter:
                 f"Could not find a node corresponding to the symbol {s}"
             )
             return self.expr_to_proxy[s].node
-        elif isinstance(s, sympy.Expr):
+        elif isinstance(s, (sympy.Expr, sympy.logic.boolalg.Boolean)):
+            if s in self.expr_to_proxy:
+                return self.expr_to_proxy[s].node
             return self._sympy_interp(s).node
 
         elif isinstance(s, torch.fx.Node):
@@ -679,7 +683,7 @@ class FxConverter:
             raise ValueError(f"{s} of type {type(s)} is not a valid input")
 
     def _generate_sym_nodes(
-        self, shape: Sequence[sympy.Expr]
+        self, shape: Sequence[sympy.Expr | SympyBoolean]
     ) -> list[int | torch.fx.Node]:
         return [self._generate_sym_node(s) for s in shape]
 

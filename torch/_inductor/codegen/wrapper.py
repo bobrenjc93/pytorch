@@ -1509,6 +1509,25 @@ class PythonWrapperCodegen(CodeGen):
     ) -> dict[str, ir.TensorBox | ir.TorchBindObject | sympy.Expr | SympyBoolean]:
         return V.graph.graph_inputs
 
+    @cache_on_self
+    def get_symbolic_scalar_graph_input_replacements(
+        self,
+    ) -> dict[sympy.Basic, sympy.Symbol]:
+        return {
+            value: sympy.Symbol(name)
+            for name, value in self.get_graph_inputs().items()
+            if isinstance(value, SYMBOLIC_SCALAR_TYPES)
+            and not isinstance(value, sympy.Symbol)
+        }
+
+    def replace_symbolic_scalar_graph_inputs(
+        self, expr: Expr | SympyBoolean
+    ) -> Expr | SympyBoolean:
+        replacements = self.get_symbolic_scalar_graph_input_replacements()
+        if not replacements:
+            return expr
+        return sympy.sympify(expr).xreplace(replacements)
+
     def get_graph_outputs(self) -> list[IRNode]:
         return V.graph.graph_outputs
 
@@ -2245,7 +2264,9 @@ class PythonWrapperCodegen(CodeGen):
     def codegen_python_sizevar(
         self, x: Expr | SympyBoolean, *, simplify: bool = True
     ) -> str:
-        return pexpr(x, simplify=simplify)
+        return pexpr(
+            self.replace_symbolic_scalar_graph_inputs(x), simplify=simplify
+        )
 
     def codegen_sizevar(self, x: Expr | SympyBoolean) -> str:
         return self.codegen_python_sizevar(x)
@@ -3378,9 +3399,9 @@ class PythonWrapperCodegen(CodeGen):
             import triton
 
         if isinstance(s, SymTypes):
-            return pexpr(s.node.expr)
+            return self.codegen_sizevar(s.node.expr)
         elif isinstance(s, SYMBOLIC_SCALAR_TYPES):
-            return pexpr(s)
+            return self.codegen_sizevar(s)
         elif isinstance(s, (tuple, list)):
 
             @dataclasses.dataclass

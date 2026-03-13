@@ -184,6 +184,51 @@ if HAS_CPU:
                 )
                 graph_lowering.codegen()
 
+        def test_graph_lowering_codegen_preserves_unbacked_symbool_graph_input(self):
+            from torch._inductor.debug import DebugContext
+            from torch._inductor.graph import (
+                GraphLowering,
+                may_get_constant_buffer_dtype,
+            )
+            from torch.fx.experimental.symbolic_shapes import ShapeEnv
+
+            shape_env = ShapeEnv()
+            pred_input = shape_env.create_unbacked_symbool()
+            self.assertIsInstance(pred_input.node.expr, sympy.Equality)
+
+            x_input = torch.randn(2, 3)
+            fake_mode = torch._subclasses.FakeTensorMode(shape_env=shape_env)
+            with fake_mode:
+                fake_x = fake_mode.from_tensor(x_input)
+                fake_y = torch.ops.aten.neg.default(fake_x)
+
+            graph = torch.fx.Graph()
+            x = graph.placeholder("x")
+            pred = graph.placeholder("pred")
+            y = graph.call_function(torch.ops.aten.neg.default, (x,))
+            graph.output((y, pred))
+
+            gm = torch.fx.GraphModule({}, graph)
+            x.meta["val"] = fake_x
+            pred.meta["val"] = pred_input
+            y.meta["val"] = fake_y
+            gm.graph.lint()
+            gm.recompile()
+
+            graph_lowering = GraphLowering(gm, shape_env=shape_env)
+            with (
+                V.set_fake_mode(fake_mode),
+                V.set_graph_handler(graph_lowering),
+                V.set_debug_handler(DebugContext()),
+            ):
+                graph_lowering.run(x_input, pred_input)
+                pred_expr = graph_lowering.graph_inputs["pred"]
+                assert isinstance(pred_expr, sympy.Equality)
+                self.assertIs(may_get_constant_buffer_dtype(pred_expr), torch.bool)
+
+                wrapper_code, _ = graph_lowering.codegen()
+                self.assertIn(", pred, )", wrapper_code.value)
+
 
 class TestInductorDynamic(TestCase):
     compile_fn = partial(torch.compile, dynamic=True)

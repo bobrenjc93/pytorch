@@ -1259,6 +1259,23 @@ class TestReplaceFloorDiv(InductorTestCase):
     Tests for floor -> FloorDiv conversion.
     """
 
+    def test_generate_sym_node_accepts_boolean_graph_input(self):
+        pred = sympy.Eq(sympy.Symbol("u0", integer=True), 1)
+        converter = FxConverter(
+            lines=[],
+            prologue="",
+            graph_inputs={"pred": pred},
+            graph_outputs=[],
+            subgms={},
+            is_subgraph=False,
+        )
+
+        converter._generate_graph_inputs()
+
+        pred_node = converter._generate_sym_node(pred)
+        assert isinstance(pred_node, torch.fx.Node)
+        self.assertEqual(pred_node.name, "pred")
+
     def _check(self, expr: sympy.Expr) -> sympy.Expr:
         # Check that we started with floor's.
         num_floors = expr.count(sympy.floor)

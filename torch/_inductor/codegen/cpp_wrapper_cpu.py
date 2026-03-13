@@ -1567,7 +1567,7 @@ class CppWrapperCpu(PythonWrapperCodegen):
                 self.writeline(
                     f'AOTI_TORCH_CHECK({divisor_str} != 0, "Integer {op_name} by zero");'
                 )
-        return cexpr(maybe_simplified_x)
+        return cexpr(self.replace_symbolic_scalar_graph_inputs(maybe_simplified_x))
 
     def codegen_sizevar(self, x: sympy.Expr | SympyBoolean) -> str:
         return self.codegen_cpp_sizevar(x)
@@ -2557,7 +2557,7 @@ if (!custom_op_wrapper) {
                     imag = self.generate_float_value(scalar.imag)
                     return f"PyComplex_FromDoubles({real}, {imag})"
                 if isinstance(scalar, SymTypes):
-                    scalar_var = cexpr(scalar.node.expr)
+                    scalar_var = self.codegen_sizevar(scalar.node.expr)
                     if isinstance(scalar, torch.SymBool):
                         return f"PyBool_FromLong({scalar_var})"
                     if isinstance(scalar, torch.SymFloat):
@@ -2940,9 +2940,9 @@ if (!custom_op_wrapper) {
             # FIXME: This happens because type_ is not always properly set to torch.ListType
             return f"{{{', '.join(self.val_to_arg_str(x, None) for x in val)}}}"
         elif isinstance(val, SymTypes):
-            return cexpr(val.node.expr)
+            return self.codegen_sizevar(val.node.expr)
         elif isinstance(val, SYMBOLIC_SCALAR_TYPES):
-            return cexpr(val)
+            return self.codegen_sizevar(val)
         else:
             return repr(val)
 
