@@ -151,6 +151,14 @@ class ConstDictVariable(VariableTracker):
             from .lists import SizeVariable
             from .tensor import TensorVariable
 
+            try:
+                python_constant = vt.as_python_constant()
+            except NotImplementedError:
+                python_constant = cls._MISSING
+
+            if isinstance(python_constant, torch.Size):
+                return python_constant
+
             if not isinstance(vt, SizeVariable):
                 return cls._MISSING
 
