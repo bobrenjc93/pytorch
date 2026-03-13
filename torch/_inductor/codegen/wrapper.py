@@ -3399,9 +3399,9 @@ class PythonWrapperCodegen(CodeGen):
             import triton
 
         if isinstance(s, SymTypes):
-            return self.codegen_sizevar(s.node.expr)
+            return self.codegen_python_sizevar(s.node.expr, simplify=False)
         elif isinstance(s, SYMBOLIC_SCALAR_TYPES):
-            return self.codegen_sizevar(s)
+            return self.codegen_python_sizevar(s, simplify=False)
         elif isinstance(s, (tuple, list)):
 
             @dataclasses.dataclass

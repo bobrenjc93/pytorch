@@ -1557,7 +1557,10 @@ class CppWrapperCpu(PythonWrapperCodegen):
     def codegen_cpp_sizevar(
         self, x: sympy.Expr | SympyBoolean, *, simplify: bool = True
     ) -> str:
-        maybe_simplified_x = V.graph.sizevars.simplify(x) if simplify else x
+        replaced_x = self.replace_symbolic_scalar_graph_inputs(x)
+        maybe_simplified_x = (
+            V.graph.sizevars.simplify(replaced_x) if simplify else replaced_x
+        )
         # In AOT mode, emit runtime checks for potential division/modulo by zero
         # to prevent SIGFPE crashes when symbolic tensor shapes can be 0
         if V.graph.aot_mode:
@@ -1567,7 +1570,10 @@ class CppWrapperCpu(PythonWrapperCodegen):
                 self.writeline(
                     f'AOTI_TORCH_CHECK({divisor_str} != 0, "Integer {op_name} by zero");'
                 )
-        return cexpr(self.replace_symbolic_scalar_graph_inputs(maybe_simplified_x))
+        return cexpr(maybe_simplified_x)
+
+    def codegen_cpp_symbolic_scalar(self, x: sympy.Expr | SympyBoolean) -> str:
+        return cexpr(self.replace_symbolic_scalar_graph_inputs(x))
 
     def codegen_sizevar(self, x: sympy.Expr | SympyBoolean) -> str:
         return self.codegen_cpp_sizevar(x)
@@ -2557,7 +2563,7 @@ if (!custom_op_wrapper) {
                     imag = self.generate_float_value(scalar.imag)
                     return f"PyComplex_FromDoubles({real}, {imag})"
                 if isinstance(scalar, SymTypes):
-                    scalar_var = self.codegen_sizevar(scalar.node.expr)
+                    scalar_var = self.codegen_cpp_symbolic_scalar(scalar.node.expr)
                     if isinstance(scalar, torch.SymBool):
                         return f"PyBool_FromLong({scalar_var})"
                     if isinstance(scalar, torch.SymFloat):
@@ -2940,9 +2946,9 @@ if (!custom_op_wrapper) {
             # FIXME: This happens because type_ is not always properly set to torch.ListType
             return f"{{{', '.join(self.val_to_arg_str(x, None) for x in val)}}}"
         elif isinstance(val, SymTypes):
-            return self.codegen_sizevar(val.node.expr)
+            return self.codegen_cpp_symbolic_scalar(val.node.expr)
         elif isinstance(val, SYMBOLIC_SCALAR_TYPES):
-            return self.codegen_sizevar(val)
+            return self.codegen_cpp_symbolic_scalar(val)
         else:
             return repr(val)
 
