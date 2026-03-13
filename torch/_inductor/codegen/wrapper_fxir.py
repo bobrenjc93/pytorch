@@ -6,7 +6,7 @@ import logging
 import operator
 import textwrap
 from collections import Counter
-from typing import TYPE_CHECKING, Any
+from typing import Any, TYPE_CHECKING
 
 import sympy
 
@@ -78,6 +78,7 @@ from .wrapper import (
     UnbackedSymbolDefsLine,
     WrapperLine,
 )
+
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence

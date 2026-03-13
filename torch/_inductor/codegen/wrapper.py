@@ -2484,9 +2484,7 @@ class PythonWrapperCodegen(CodeGen):
                     if getattr(value, "is_Boolean", False):
                         add_expr_input(
                             name,
-                            V.graph.sizevars.evaluate_expr(
-                                value, fallback_value=False
-                            ),
+                            V.graph.sizevars.evaluate_expr(value, fallback_value=False),
                         )
                     else:
                         add_expr_input(
