@@ -6,8 +6,7 @@ import logging
 import operator
 import textwrap
 from collections import Counter
-from collections.abc import Callable, Sequence
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import sympy
 
@@ -42,7 +41,6 @@ from torch.utils._sympy.reference import OptimizedPythonReferenceAnalysis
 from torch.utils._sympy.solve import try_solve
 
 from .. import config, ir
-from ..runtime.triton_compat import Config
 from ..utils import cache_property_on_self, LineContext, ValueWithLineMap
 from .common import (
     CodegenSymbol,
@@ -80,6 +78,11 @@ from .wrapper import (
     UnbackedSymbolDefsLine,
     WrapperLine,
 )
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Sequence
+
+    from ..runtime.triton_compat import Config
 
 
 aten = torch.ops.aten
@@ -239,12 +242,12 @@ class WrapperFxCodegen(PythonWrapperCodegen):
 
     @classmethod
     def create(
-        cls: type["WrapperFxCodegen"],
+        cls: type[WrapperFxCodegen],
         is_subgraph: bool,
         subgraph_name: str | None,
         parent_wrapper: PythonWrapperCodegen | None,
         partition_signatures: ir.GraphPartitionSignature | None = None,
-    ) -> "WrapperFxCodegen":
+    ) -> WrapperFxCodegen:
         if is_subgraph:
             assert subgraph_name is not None
             assert parent_wrapper is not None
