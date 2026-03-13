@@ -1518,6 +1518,7 @@ class PythonWrapperCodegen(CodeGen):
             for name, value in self.get_graph_inputs().items()
             if isinstance(value, SYMBOLIC_SCALAR_TYPES)
             and not isinstance(value, sympy.Symbol)
+            and not value.is_Atom
         }
 
     def replace_symbolic_scalar_graph_inputs(
@@ -2264,9 +2265,7 @@ class PythonWrapperCodegen(CodeGen):
     def codegen_python_sizevar(
         self, x: Expr | SympyBoolean, *, simplify: bool = True
     ) -> str:
-        return pexpr(
-            self.replace_symbolic_scalar_graph_inputs(x), simplify=simplify
-        )
+        return pexpr(self.replace_symbolic_scalar_graph_inputs(x), simplify=simplify)
 
     def codegen_sizevar(self, x: Expr | SympyBoolean) -> str:
         return self.codegen_python_sizevar(x)
