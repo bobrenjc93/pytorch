@@ -151,7 +151,7 @@ class ConstDictVariable(VariableTracker):
             cls, vt: VariableTracker, *, guard: bool = False
         ) -> object:
             from .lists import SizeVariable
-            from .tensor import TensorVariable
+            from .tensor import SymNodeVariable, TensorVariable
 
             try:
                 python_constant = vt.as_python_constant()
@@ -171,6 +171,21 @@ class ConstDictVariable(VariableTracker):
                 if item.is_python_constant():
                     items.append(item.as_python_constant())
                     continue
+
+                if isinstance(item, SymNodeVariable):
+                    # dynamic=True size tracing can materialize torch.Size
+                    # elements as SymNodeVariables instead of scalar tensors.
+                    if guard:
+                        items.append(item.evaluate_expr())
+                        continue
+
+                    item_node = getattr(item.sym_num, "node", None)
+                    item_hint = getattr(item_node, "hint", None)
+                    if item_hint is not None:
+                        items.append(item_hint)
+                        continue
+
+                    return cls._MISSING
 
                 if isinstance(item, TensorVariable):
                     proxy = getattr(item, "proxy", None)
