@@ -147,7 +147,9 @@ class ConstDictVariable(VariableTracker):
             self.vt = vt
 
         @classmethod
-        def _maybe_constant_key(cls, vt: VariableTracker) -> object:
+        def _maybe_constant_key(
+            cls, vt: VariableTracker, *, guard: bool = False
+        ) -> object:
             from .lists import SizeVariable
             from .tensor import TensorVariable
 
@@ -182,6 +184,14 @@ class ConstDictVariable(VariableTracker):
                         isinstance(example_value, torch.Tensor)
                         and example_value.numel() == 1
                     ):
+                        item_memo = getattr(example_value, "item_memo", None)
+                        if guard and item_memo is not None:
+                            from torch.fx.experimental.symbolic_shapes import (
+                                guard_scalar,
+                            )
+
+                            items.append(guard_scalar(item_memo))
+                            continue
                         items.append(example_value.item())
                         continue
 
@@ -574,8 +584,11 @@ class ConstDictVariable(VariableTracker):
         # 1) The dict has been mutated. In this case, we would have already
         # inserted a DICT_KEYS_MATCH guard, so we can skip.
         #
-        # 2) args[0].source is None. This happens for const keys. Here, we
-        # have to insert the DICT_CONTAINS guard.
+        # 2) We can recover a concrete key (either from a Python constant or a
+        # source-less torch.Size assembled from tracked scalar values). Here,
+        # we insert a DICT_CONTAINS/DICT_NOT_CONTAINS guard and, for the
+        # recovered torch.Size case, also guard on the scalar values used to
+        # build the key.
         #
         # 3) args[0].source is not None. This can happen for non-const VTs.
         #   3a) contains=True. In this case, we can access the lazyVT from
@@ -591,7 +604,21 @@ class ConstDictVariable(VariableTracker):
             return
 
         contains = args[0] in self
-        if args[0].source is None and args[0].is_python_constant():
+        Hashable = ConstDictVariable._HashableTracker
+        constant_key = Hashable._maybe_constant_key(args[0], guard=True)
+        if constant_key is not Hashable._MISSING:
+            guard_fn = (
+                type(self).CONTAINS_GUARD if contains else type(self).NOT_CONTAINS_GUARD
+            )
+            install_guard(
+                self.make_guard(
+                    functools.partial(
+                        guard_fn,
+                        key=constant_key,
+                    )
+                )
+            )
+        elif args[0].source is None and args[0].is_python_constant():
             guard_fn = (
                 type(self).CONTAINS_GUARD if contains else type(self).NOT_CONTAINS_GUARD
             )

@@ -2392,6 +2392,32 @@ class DunderDictVariableTests(torch._dynamo.test_case.TestCase):
 
         self.assertEqual(fn(x), compiled_fn(x))
 
+    def test_dict_torch_size_dynamic_key_local_literal_dynamic_recompile(self):
+        def fn(x):
+            current_shape = torch.tensor(x.shape[1:])
+            shape_key = torch.Size([current_shape[0], 64])
+            literal_mapping = {
+                torch.Size([32, 64]): 1,
+                torch.Size([64, 64]): 2,
+            }
+
+            if shape_key in literal_mapping:
+                return x + literal_mapping[shape_key]
+            return x - 1
+
+        cnt = torch._dynamo.testing.CompileCounter()
+        compiled_fn = torch.compile(fn, backend=cnt, dynamic=True)
+
+        x32 = torch.randn(4, 32)
+        x64 = torch.randn(4, 64)
+
+        self.assertEqual(fn(x32), compiled_fn(x32))
+        self.assertEqual(fn(x64), compiled_fn(x64))
+        self.assertEqual(cnt.frame_count, 2)
+
+        self.assertEqual(fn(x32), compiled_fn(x32))
+        self.assertEqual(cnt.frame_count, 2)
+
 
 if __name__ == "__main__":
     from torch._dynamo.test_case import run_tests
