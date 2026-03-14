@@ -1203,6 +1203,23 @@ class GraphLowering(torch.fx.Interpreter):
 
             return non_dup_const_name
 
+    def _allocate_int_placeholder_symbol(self, target: str) -> sympy.Symbol:
+        base_name = f"{target}_symint"
+        existing_names = set(self.graph_inputs)
+        existing_names.update(
+            str(value)
+            for value in self.graph_inputs.values()
+            if isinstance(value, sympy.Symbol)
+        )
+
+        symbol_name = base_name
+        counter = 0
+        while symbol_name in existing_names:
+            counter += 1
+            symbol_name = f"{base_name}_{counter}"
+
+        return sympy.Symbol(symbol_name, integer=True)
+
     # pyrefly: ignore [bad-override]
     def placeholder(
         self,
@@ -1234,7 +1251,7 @@ class GraphLowering(torch.fx.Interpreter):
             # them to the example value seen during tracing. Use a distinct
             # internal symbol so wrapper codegen can bind the symbolic value to
             # the extracted runtime scalar without colliding on the same name.
-            expr = sympy.Symbol(f"{target}_symint", integer=True)
+            expr = self._allocate_int_placeholder_symbol(target)
             self.graph_inputs[target] = expr
             self.graph_input_names.append(target)
             return expr

@@ -229,6 +229,43 @@ if HAS_CPU:
                 wrapper_code, _ = graph_lowering.codegen()
                 self.assertIn(", pred, )", wrapper_code.value)
 
+        def test_graph_lowering_avoids_int_placeholder_name_collisions(self):
+            from torch._inductor.debug import DebugContext
+            from torch._inductor.graph import GraphLowering
+            from torch.fx.experimental.symbolic_shapes import ShapeEnv
+
+            shape_env = ShapeEnv()
+            x_input = torch.randn(2, 3)
+            fake_mode = torch._subclasses.FakeTensorMode(shape_env=shape_env)
+            with fake_mode:
+                fake_x = fake_mode.from_tensor(x_input)
+                fake_y = torch.ops.aten.neg.default(fake_x)
+
+            graph = torch.fx.Graph()
+            scalar = graph.placeholder("x")
+            tensor = graph.placeholder("x_symint")
+            y = graph.call_function(torch.ops.aten.neg.default, (tensor,))
+            graph.output((y,))
+
+            gm = torch.fx.GraphModule({}, graph)
+            scalar.meta["val"] = 4
+            tensor.meta["val"] = fake_x
+            y.meta["val"] = fake_y
+            gm.graph.lint()
+            gm.recompile()
+
+            graph_lowering = GraphLowering(gm, shape_env=shape_env)
+            with (
+                V.set_fake_mode(fake_mode),
+                V.set_graph_handler(graph_lowering),
+                V.set_debug_handler(DebugContext()),
+            ):
+                graph_lowering.run(4, x_input)
+                scalar_expr = graph_lowering.graph_inputs["x"]
+                self.assertIsInstance(scalar_expr, sympy.Symbol)
+                self.assertNotEqual(str(scalar_expr), "x_symint")
+                self.assertIn("x_symint", graph_lowering.graph_inputs)
+
 
 class TestInductorDynamic(TestCase):
     compile_fn = partial(torch.compile, dynamic=True)
