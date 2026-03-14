@@ -1273,7 +1273,7 @@ class TestReplaceFloorDiv(InductorTestCase):
         converter._generate_graph_inputs()
 
         pred_node = converter._generate_sym_node(pred)
-        assert isinstance(pred_node, torch.fx.Node)
+        self.assertIsInstance(pred_node, torch.fx.Node)
         self.assertEqual(pred_node.name, "pred")
 
     def _check(self, expr: sympy.Expr) -> sympy.Expr:

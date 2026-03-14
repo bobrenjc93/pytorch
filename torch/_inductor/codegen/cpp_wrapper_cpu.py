@@ -1575,6 +1575,9 @@ class CppWrapperCpu(PythonWrapperCodegen):
     def codegen_cpp_symbolic_scalar(self, x: sympy.Expr | SympyBoolean) -> str:
         return cexpr(self.replace_symbolic_scalar_graph_inputs(x))
 
+    def codegen_symbolic_scalar(self, x: sympy.Expr | SympyBoolean) -> str:
+        return self.codegen_cpp_symbolic_scalar(x)
+
     def codegen_sizevar(self, x: sympy.Expr | SympyBoolean) -> str:
         return self.codegen_cpp_sizevar(x)
 
@@ -1605,14 +1608,19 @@ class CppWrapperCpu(PythonWrapperCodegen):
             "linux",
             "win32",
         ]
+        expr = (
+            self.codegen_cpp_sizevar(arg.inner_expr)
+            if symbol_is_type(arg.inner, SymT.PRECOMPUTED_SIZE)
+            else self.codegen_cpp_symbolic_scalar(arg.inner_expr)
+        )
         if enable_kernel_profile or (arg.inner, graph) not in self.kernel_numel_expr:
             # When enable_kernel_profile is on, each kernel call is wrapped in
             # its own {} scope block, so we must redeclare the variable each
             # time since prior declarations are no longer visible.
             self.kernel_numel_expr.add((arg.inner, graph))
-            self.writeline(f"int64_t {arg.inner} = {cexpr(arg.inner_expr)};")
+            self.writeline(f"int64_t {arg.inner} = {expr};")
         else:
-            self.writeline(f"{arg.inner} = {cexpr(arg.inner_expr)};")
+            self.writeline(f"{arg.inner} = {expr};")
 
     def _codegen_dynamic_scalar(self, node):
         (data,) = (t.codegen_reference() for t in node.inputs)

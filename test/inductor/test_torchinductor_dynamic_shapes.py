@@ -223,7 +223,7 @@ if HAS_CPU:
             ):
                 graph_lowering.run(x_input, pred_input)
                 pred_expr = graph_lowering.graph_inputs["pred"]
-                assert isinstance(pred_expr, sympy.Equality)
+                self.assertIsInstance(pred_expr, sympy.Equality)
                 self.assertIs(may_get_constant_buffer_dtype(pred_expr), torch.bool)
 
                 wrapper_code, _ = graph_lowering.codegen()

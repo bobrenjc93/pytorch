@@ -1223,7 +1223,19 @@ class GraphLowering(torch.fx.Interpreter):
             self.graph_inputs[target] = expr
             self.graph_input_names.append(target)
             return expr
-        elif isinstance(example, (int, bool, float)):
+        elif isinstance(example, bool):
+            expr = sympy.sympify(example)
+            self.graph_inputs[target] = expr
+            self.graph_input_names.append(target)
+            return expr
+        elif isinstance(example, int):
+            # Keep runtime scalar integer inputs symbolic instead of specializing
+            # them to the example value seen during tracing.
+            expr = sympy.Symbol(target, integer=True)
+            self.graph_inputs[target] = expr
+            self.graph_input_names.append(target)
+            return expr
+        elif isinstance(example, float):
             expr = sympy.sympify(example)
             self.graph_inputs[target] = expr
             self.graph_input_names.append(target)

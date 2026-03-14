@@ -2267,6 +2267,9 @@ class PythonWrapperCodegen(CodeGen):
     ) -> str:
         return pexpr(self.replace_symbolic_scalar_graph_inputs(x), simplify=simplify)
 
+    def codegen_symbolic_scalar(self, x: Expr | SympyBoolean) -> str:
+        return pexpr(self.replace_symbolic_scalar_graph_inputs(x), simplify=False)
+
     def codegen_sizevar(self, x: Expr | SympyBoolean) -> str:
         return self.codegen_python_sizevar(x)
 
@@ -2955,7 +2958,12 @@ class PythonWrapperCodegen(CodeGen):
     def _generate_symbolic_call_arg_helper(
         self, arg: SymbolicCallArg, graph: GraphLowering
     ) -> None:
-        self.writeline(f"{arg.inner} = {pexpr(arg.inner_expr)}")
+        expr = (
+            self.codegen_sizevar(arg.inner_expr)
+            if symbol_is_type(arg.inner, SymT.PRECOMPUTED_SIZE)
+            else self.codegen_symbolic_scalar(arg.inner_expr)
+        )
+        self.writeline(f"{arg.inner} = {expr}")
 
     def generate_workspace_allocation(self, ws: WorkspaceArg):
         name = ws.get_name()
@@ -3064,6 +3072,8 @@ class PythonWrapperCodegen(CodeGen):
                 return arg + ".item()" if should_unwrap_unspec_arg(arg) else arg
             elif isinstance(arg, (int, float, bool, SymbolicCallArg)):
                 return str(arg)
+            elif isinstance(arg, SYMBOLIC_SCALAR_TYPES):
+                return self.codegen_symbolic_scalar(arg)
             else:
                 return pexpr(V.graph.sizevars.simplify(arg))
 
