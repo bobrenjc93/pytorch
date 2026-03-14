@@ -185,13 +185,34 @@ class ConstDictVariable(VariableTracker):
                         and example_value.numel() == 1
                     ):
                         item_memo = getattr(example_value, "item_memo", None)
-                        if guard and item_memo is not None:
-                            from torch.fx.experimental.symbolic_shapes import (
-                                guard_scalar,
-                            )
+                        if item_memo is not None:
+                            if guard:
+                                from torch.fx.experimental.symbolic_shapes import (
+                                    guard_scalar,
+                                )
 
-                            items.append(guard_scalar(item_memo))
+                                items.append(guard_scalar(item_memo))
+                                continue
+                            item_node = getattr(item_memo, "node", None)
+                            item_hint = getattr(item_node, "hint", None)
+                            if item_hint is not None:
+                                items.append(item_hint)
+                                continue
+                            return cls._MISSING
+
+                        constant = getattr(example_value, "constant", None)
+                        if (
+                            isinstance(constant, torch.Tensor)
+                            and constant.numel() == 1
+                        ):
+                            items.append(constant.item())
                             continue
+
+                        from torch._subclasses.fake_tensor import FakeTensor
+
+                        if isinstance(example_value, FakeTensor):
+                            return cls._MISSING
+
                         items.append(example_value.item())
                         continue
 
