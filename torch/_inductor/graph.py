@@ -1231,10 +1231,10 @@ class GraphLowering(torch.fx.Interpreter):
             return expr
         elif isinstance(example, int):
             # Keep runtime scalar integer inputs symbolic instead of specializing
-            # them to the example value seen during tracing. Preserve the FX
-            # placeholder name as the symbolic identifier so downstream wrapper
-            # and FXIR signatures stay stable.
-            expr = sympy.Symbol(target, integer=True)
+            # them to the example value seen during tracing. Use a distinct
+            # internal symbol so wrapper codegen can bind the symbolic value to
+            # the extracted runtime scalar without colliding on the same name.
+            expr = sympy.Symbol(f"{target}_symint", integer=True)
             self.graph_inputs[target] = expr
             self.graph_input_names.append(target)
             return expr

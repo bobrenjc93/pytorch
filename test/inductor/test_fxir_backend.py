@@ -1276,6 +1276,24 @@ class TestReplaceFloorDiv(InductorTestCase):
         self.assertIsInstance(pred_node, torch.fx.Node)
         self.assertEqual(pred_node.name, "pred")
 
+    def test_generate_graph_inputs_preserves_symbolic_scalar_placeholder_name(self):
+        symint = sympy.Symbol("arg0_symint", integer=True)
+        converter = FxConverter(
+            lines=[],
+            prologue="",
+            graph_inputs={"arg0": symint},
+            graph_outputs=[],
+            subgms={},
+            is_subgraph=False,
+        )
+
+        converter._generate_graph_inputs()
+
+        (placeholder_node,) = converter.gm.graph.find_nodes(op="placeholder")
+        self.assertEqual(placeholder_node.name, "arg0")
+        self.assertIs(converter.buffer_to_node[str(symint)], placeholder_node)
+        self.assertIs(converter._generate_sym_node(symint), placeholder_node)
+
     def _check(self, expr: sympy.Expr) -> sympy.Expr:
         # Check that we started with floor's.
         num_floors = expr.count(sympy.floor)

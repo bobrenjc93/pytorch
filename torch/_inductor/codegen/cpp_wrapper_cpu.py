@@ -317,6 +317,7 @@ class CppWrapperCpu(PythonWrapperCodegen):
         value: ir.TensorBox | ir.TorchBindObject | sympy.Expr | SympyBoolean,
         bound_vars: OrderedSet[sympy.Symbol],
     ):
+        """Bind graph input metadata to the symbolic values used in generated C++."""
         code = self.prefix
 
         @functools.cache
@@ -368,11 +369,6 @@ class CppWrapperCpu(PythonWrapperCodegen):
 
         if isinstance(value, SYMBOLIC_SCALAR_TYPES):
             if not isinstance(value, sympy.Symbol) or value in bound_vars:
-                return
-            if str(value) == name:
-                # The extracted runtime scalar input already uses the symbol's
-                # name, so reusing it avoids a colliding redeclaration.
-                bound_vars.add(value)
                 return
             if getattr(value, "is_Boolean", False):
                 decl = "bool"

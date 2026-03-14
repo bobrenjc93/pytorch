@@ -411,7 +411,10 @@ class FxConverter:
                 if is_constant
                 else self._get_buffer(ir_node)
             )
-            placeholder_node = self.gm.graph.placeholder(buffer.get_name())
+            placeholder_name = (
+                name if isinstance(ir_node, sympy.Symbol) else buffer.get_name()
+            )
+            placeholder_node = self.gm.graph.placeholder(placeholder_name)
             placeholder_node.meta["val"] = (
                 ir_node if is_constant else buffer.get_example()
             )
