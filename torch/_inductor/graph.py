@@ -1203,6 +1203,7 @@ class GraphLowering(torch.fx.Interpreter):
 
             return non_dup_const_name
 
+    # pyrefly: ignore [bad-override]
     def placeholder(
         self,
         target: str,  # type: ignore[override]
@@ -1230,10 +1231,10 @@ class GraphLowering(torch.fx.Interpreter):
             return expr
         elif isinstance(example, int):
             # Keep runtime scalar integer inputs symbolic instead of specializing
-            # them to the example value seen during tracing. Use a distinct
-            # symbol name so wrapper codegen can bind the symbolic value to the
-            # runtime scalar input without shadowing the extracted input local.
-            expr = sympy.Symbol(f"{target}_symint", integer=True)
+            # them to the example value seen during tracing. Preserve the FX
+            # placeholder name as the symbolic identifier so downstream wrapper
+            # and FXIR signatures stay stable.
+            expr = sympy.Symbol(target, integer=True)
             self.graph_inputs[target] = expr
             self.graph_input_names.append(target)
             return expr

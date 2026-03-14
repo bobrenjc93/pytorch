@@ -369,6 +369,11 @@ class CppWrapperCpu(PythonWrapperCodegen):
         if isinstance(value, SYMBOLIC_SCALAR_TYPES):
             if not isinstance(value, sympy.Symbol) or value in bound_vars:
                 return
+            if str(value) == name:
+                # The extracted runtime scalar input already uses the symbol's
+                # name, so reusing it avoids a colliding redeclaration.
+                bound_vars.add(value)
+                return
             if getattr(value, "is_Boolean", False):
                 decl = "bool"
             elif value.is_integer:
