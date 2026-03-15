@@ -1885,6 +1885,7 @@ class TritonOverrides(OpOverrides):
     def ceil(x):
         return f"libdevice.ceil({x})"
 
+
 # Register the custom pow override after class creation so type checkers see
 # a plain callable instead of the class-body staticmethod descriptor.
 OpDtypeSupport.register_upcast(TritonOverrides.pow, True)
