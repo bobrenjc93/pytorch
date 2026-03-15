@@ -2352,32 +2352,29 @@ For now, dynamo will explicitly graph break when it encounters user code with th
             # out variants of torch operators like torch.sort and torch.sigmoid
             # mutate the tensors in the out field.
             #
-            # However, it's non-trivial to update all references of the old
-            # `TensorVariable` to the new one returned (`result_var`), so we
-            # take the conservative approach to graph break on size changes, and
-            # assume other cases can fall through soundly.
+            # For source-tracked `out=` tensors, we still take the conservative
+            # approach and graph break on size changes. For local/intermediate
+            # `out=` tensors, reproxify the passed tensor VTs to the returned
+            # result so subsequent reads see the updated value/metadata.
             #
             # Note that although these tensor variables would hold different
             # proxies, the in-place mutation semantics is preserved in the FX
             # graph, so we won't have correctness issues.
             if isinstance(saved_out_shapes, list):
-                for out_tensor_vt, saved_out_shape, saved_out_version in zip(
+                assert isinstance(
+                    tensor_variable, (TupleVariable, ListVariable, NamedTupleVariable)
+                )
+                for out_tensor_vt, result_out_vt, saved_out_shape, saved_out_version in zip(
                     out_kwarg_vt.items,  # type: ignore[union-attr]
+                    tensor_variable.items,
                     saved_out_shapes,
                     saved_out_versions,  # type: ignore[arg-type]
                 ):
                     if saved_out_shape is None:
-                        # This out tensor is not shape-guarded, but it may still
-                        # need its metadata synchronized if fake propagation
-                        # resized it in place.
-                        if not out_tensor_vt.is_tensor():
+                        if not out_tensor_vt.is_tensor() or not result_out_vt.is_tensor():
                             continue
-                        fake_out = out_tensor_vt.proxy.node.meta["example_value"]
-                        if (
-                            saved_out_version is not None
-                            and fake_out._version > saved_out_version
-                        ):
-                            out_tensor_vt.synchronize_attributes(tx)  # type: ignore[attr-defined]
+                        out_tensor_vt.proxy = result_out_vt.proxy  # type: ignore[attr-defined]
+                        out_tensor_vt.synchronize_attributes(tx)  # type: ignore[attr-defined]
                         continue
 
                     assert out_tensor_vt.is_tensor()
@@ -2414,35 +2411,40 @@ For now, dynamo will explicitly graph break when it encounters user code with th
                         )
             else:
                 assert out_kwarg_vt is not None and out_kwarg_vt.is_tensor()
-                assert "example_value" in out_kwarg_vt.as_proxy().node.meta
-                fake_out = out_kwarg_vt.as_proxy().node.meta["example_value"]
-                if fake_out._version > saved_out_versions:
+                if saved_out_shapes is None:
+                    assert tensor_variable.is_tensor()
+                    out_kwarg_vt.proxy = tensor_variable.proxy  # type: ignore[attr-defined]
                     out_kwarg_vt.synchronize_attributes(tx)  # type: ignore[attr-defined]
-                if saved_out_shapes is not None and saved_out_shapes != fake_out.shape:
-                    # It's hard to get out variants with resizing on graph inputs work
-                    # properly across dynamo/aot/inductor, just fall back.
-                    unimplemented(
-                        gb_type="Shape mismatch with out= tensor variant",
-                        context=f"fn={self.value}, args={args}, kwargs={kwargs}",
-                        explanation=(
-                            f"Shape mismatch when calling {self.value} with `out=`. "
-                            f"Provided `out=` shape: {saved_out_shapes}. Actual shape: {fake_out.shape}."
-                        ),
-                        hints=[
-                            *graph_break_hints.SUPPORTABLE,
-                        ],
-                    )
-                if not torch._prims_common.is_contiguous_or_false(fake_out):
-                    # It's difficult to handle strides correctly in functionalization
-                    # when calling an out= op with a non-contiguous out argument
-                    unimplemented(
-                        gb_type="Attempted to call op with non-contiguous `out=` tensor",
-                        context=f"self.value={self.value}, args={args}, kwargs={kwargs}",
-                        explanation="Dynamo does not support this.",
-                        hints=[
-                            *graph_break_hints.SUPPORTABLE,
-                        ],
-                    )
+                else:
+                    assert "example_value" in out_kwarg_vt.as_proxy().node.meta
+                    fake_out = out_kwarg_vt.as_proxy().node.meta["example_value"]
+                    if fake_out._version > saved_out_versions:
+                        out_kwarg_vt.synchronize_attributes(tx)  # type: ignore[attr-defined]
+                    if saved_out_shapes != fake_out.shape:
+                        # It's hard to get out variants with resizing on graph inputs work
+                        # properly across dynamo/aot/inductor, just fall back.
+                        unimplemented(
+                            gb_type="Shape mismatch with out= tensor variant",
+                            context=f"fn={self.value}, args={args}, kwargs={kwargs}",
+                            explanation=(
+                                f"Shape mismatch when calling {self.value} with `out=`. "
+                                f"Provided `out=` shape: {saved_out_shapes}. Actual shape: {fake_out.shape}."
+                            ),
+                            hints=[
+                                *graph_break_hints.SUPPORTABLE,
+                            ],
+                        )
+                    if not torch._prims_common.is_contiguous_or_false(fake_out):
+                        # It's difficult to handle strides correctly in functionalization
+                        # when calling an out= op with a non-contiguous out argument
+                        unimplemented(
+                            gb_type="Attempted to call op with non-contiguous `out=` tensor",
+                            context=f"self.value={self.value}, args={args}, kwargs={kwargs}",
+                            explanation="Dynamo does not support this.",
+                            hints=[
+                                *graph_break_hints.SUPPORTABLE,
+                            ],
+                        )
 
         return tensor_variable
 
