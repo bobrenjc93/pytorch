@@ -28,7 +28,13 @@ from torch._dynamo.device_interface import get_interface_for_device
 from torch._dynamo.utils import identity, preserve_rng_state
 from torch._prims_common import is_integer_dtype, type_to_dtype
 from torch.utils._ordered_set import OrderedSet
-from torch.utils._sympy.functions import CeilDiv, FloorDiv, ModularIndexing
+from torch.utils._sympy.functions import (
+    CeilDiv,
+    FloorDiv,
+    ModularIndexing,
+    TruncToFloat,
+    TruncToInt,
+)
 from torch.utils._triton import (
     get_triton_version,
     has_triton_package,
@@ -157,6 +163,20 @@ def is_sympy_integer_like(expr: object):
         return False
     return isinstance(expr, sympy.Integer) or (
         expr.is_integer and len(expr.free_symbols) == 0
+    )
+
+
+def _materialize_trunc_to_float_expr(
+    expr: sympy.Expr, dtype: torch.dtype
+) -> sympy.Expr:
+    if not dtype.is_floating_point or not expr.has(TruncToInt):
+        return expr
+
+    # Preserve float truncation semantics when materializing symbolic scalars
+    # into floating tensors. Casting to the kernel index dtype first can
+    # overflow before the requested floating-point conversion happens.
+    return expr.xreplace(
+        {node: TruncToFloat(*node.args) for node in expr.atoms(TruncToInt)}
     )
 
 
@@ -767,6 +787,11 @@ class TritonPrinter(PythonPrinter):  # noqa: docstring_linter
             # pyrefly: ignore [missing-attribute]
             f"libdevice.trunc({self._print(expr.args[0])}).to({V.kernel.index_dtype})"
         )
+
+    def _print_TruncToFloat(self, expr: sympy.Expr) -> str:
+        assert len(expr.args) == 1
+        # pyrefly: ignore [missing-attribute]
+        return f"libdevice.trunc({self._print(expr.args[0])})"
 
     def _print_Float(self, expr: sympy.Expr) -> str:
         if expr.is_integer:
@@ -1956,6 +1981,7 @@ class TritonKernelOverrides(TritonOverrides):
 
     @classmethod
     def index_expr(cls, expr, dtype):
+        expr = _materialize_trunc_to_float_expr(expr, dtype)
         indexing = V.kernel.indexing(
             expr, block_ptr=False, tma_compatibility_checker=None
         )
