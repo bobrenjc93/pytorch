@@ -21,12 +21,12 @@ from .virtualized import OpsValue, V
 T = TypeVar("T")
 _MISSING_SHAPE = object()
 _UNSIGNED_INT_DTYPES: frozenset[torch.dtype] = frozenset(
-    {
+    (
         torch.uint8,
         torch.uint16,
         torch.uint32,
         torch.uint64,
-    }
+    )
 )
 
 
