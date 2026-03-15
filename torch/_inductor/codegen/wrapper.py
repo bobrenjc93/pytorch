@@ -1516,8 +1516,10 @@ class PythonWrapperCodegen(CodeGen):
         return {
             value: sympy.Symbol(name)
             for name, value in self.get_graph_inputs().items()
-            if isinstance(value, SYMBOLIC_SCALAR_TYPES)
-            and not isinstance(value, sympy.Symbol)
+            # Numeric sympy.Expr inputs are already handled correctly by the
+            # existing wrapper paths. Only boolean graph-input relations need to
+            # be materialized as standalone placeholders at graph boundaries.
+            if getattr(value, "is_Boolean", False)
             and not value.is_Atom
         }
 
