@@ -148,7 +148,7 @@ class TestCodegenTriton(InductorTestCase):
 
         self.assertEqual(
             TestTritonKernelOverrides.pow(3, exponent),
-            "triton_helpers.pow_integer(custom_constant(3, torch.int64), ks0)",
+            "triton_helpers.pow_integer(custom_constant(3, torch.uint32), ks0)",
         )
 
 
