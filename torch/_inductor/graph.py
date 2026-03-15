@@ -110,6 +110,7 @@ from .utils import (
     get_sympy_Expr_dtype,
     GraphPartitionMap,
     is_same_tensor,
+    is_sympy_boolean,
     maybe_get_suppress_shape_guards_ctx,
     normalize_name,
     should_assume_input_aligned,
@@ -167,9 +168,7 @@ def may_get_constant_buffer_dtype(
     if isinstance(constant_buffer, sympy.core.numbers.Integer):
         return torch.int64
 
-    if isinstance(constant_buffer, sympy.logic.boolalg.Boolean) or getattr(
-        constant_buffer, "is_Boolean", False
-    ):
+    if is_sympy_boolean(constant_buffer):
         return torch.bool
 
     if isinstance(constant_buffer, sympy.Expr):
@@ -1205,11 +1204,11 @@ class GraphLowering(torch.fx.Interpreter):
 
     def _allocate_int_placeholder_symbol(self, target: str) -> sympy.Symbol:
         base_name = f"{target}_symint"
-        existing_names = {
+        existing_names = OrderedSet(
             self.qualify_name(node.target)
             for node in self.module.graph.nodes  # type: ignore[union-attr]
             if node.op == "placeholder"
-        }
+        )
         existing_names.update(
             str(value)
             for value in self.graph_inputs.values()

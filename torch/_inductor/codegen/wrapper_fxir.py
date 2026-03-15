@@ -41,7 +41,12 @@ from torch.utils._sympy.reference import OptimizedPythonReferenceAnalysis
 from torch.utils._sympy.solve import try_solve
 
 from .. import config, ir
-from ..utils import cache_property_on_self, LineContext, ValueWithLineMap
+from ..utils import (
+    cache_property_on_self,
+    is_sympy_boolean,
+    LineContext,
+    ValueWithLineMap,
+)
 from .common import (
     CodegenSymbol,
     FileBackedGraphModule,
@@ -398,7 +403,7 @@ class FxConverter:
                 self.gm.graph.placeholder(name)
                 continue
 
-            if isinstance(ir_node, sympy.logic.boolalg.Boolean):
+            if is_sympy_boolean(ir_node):
                 placeholder_node = self.gm.graph.placeholder(name)
                 placeholder_node.meta["val"] = ir_node
                 self._generate_size_proxy(placeholder_node, ir_node)

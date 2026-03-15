@@ -29,7 +29,13 @@ from torch.utils._sympy.symbol import symbol_is_type, SymT
 
 from .. import config, cpp_builder, ir
 from ..ir import ExternKernel
-from ..utils import _align, DeferredLineBase, LineContext, normalize_name
+from ..utils import (
+    _align,
+    DeferredLineBase,
+    is_sympy_boolean,
+    LineContext,
+    normalize_name,
+)
 from ..virtualized import V
 from .aoti_hipify_utils import maybe_hipify_code_wrapper
 from .common import get_device_op_overrides, IndentedBuffer, Kernel
@@ -370,7 +376,7 @@ class CppWrapperCpu(PythonWrapperCodegen):
         if isinstance(value, SYMBOLIC_SCALAR_TYPES):
             if not isinstance(value, sympy.Symbol) or value in bound_vars:
                 return
-            if getattr(value, "is_Boolean", False):
+            if is_sympy_boolean(value):
                 decl = "bool"
             elif value.is_integer:
                 decl = "int64_t"

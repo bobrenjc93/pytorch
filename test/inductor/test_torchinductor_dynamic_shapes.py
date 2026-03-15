@@ -142,6 +142,15 @@ if (HAS_GPU or HAS_MPS) and not TEST_WITH_ASAN:
 if HAS_CPU:
 
     class TestInductorDynamicLowering(TestCase):
+        def test_may_get_constant_buffer_dtype_distinguishes_ints_from_bools(self):
+            from torch._inductor.graph import may_get_constant_buffer_dtype
+
+            symint = sympy.Symbol("s77", integer=True)
+            symbool = sympy.Eq(sympy.Symbol("u0", integer=True), 1)
+
+            self.assertIs(may_get_constant_buffer_dtype(symint), torch.int64)
+            self.assertIs(may_get_constant_buffer_dtype(symbool), torch.bool)
+
         def test_graph_lowering_accepts_sympy_eq_graph_input(self):
             from torch._inductor.debug import DebugContext
             from torch._inductor.graph import GraphLowering

@@ -2814,6 +2814,14 @@ def get_sympy_Expr_dtype(val: sympy.Expr) -> torch.dtype:
         return torch.float64
 
 
+def is_sympy_boolean(expr: sympy.Basic) -> TypeGuard[sympy.logic.boolalg.Boolean]:
+    # SymPy symbols are also instances of Boolean at runtime, so guard on
+    # non-Expr booleans to distinguish actual relations/boolean atoms.
+    return isinstance(expr, sympy.logic.boolalg.Boolean) and not isinstance(
+        expr, sympy.Expr
+    )
+
+
 @contextlib.contextmanager
 def maybe_profile(should_profile: bool, *args: Any, **kwargs: Any) -> Iterator[Any]:
     if should_profile:

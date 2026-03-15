@@ -57,6 +57,7 @@ from ..utils import (
     get_dtype_size,
     IndentedBuffer,
     is_codegen_graph_partition_subgraph,
+    is_sympy_boolean,
     is_using_cudagraph_partition,
     LineContext,
     sympy_product,
@@ -1526,7 +1527,7 @@ class PythonWrapperCodegen(CodeGen):
 
             # Boolean graph-input relations, such as Eq(u0, 1), need to be
             # materialized as standalone placeholders at graph boundaries.
-            if isinstance(value, sympy.logic.boolalg.Boolean):
+            if is_sympy_boolean(value):
                 assert isinstance(value, sympy.Basic)
                 if not value.is_Atom:
                     replacements[value] = sympy.Symbol(name)
