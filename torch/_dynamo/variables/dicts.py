@@ -181,13 +181,6 @@ class ConstDictVariable(VariableTracker):
                         items.append(constant.item())
                         continue
 
-                    if (
-                        isinstance(example_value, torch.Tensor)
-                        and example_value.numel() == 1
-                    ):
-                        items.append(example_value.item())
-                        continue
-
                 return cls._MISSING
 
             return torch.Size(items)

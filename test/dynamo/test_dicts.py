@@ -174,6 +174,24 @@ class DictTests(torch._dynamo.test_case.TestCase):
 
             self.assertTrue(same(eager_out, compiled_out))
 
+    def test_dict_torch_size_data_tensor_key(self):
+        offsets = {
+            torch.Size([0]): 1,
+            torch.Size([1]): 2,
+        }
+
+        def fn(x):
+            shape_key = torch.Size([x[0]])
+            if shape_key in offsets:
+                return x + offsets[shape_key]
+            return x - 1
+
+        compiled_fn = torch.compile(fn, backend="eager")
+
+        for value in (0, 1):
+            x = torch.tensor([value], dtype=torch.int64)
+            self.assertEqual(fn(x), compiled_fn(x))
+
     def test_dict_subclass_methods_fallback_readonly(self):
         sd = SimpleDict()
         sd[2] = 5
