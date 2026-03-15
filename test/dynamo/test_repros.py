@@ -2460,6 +2460,22 @@ class ReproTests(torch._dynamo.test_case.TestCase):
         res = fn()
         self.assertEqual(((3, 5), (3, 5)), res)
 
+    def test_diff_out_local_clone_dynamic_shape_change(self):
+        @torch.compile(backend="eager", fullgraph=True, dynamic=True)
+        def fn(a, b):
+            a = a.clone()
+            b = b.clone()
+            torch.diff(a, n=0, out=b)
+            return b.size(), b
+
+        size0, out0 = fn(torch.tensor([0, 2]), torch.tensor([1]))
+        self.assertEqual(torch.Size([2]), size0)
+        self.assertEqual(torch.tensor([0, 2]), out0)
+
+        size1, out1 = fn(torch.tensor([0, 3, 4]), torch.tensor([1, 2]))
+        self.assertEqual(torch.Size([3]), size1)
+        self.assertEqual(torch.tensor([0, 3, 4]), out1)
+
     def test_slice_into_list_mutable(self):
         class Mod(torch.nn.Module):
             def forward(self, listy):

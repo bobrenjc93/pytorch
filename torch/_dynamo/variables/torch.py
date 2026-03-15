@@ -2244,28 +2244,44 @@ For now, dynamo will explicitly graph break when it encounters user code with th
         # tx.output.tracked_fakes. tracked_fakes are used to apply
         # symbolic_shape guards. Mutating them destroys the information
         # prior to tracing, which is essential for creating right
-        # guards. So save the shape now, and check later if it has
-        # changed. If it has, graph break.
+        # guards. So only source-tracked out tensors save their shape
+        # for a later graph-break check; local/intermediate out tensors
+        # only need their metadata synchronized after fake propagation.
         saved_out_shapes = None
+        saved_out_versions = None
         out_kwarg_vt = None
         if "out" in kwargs:
             out_kwarg_vt = kwargs["out"]
 
+            def should_guard_out_shape(out_vt: VariableTracker) -> bool:
+                source = out_vt.source
+                return source is not None and any(
+                    tracked_fake.source == source
+                    for tracked_fake in tx.output.tracked_fakes
+                )
+
             # e.g., out=(t1, t2, ...)
             if isinstance(out_kwarg_vt, (TupleVariable, ListVariable)):
                 saved_out_shapes = []
+                saved_out_versions = []
                 for vt in out_kwarg_vt.items:
                     if vt.is_tensor():
-                        shape = vt.as_proxy().node.meta["example_value"].shape
+                        fake_out = vt.as_proxy().node.meta["example_value"]
+                        shape = fake_out.shape if should_guard_out_shape(vt) else None
+                        version = fake_out._version
                     else:
                         shape = None
+                        version = None
                     saved_out_shapes.append(shape)
+                    saved_out_versions.append(version)
 
             # e.g., out=output_tensor
             if out_kwarg_vt.is_tensor():
+                fake_out = out_kwarg_vt.as_proxy().node.meta["example_value"]
                 saved_out_shapes = (
-                    out_kwarg_vt.as_proxy().node.meta["example_value"].shape
+                    fake_out.shape if should_guard_out_shape(out_kwarg_vt) else None
                 )
+                saved_out_versions = fake_out._version
 
         # Ops that consume scalar values from tensors (via .item()) for computation only,
         # not for output shapes. When capture_scalar_outputs is enabled, these ops would
@@ -2332,7 +2348,7 @@ For now, dynamo will explicitly graph break when it encounters user code with th
             )
 
         # Handle e.g., `torch.add(a, b, out=result)`
-        if saved_out_shapes is not None:
+        if saved_out_versions is not None:
             # out variants of torch operators like torch.sort and torch.sigmoid
             # mutate the tensors in the out field.
             #
@@ -2345,18 +2361,32 @@ For now, dynamo will explicitly graph break when it encounters user code with th
             # proxies, the in-place mutation semantics is preserved in the FX
             # graph, so we won't have correctness issues.
             if isinstance(saved_out_shapes, list):
-                for out_tensor_vt, saved_out_shape in zip(
+                for out_tensor_vt, saved_out_shape, saved_out_version in zip(
                     out_kwarg_vt.items,  # type: ignore[union-attr]
                     saved_out_shapes,
+                    saved_out_versions,  # type: ignore[arg-type]
                 ):
                     if saved_out_shape is None:
-                        # This should be extremely rare, but it's kept for now
-                        # until we invest in enforcing the `out=` kwarg for only
-                        # torch methods.
+                        # This out tensor is not shape-guarded, but it may still
+                        # need its metadata synchronized if fake propagation
+                        # resized it in place.
+                        if not out_tensor_vt.is_tensor():
+                            continue
+                        fake_out = out_tensor_vt.proxy.node.meta["example_value"]
+                        if (
+                            saved_out_version is not None
+                            and fake_out._version > saved_out_version
+                        ):
+                            out_tensor_vt.synchronize_attributes(tx)  # type: ignore[attr-defined]
                         continue
 
                     assert out_tensor_vt.is_tensor()
                     fake_out = out_tensor_vt.proxy.node.meta["example_value"]
+                    if (
+                        saved_out_version is not None
+                        and fake_out._version > saved_out_version
+                    ):
+                        out_tensor_vt.synchronize_attributes(tx)  # type: ignore[attr-defined]
                     if saved_out_shape != fake_out.shape:
                         # It's hard to get out variants with resizing on graph inputs work
                         # properly across dynamo/aot/inductor, just fall back.
@@ -2386,7 +2416,9 @@ For now, dynamo will explicitly graph break when it encounters user code with th
                 assert out_kwarg_vt is not None and out_kwarg_vt.is_tensor()
                 assert "example_value" in out_kwarg_vt.as_proxy().node.meta
                 fake_out = out_kwarg_vt.as_proxy().node.meta["example_value"]
-                if saved_out_shapes != fake_out.shape:
+                if fake_out._version > saved_out_versions:
+                    out_kwarg_vt.synchronize_attributes(tx)  # type: ignore[attr-defined]
+                if saved_out_shapes is not None and saved_out_shapes != fake_out.shape:
                     # It's hard to get out variants with resizing on graph inputs work
                     # properly across dynamo/aot/inductor, just fall back.
                     unimplemented(
