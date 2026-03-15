@@ -1205,7 +1205,11 @@ class GraphLowering(torch.fx.Interpreter):
 
     def _allocate_int_placeholder_symbol(self, target: str) -> sympy.Symbol:
         base_name = f"{target}_symint"
-        existing_names = set(self.graph_inputs)
+        existing_names = {
+            self.qualify_name(node.target)
+            for node in self.module.graph.nodes  # type: ignore[union-attr]
+            if node.op == "placeholder"
+        }
         existing_names.update(
             str(value)
             for value in self.graph_inputs.values()
