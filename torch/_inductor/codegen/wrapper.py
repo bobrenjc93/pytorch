@@ -1516,23 +1516,20 @@ class PythonWrapperCodegen(CodeGen):
         replacements: dict[sympy.Basic, sympy.Symbol] = {}
         for name, value in self.get_graph_inputs().items():
             # Numeric sympy.Expr inputs are already handled correctly by the
-            # existing wrapper paths, except for renamed scalar placeholders:
-            # these use an internal sympy.Symbol like "arg0_symint" while the
-            # runtime wrapper argument is still named "arg0".
-            if isinstance(value, sympy.Symbol) and str(value) != name:
+            # existing wrapper paths, except for synthetic placeholder symbols
+            # introduced to avoid collisions with tensor graph input names.
+            if isinstance(value, sympy.Symbol) and str(value).startswith(
+                f"{name}_symint"
+            ):
                 replacements[value] = sympy.Symbol(name, **value.assumptions0)
                 continue
 
             # Boolean graph-input relations, such as Eq(u0, 1), need to be
             # materialized as standalone placeholders at graph boundaries.
-            if (
-                (
-                    isinstance(value, sympy.logic.boolalg.Boolean)
-                    or getattr(value, "is_Boolean", False)
-                )
-                and not value.is_Atom
-            ):
-                replacements[value] = sympy.Symbol(name)
+            if isinstance(value, sympy.logic.boolalg.Boolean):
+                assert isinstance(value, sympy.Basic)
+                if not value.is_Atom:
+                    replacements[value] = sympy.Symbol(name)
 
         return replacements
 
