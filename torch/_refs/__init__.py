@@ -2059,12 +2059,15 @@ def _where_default(pred: Tensor) -> tuple[Tensor, ...]:
     type_promoting_args=("a", "b"),
     type_promotion_kind=ELEMENTWISE_TYPE_PROMOTION_KIND.NO_OPMATH,
 )
-def _where(
+def where(
     pred: Tensor,
     a: TensorOrNumberLikeType | None = None,
     b: TensorOrNumberLikeType | None = None,
 ):
     """ """
+
+    if a is None or b is None:
+        raise NotImplementedError
 
     utils.check_same_device(pred, a, b, allow_cpu_scalar_tensors=True)
     torch._check(
@@ -2074,18 +2077,6 @@ def _where(
 
     pred, a, b = _maybe_broadcast(pred, a, b)
     return prims.where(pred, a, b)
-
-
-def where(
-    pred: Tensor,
-    a: TensorOrNumberLikeType | None = None,
-    b: TensorOrNumberLikeType | None = None,
-):
-    if a is None and b is None:
-        return _where_default(pred)
-    if a is None or b is None:
-        raise NotImplementedError
-    return _where(pred, a, b)
 
 
 #
