@@ -20,12 +20,14 @@ from .virtualized import OpsValue, V
 
 T = TypeVar("T")
 _MISSING_SHAPE = object()
-_UNSIGNED_INT_DTYPES = {
-    torch.uint8,
-    torch.uint16,
-    torch.uint32,
-    torch.uint64,
-}
+_UNSIGNED_INT_DTYPES: frozenset[torch.dtype] = frozenset(
+    {
+        torch.uint8,
+        torch.uint16,
+        torch.uint32,
+        torch.uint64,
+    }
+)
 
 
 class DTypeVar(Protocol):
@@ -112,7 +114,12 @@ def _is_scalar_dtype_arg(arg: DTypeArg) -> bool:
     if shape is _MISSING_SHAPE:
         return False
 
-    return shape is None or len(shape) == 0
+    if shape is None:
+        return True
+    if not isinstance(shape, Sequence):
+        return False
+
+    return len(shape) == 0
 
 
 def _has_known_nonnegative_scalar_int_value(arg: DTypeArg) -> bool:
