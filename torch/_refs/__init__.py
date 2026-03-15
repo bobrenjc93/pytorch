@@ -2040,7 +2040,15 @@ def clamp_max(
 
 
 # https://pytorch.org/docs/stable/generated/torch.where.html
-# TODO: implement where.default
+@register_decomposition(aten.where.default)
+def _where_default(pred: Tensor) -> tuple[Tensor, ...]:
+    torch._check(
+        pred.dtype is torch.bool,
+        lambda: f"expected predicate to be bool, got {pred.dtype}",
+    )
+    return torch.nonzero(pred, as_tuple=True)
+
+
 @register_decomposition(aten.where.self)
 @register_decomposition(aten.where.ScalarSelf)
 @register_decomposition(aten.where.ScalarOther)
@@ -2051,15 +2059,12 @@ def clamp_max(
     type_promoting_args=("a", "b"),
     type_promotion_kind=ELEMENTWISE_TYPE_PROMOTION_KIND.NO_OPMATH,
 )
-def where(
+def _where(
     pred: Tensor,
     a: TensorOrNumberLikeType | None = None,
     b: TensorOrNumberLikeType | None = None,
 ):
     """ """
-
-    if a is None or b is None:
-        raise NotImplementedError
 
     utils.check_same_device(pred, a, b, allow_cpu_scalar_tensors=True)
     torch._check(
@@ -2069,6 +2074,18 @@ def where(
 
     pred, a, b = _maybe_broadcast(pred, a, b)
     return prims.where(pred, a, b)
+
+
+def where(
+    pred: Tensor,
+    a: TensorOrNumberLikeType | None = None,
+    b: TensorOrNumberLikeType | None = None,
+):
+    if a is None and b is None:
+        return _where_default(pred)
+    if a is None or b is None:
+        raise NotImplementedError
+    return _where(pred, a, b)
 
 
 #
