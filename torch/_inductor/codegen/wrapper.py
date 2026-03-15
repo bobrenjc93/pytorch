@@ -1513,15 +1513,28 @@ class PythonWrapperCodegen(CodeGen):
     def get_symbolic_scalar_graph_input_replacements(
         self,
     ) -> dict[sympy.Basic, sympy.Symbol]:
-        return {
-            value: sympy.Symbol(name)
-            for name, value in self.get_graph_inputs().items()
+        replacements: dict[sympy.Basic, sympy.Symbol] = {}
+        for name, value in self.get_graph_inputs().items():
             # Numeric sympy.Expr inputs are already handled correctly by the
-            # existing wrapper paths. Only boolean graph-input relations need to
-            # be materialized as standalone placeholders at graph boundaries.
-            if getattr(value, "is_Boolean", False)
-            and not value.is_Atom
-        }
+            # existing wrapper paths, except for renamed scalar placeholders:
+            # these use an internal sympy.Symbol like "arg0_symint" while the
+            # runtime wrapper argument is still named "arg0".
+            if isinstance(value, sympy.Symbol) and str(value) != name:
+                replacements[value] = sympy.Symbol(name, **value.assumptions0)
+                continue
+
+            # Boolean graph-input relations, such as Eq(u0, 1), need to be
+            # materialized as standalone placeholders at graph boundaries.
+            if (
+                (
+                    isinstance(value, sympy.logic.boolalg.Boolean)
+                    or getattr(value, "is_Boolean", False)
+                )
+                and not value.is_Atom
+            ):
+                replacements[value] = sympy.Symbol(name)
+
+        return replacements
 
     def replace_symbolic_scalar_graph_inputs(
         self, expr: Expr | SympyBoolean
