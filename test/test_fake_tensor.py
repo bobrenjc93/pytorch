@@ -1291,6 +1291,18 @@ class FakeTensorConstHandling(TestCase):
             self.assertTrue(torch.all(mask == 1))
             self.assertFalse(torch.all(mask == 0))
 
+    def test_bool_with_nested_dispatch_mode_inference(self):
+        class TrackingMode(TorchDispatchMode):
+            def __torch_dispatch__(self, func, types, args=(), kwargs=None):
+                res = func(*args, **kwargs)
+                pytree.tree_map_only(torch.Tensor, lambda t: t.untyped_storage(), res)
+                return res
+
+        with torch.inference_mode(), FakeTensorMode(), TrackingMode():
+            mask = torch.tensor([[1, 1, 1]], dtype=torch.int64)
+            self.assertTrue(torch.all(mask == 1))
+            self.assertFalse(torch.all(mask == 0))
+
     def test_inplace_add(self):
         with FakeTensorMode():
             x = torch.tensor(4.0)

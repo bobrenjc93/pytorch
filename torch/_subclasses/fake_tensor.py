@@ -350,7 +350,9 @@ class FakeTensorConverter:
             self.constant_storage_mapping[weak_st] = []
         self.constant_storage_mapping[weak_st].append(weakref.ref(fake_tensor))
 
-    def invalidate_constant_aliases(self, tensor: Tensor) -> None:
+    def invalidate_constant_aliases(
+        self, tensor: Tensor, *, clear_constant_scalar: bool = True
+    ) -> None:
         if isinstance(tensor, FakeTensor):
             raise AssertionError("Expected a real tensor, not a FakeTensor")
 
@@ -364,6 +366,8 @@ class FakeTensorConverter:
                 # pyrefly: ignore [missing-attribute]
                 ten._fix_weakref()
                 ten.constant = None
+                if clear_constant_scalar:
+                    ten.constant_scalar = None
 
         del self.constant_storage_mapping[weak_st]
 
@@ -678,53 +682,19 @@ class SymNumberMemoDescriptor:
             setattr(obj, self._memo_epoch(obj), obj.fake_mode.epoch)
 
 
-class PythonScalarMemoDescriptor:
-    _name: str
-
-    def __set_name__(self, owner: str, name: str) -> None:
-        self._name = name
-
-    def _memo(self, obj: FakeTensor) -> str:
-        return f"_{self._name}"
-
-    def _memo_vc(self, obj: FakeTensor) -> str:
-        return f"_{self._name}_vc"
-
-    def _memo_epoch(self, obj: FakeTensor) -> str:
-        return f"_{self._name}_epoch"
-
-    def __get__(
-        self, obj: FakeTensor, objtype: type[FakeTensor] | None = None
-    ) -> bool | int | float | None:
-        if (r := getattr(obj, self._memo(obj))) is None:
-            return None
-
-        if (
-            getattr(obj, self._memo_vc(obj)) != obj._version
-            or getattr(obj, self._memo_epoch(obj)) != obj.fake_mode.epoch
-        ):
-            setattr(obj, self._memo(obj), None)
-            return None
-        return r
-
-    def __set__(self, obj: FakeTensor, value: bool | int | float | None) -> None:
-        if value is None:
-            setattr(obj, self._memo(obj), None)
-            setattr(obj, self._memo_vc(obj), None)
-            setattr(obj, self._memo_epoch(obj), None)
-        elif not obj.is_inference():
-            setattr(obj, self._memo(obj), value)
-            setattr(obj, self._memo_vc(obj), obj._version)
-            setattr(obj, self._memo_epoch(obj), obj.fake_mode.epoch)
-
-
-def _extract_constant_scalar(t: Tensor | None) -> bool | int | float | None:
+def _constant_scalar_tensor(t: Tensor | None) -> Tensor | None:
     if (
         t is None
         or not _is_plain_tensor(t)
         or t.dim() != 0
         or t.device.type != "cpu"
     ):
+        return None
+    return t
+
+
+def _extract_constant_scalar(t: Tensor | None) -> bool | int | float | None:
+    if (t := _constant_scalar_tensor(t)) is None:
         return None
 
     with no_dispatch():
@@ -746,6 +716,7 @@ class FakeTensor(Tensor):
     _fake_device: torch.device
     fake_mode: FakeTensorMode
     constant: Tensor | None
+    constant_scalar: Tensor | None
     real_tensor: Tensor | None
 
     # TODO: Generalize this as needed, e.g., into a trie of memos, if
@@ -753,7 +724,6 @@ class FakeTensor(Tensor):
     # memo mechanism here won't work)
     nonzero_memo: SymNumberMemoDescriptor | int | None = SymNumberMemoDescriptor()
     item_memo = SymNumberMemoDescriptor()
-    constant_scalar_memo = PythonScalarMemoDescriptor()
     unique_memo: SymNumberMemoDescriptor | int | None = SymNumberMemoDescriptor()
     unique_consecutive_memo: SymNumberMemoDescriptor | int | None = (
         SymNumberMemoDescriptor()
@@ -886,7 +856,7 @@ class FakeTensor(Tensor):
         self.real_tensor = real_tensor
         self.nonzero_memo = None
         self.item_memo = None
-        self.constant_scalar_memo = _extract_constant_scalar(constant)
+        self.constant_scalar = _constant_scalar_tensor(constant)
         self.unique_memo = None
         self.unique_consecutive_memo = None
         self.nested_int_memo = None
@@ -1139,7 +1109,7 @@ class FakeTensor(Tensor):
         if self.constant is not None:
             with no_dispatch():
                 return bool(self.constant)
-        if (scalar := self.constant_scalar_memo) is not None:
+        if (scalar := _extract_constant_scalar(self.constant_scalar)) is not None:
             return bool(scalar)
         return super().__bool__()
 
@@ -3202,6 +3172,12 @@ class FakeTensorMode(TorchDispatchMode):
         any_constant = any(e.constant is not None for e in flat_arg_fake_tensors)
         schema_info = get_schema_info(func)
         if any_constant and schema_info.is_mutable():
+            # Storage escapes invalidate tensor-wide constness, but a scalar can
+            # still be read from its live backing tensor until a real tensor write
+            # invalidates that source as well.
+            clear_constant_scalar = any(
+                isinstance(ret.type, torch.TensorType) for ret in func._schema.returns
+            )
             _, new_kwargs = normalize_function(  # type: ignore[misc]
                 func,
                 args=args,  # type: ignore[arg-type]
@@ -3215,7 +3191,9 @@ class FakeTensorMode(TorchDispatchMode):
                     and schema_info.is_mutable(k)
                     and v.constant is not None
                 ):
-                    self.fake_tensor_converter.invalidate_constant_aliases(v.constant)
+                    self.fake_tensor_converter.invalidate_constant_aliases(
+                        v.constant, clear_constant_scalar=clear_constant_scalar
+                    )
 
     def from_tensor(
         self,
