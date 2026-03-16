@@ -2483,6 +2483,27 @@ graph():
         larger_input = (torch.rand(4, 10),)
         self.assertEqual(ep.module()(*larger_input), test_module(*larger_input))
 
+    def test_where_decomp_non_bool_input(self):
+        class TestModule(torch.nn.Module):
+            def forward(self, x):
+                return torch.where(x)
+
+        test_module = TestModule()
+        sample_input = (torch.tensor([[0.0, 1.0], [2.0, 0.0]]),)
+        dynamic_shapes = ({0: Dim("batch_size", max=100)},)
+
+        ep = torch.export.export(
+            test_module,
+            sample_input,
+            strict=False,
+            dynamic_shapes=dynamic_shapes,
+        ).run_decompositions({})
+
+        self.assertEqual(ep.module()(*sample_input), test_module(*sample_input))
+
+        larger_input = (torch.tensor([[0.0, 3.0], [4.0, 0.0], [5.0, 6.0]]),)
+        self.assertEqual(ep.module()(*larger_input), test_module(*larger_input))
+
     def test_basic_non_strict_fake_tensor(self):
         class Basic(torch.nn.Module):
             def __init__(self) -> None:

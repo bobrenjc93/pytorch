@@ -2042,10 +2042,6 @@ def clamp_max(
 # https://pytorch.org/docs/stable/generated/torch.where.html
 @register_decomposition(aten.where.default)
 def _where_default(pred: Tensor) -> tuple[Tensor, ...]:
-    torch._check(
-        pred.dtype is torch.bool,
-        lambda: f"expected predicate to be bool, got {pred.dtype}",
-    )
     return torch.nonzero(pred, as_tuple=True)
 
 
