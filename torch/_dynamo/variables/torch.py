@@ -2244,19 +2244,18 @@ For now, dynamo will explicitly graph break when it encounters user code with th
         # tx.output.tracked_fakes. tracked_fakes are used to apply
         # symbolic_shape guards. Mutating them destroys the information
         # prior to tracing, which is essential for creating right
-        # guards. So only source-tracked out tensors save their shape
-        # for a later graph-break check; local/intermediate out tensors
-        # are reproxied to the returned result after fake propagation.
+        # guards. So only out tensors whose current fake is itself tracked
+        # save their shape for a later graph-break check; local/intermediate
+        # out tensors are handled after fake propagation instead.
         saved_out_shapes = None
         saved_out_versions = None
         out_kwarg_vt = None
         if "out" in kwargs:
             out_kwarg_vt = kwargs["out"]
 
-            def should_guard_out_shape(out_vt: VariableTracker) -> bool:
-                source = out_vt.source
-                return source is not None and any(
-                    tracked_fake.source == source
+            def should_guard_out_shape(fake_out: object) -> bool:
+                return any(
+                    tracked_fake.fake is fake_out
                     for tracked_fake in tx.output.tracked_fakes
                 )
 
@@ -2267,7 +2266,9 @@ For now, dynamo will explicitly graph break when it encounters user code with th
                 for vt in out_kwarg_vt.items:
                     if vt.is_tensor():
                         fake_out = vt.as_proxy().node.meta["example_value"]
-                        shape = fake_out.shape if should_guard_out_shape(vt) else None
+                        shape = (
+                            fake_out.shape if should_guard_out_shape(fake_out) else None
+                        )
                         version = fake_out._version
                     else:
                         shape = None
@@ -2279,7 +2280,7 @@ For now, dynamo will explicitly graph break when it encounters user code with th
             if out_kwarg_vt.is_tensor():
                 fake_out = out_kwarg_vt.as_proxy().node.meta["example_value"]
                 saved_out_shapes = (
-                    fake_out.shape if should_guard_out_shape(out_kwarg_vt) else None
+                    fake_out.shape if should_guard_out_shape(fake_out) else None
                 )
                 saved_out_versions = fake_out._version
 
@@ -2352,7 +2353,7 @@ For now, dynamo will explicitly graph break when it encounters user code with th
             # out variants of torch operators like torch.sort and torch.sigmoid
             # mutate the tensors in the out field.
             #
-            # For source-tracked `out=` tensors, we still take the conservative
+            # For guard-tracked `out=` tensors, we still take the conservative
             # approach and graph break on size changes. For local/intermediate
             # `out=` tensors, prefer the returned proxy when the op produces
             # one, but still handle custom ops that mutate `out` and return
@@ -2387,7 +2388,7 @@ For now, dynamo will explicitly graph break when it encounters user code with th
                     if saved_out_shape is None:
                         if result_out_vt is not None and result_out_vt.is_tensor():
                             out_tensor_vt.proxy = (  # type: ignore[attr-defined]
-                                result_out_vt.proxy
+                                result_out_vt.as_proxy()
                             )
                         out_tensor_vt.synchronize_attributes(tx)  # type: ignore[attr-defined]
                     else:
@@ -2431,7 +2432,7 @@ For now, dynamo will explicitly graph break when it encounters user code with th
                 assert out_kwarg_vt is not None and out_kwarg_vt.is_tensor()
                 if saved_out_shapes is None:
                     if tensor_variable.is_tensor():
-                        out_kwarg_vt.proxy = tensor_variable.proxy  # type: ignore[attr-defined]
+                        out_kwarg_vt.proxy = tensor_variable.as_proxy()  # type: ignore[attr-defined]
                     out_kwarg_vt.synchronize_attributes(tx)  # type: ignore[attr-defined]
                 else:
                     assert "example_value" in out_kwarg_vt.as_proxy().node.meta

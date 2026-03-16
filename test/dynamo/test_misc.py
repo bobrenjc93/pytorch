@@ -10452,7 +10452,8 @@ def ___make_guard_fn():
                 torch._chunk_cat(tensors, dim, num_chunks, out=out)
 
             @torch.compile(backend="eager", fullgraph=True)
-            def f2(tensors, dim, num_chunks, out):
+            def f2(tensors, dim, num_chunks):
+                out = torch.empty(1)
                 torch.ops.mylib.chunk_cat(tensors, dim, num_chunks, out=out)
                 return out.size(), out
 
@@ -10465,8 +10466,7 @@ def ___make_guard_fn():
             ]
             dim = 0
             num_chunks = 2
-            out = torch.empty(1)
-            out_size, out_value = f2(tensors, dim, num_chunks, out)
+            out_size, out_value = f2(tensors, dim, num_chunks)
             self.assertEqual(out_size, torch.Size([2, 272]))
             self.assertEqual(out_value.shape, torch.Size([2, 272]))
 
