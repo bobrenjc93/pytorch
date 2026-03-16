@@ -2862,13 +2862,20 @@ class FakeTensorPreferDeviceType(TestCase):
 
 
 class FakeTensorMetaDevicePropagation(TestCase):
-    def test_inplace_add_with_meta_rhs_keeps_destination_device(self):
+    @parametrize("device", ["cpu", "cuda"])
+    def test_inplace_add_with_meta_rhs_keeps_destination_device(self, device):
+        if device == "cuda" and not RUN_CUDA:
+            self.skipTest("requires cuda")
+
         with FakeTensorMode():
-            log_det = torch.zeros(2)
+            log_det = torch.zeros(2, device=device)
             log_det += torch.zeros(2, device="meta")
 
-            self.assertEqual(log_det.device, torch.device("cpu"))
+            self.assertEqual(log_det.device.type, device)
             self.assertTrue(isinstance(log_det, FakeTensor))
+
+
+instantiate_parametrized_tests(FakeTensorMetaDevicePropagation)
 
 
 class FakeTensorViewCopy(TestCase):
