@@ -3351,9 +3351,7 @@ def _native_layer_norm_complex_error(
         if mixed_type:
             for parameter in (weight, bias):
                 if parameter is not None and parameter.dtype != torch.float:
-                    return (
-                        "mixed dtype (CPU): expect parameter to have scalar type of Float"
-                    )
+                    return "mixed dtype (CPU): expect parameter to have scalar type of Float"
             return "mixed dtype (CPU): all inputs must share same datatype."
 
     dtype_name = _layer_norm_complex_dtype_names.get(input.dtype, str(input.dtype))

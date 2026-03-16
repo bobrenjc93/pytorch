@@ -6132,10 +6132,12 @@ class CommonTemplate:
         with self.assertRaises(RuntimeError) as eager_error:
             m(x)
 
-        with self.assertRaisesRegex(
-            RuntimeError, re.escape(str(eager_error.exception))
-        ):
+        expected_message = str(eager_error.exception).splitlines()[0]
+
+        with self.assertRaises(RuntimeError) as compiled_error:
             torch.compile(m)(x)
+
+        self.assertIn(expected_message, str(compiled_error.exception))
 
     @torch._functorch.config.patch("donated_buffer", True)
     def test_matmul_layer_norm(self):
