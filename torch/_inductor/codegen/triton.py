@@ -174,10 +174,30 @@ def _materialize_trunc_to_float_expr(
 
     # Preserve float truncation semantics when materializing symbolic scalars
     # into floating tensors. Casting to the kernel index dtype first can
-    # overflow before the requested floating-point conversion happens.
-    return expr.xreplace(
-        {node: TruncToFloat(*node.args) for node in expr.atoms(TruncToInt)}
-    )
+    # overflow before the requested floating-point conversion happens. Only
+    # rewrite truncations that are already participating in floating-point
+    # computation; integer subexpressions must keep exact integer semantics
+    # until the final materialization cast.
+    if expr.func is TruncToInt:
+        return TruncToFloat(*expr.args)
+
+    def rewrite_float_subexpr(node: sympy.Expr) -> sympy.Expr:
+        if not node.has(TruncToInt):
+            return node
+        if node.func is TruncToInt:
+            return TruncToFloat(*node.args)
+        if node.is_integer:
+            return node
+
+        new_args = tuple(
+            rewrite_float_subexpr(arg) if isinstance(arg, sympy.Expr) else arg
+            for arg in node.args
+        )
+        if new_args == node.args:
+            return node
+        return node.func(*new_args)
+
+    return rewrite_float_subexpr(expr)
 
 
 class OpDtypeSupport:
