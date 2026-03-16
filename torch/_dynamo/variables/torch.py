@@ -2240,24 +2240,20 @@ For now, dynamo will explicitly graph break when it encounters user code with th
         # defined `@allow_in_graph` function as well, which doesn't have the
         # same semantics as the torch ops.
 
-        # Calling fake tensor propagation can mutate the out= tensor in
-        # tx.output.tracked_fakes. tracked_fakes are used to apply
-        # symbolic_shape guards. Mutating them destroys the information
-        # prior to tracing, which is essential for creating right
-        # guards. So only out tensors whose current fake is itself tracked
-        # save their shape for a later graph-break check; local/intermediate
-        # out tensors are handled after fake propagation instead.
+        # Calling fake tensor propagation can mutate graph-input out= tensors.
+        # Mutating their fake metadata destroys the pre-call shape information
+        # needed for the conservative graph-break path, so only out tensors
+        # backed by actual graphargs save their shape for a later check.
+        # Local/intermediate out tensors are handled after fake propagation
+        # instead.
         saved_out_shapes = None
         saved_out_versions = None
         out_kwarg_vt = None
         if "out" in kwargs:
             out_kwarg_vt = kwargs["out"]
 
-            def should_guard_out_shape(fake_out: object) -> bool:
-                return any(
-                    tracked_fake.fake is fake_out
-                    for tracked_fake in tx.output.tracked_fakes
-                )
+            def should_guard_out_shape(out_vt: VariableTracker) -> bool:
+                return out_vt.as_proxy().node.meta.get("grapharg") is not None
 
             # e.g., out=(t1, t2, ...)
             if isinstance(out_kwarg_vt, (TupleVariable, ListVariable)):
@@ -2266,9 +2262,7 @@ For now, dynamo will explicitly graph break when it encounters user code with th
                 for vt in out_kwarg_vt.items:
                     if vt.is_tensor():
                         fake_out = vt.as_proxy().node.meta["example_value"]
-                        shape = (
-                            fake_out.shape if should_guard_out_shape(fake_out) else None
-                        )
+                        shape = fake_out.shape if should_guard_out_shape(vt) else None
                         version = fake_out._version
                     else:
                         shape = None
@@ -2280,7 +2274,7 @@ For now, dynamo will explicitly graph break when it encounters user code with th
             if out_kwarg_vt.is_tensor():
                 fake_out = out_kwarg_vt.as_proxy().node.meta["example_value"]
                 saved_out_shapes = (
-                    fake_out.shape if should_guard_out_shape(fake_out) else None
+                    fake_out.shape if should_guard_out_shape(out_kwarg_vt) else None
                 )
                 saved_out_versions = fake_out._version
 
