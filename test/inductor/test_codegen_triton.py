@@ -170,6 +170,12 @@ class TestCodegenTriton(InductorTestCase):
             integer_expr,
         )
 
+        predicate_expr = sympy.Eq(trunc_expr, sympy.Integer(9007199254740993))
+        self.assertEqual(
+            _materialize_trunc_to_float_expr(predicate_expr, torch.float64),
+            predicate_expr,
+        )
+
         float_expr = sympy.Float(0.5) + trunc_expr
         self.assertEqual(
             _materialize_trunc_to_float_expr(float_expr, torch.float64),

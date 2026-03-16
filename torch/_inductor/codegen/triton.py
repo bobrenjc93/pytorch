@@ -176,8 +176,8 @@ def _materialize_trunc_to_float_expr(
     # into floating tensors. Casting to the kernel index dtype first can
     # overflow before the requested floating-point conversion happens. Only
     # rewrite truncations that are already participating in floating-point
-    # computation; integer subexpressions must keep exact integer semantics
-    # until the final materialization cast.
+    # computation; integer subexpressions and predicates must keep exact
+    # integer semantics until the final materialization cast.
     if expr.func is TruncToInt:
         return TruncToFloat(*expr.args)
 
@@ -186,11 +186,13 @@ def _materialize_trunc_to_float_expr(
             return node
         if node.func is TruncToInt:
             return TruncToFloat(*node.args)
-        if node.is_integer:
+        if getattr(node, "is_Boolean", False) or node.is_integer:
             return node
 
         new_args = tuple(
-            rewrite_float_subexpr(arg) if isinstance(arg, sympy.Expr) else arg
+            rewrite_float_subexpr(arg)
+            if isinstance(arg, sympy.Expr) and not getattr(arg, "is_Boolean", False)
+            else arg
             for arg in node.args
         )
         if new_args == node.args:
