@@ -810,8 +810,11 @@ class TritonPrinter(PythonPrinter):  # noqa: docstring_linter
 
     def _print_TruncToFloat(self, expr: sympy.Expr) -> str:
         assert len(expr.args) == 1
+        value = self._print(expr.args[0])
+        # Adding +0.0 preserves large floating results while canonicalizing
+        # libdevice.trunc(-0.0) back to Python's +0.0 materialization behavior.
         # pyrefly: ignore [missing-attribute]
-        return f"libdevice.trunc({self._print(expr.args[0])})"
+        return f"(libdevice.trunc({value}) + tl.zeros_like({value}))"
 
     def _print_Float(self, expr: sympy.Expr) -> str:
         if expr.is_integer:
