@@ -183,8 +183,7 @@ def _materialize_trunc_to_float_expr(
 
     def is_predicate_expr(node: sympy.Basic) -> bool:
         return bool(
-            getattr(node, "is_Boolean", False)
-            or getattr(node, "is_Relational", False)
+            getattr(node, "is_Boolean", False) or getattr(node, "is_Relational", False)
         )
 
     def rewrite_float_subexpr(node: sympy.Expr) -> sympy.Expr:
