@@ -1083,6 +1083,12 @@ class FakeTensor(Tensor):
                 return bool(self.constant)
         return super().__bool__()
 
+    def untyped_storage(self):
+        # Nested dispatch modes may inspect storages for alias or memory
+        # tracking. That read should not perturb FakeTensor constant state.
+        with no_dispatch():
+            return super().untyped_storage()
+
 
 _MetadataIntLike = Union[IntLikeType, "_PySymInputStub", "_SymIntOutputStub"]
 
