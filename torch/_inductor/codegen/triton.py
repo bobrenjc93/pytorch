@@ -181,17 +181,23 @@ def _materialize_trunc_to_float_expr(
     if expr.func is TruncToInt:
         return TruncToFloat(*expr.args)
 
+    def is_predicate_expr(node: sympy.Basic) -> bool:
+        return bool(
+            getattr(node, "is_Boolean", False)
+            or getattr(node, "is_Relational", False)
+        )
+
     def rewrite_float_subexpr(node: sympy.Expr) -> sympy.Expr:
         if not node.has(TruncToInt):
             return node
         if node.func is TruncToInt:
             return TruncToFloat(*node.args)
-        if getattr(node, "is_Boolean", False) or node.is_integer:
+        if is_predicate_expr(node) or node.is_integer:
             return node
 
         new_args = tuple(
             rewrite_float_subexpr(arg)
-            if isinstance(arg, sympy.Expr) and not getattr(arg, "is_Boolean", False)
+            if isinstance(arg, sympy.Expr) and not is_predicate_expr(arg)
             else arg
             for arg in node.args
         )
