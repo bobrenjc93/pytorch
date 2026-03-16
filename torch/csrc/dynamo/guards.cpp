@@ -2744,7 +2744,9 @@ struct WeakEntry {
 };
 
 struct CachedTensorMetadata {
-  explicit CachedTensorMetadata(const LocalState& state, const at::Tensor& tensor)
+  explicit CachedTensorMetadata(
+      const LocalState& state,
+      const at::Tensor& tensor)
       : dispatch_key_(state.apply(tensor.key_set()).raw_repr()),
         dtype_(tensor.scalar_type()),
         device_(tensor.device()),
@@ -2752,7 +2754,8 @@ struct CachedTensorMetadata {
         sizes_(tensor.sizes().vec()),
         supports_stride_(supports_stride(tensor)),
         strides_(
-            supports_stride_ ? tensor.strides().vec() : std::vector<int64_t>{}) {}
+            supports_stride_ ? tensor.strides().vec()
+                             : std::vector<int64_t>{}) {}
 
   static bool supports_stride(const at::Tensor& tensor) {
     auto layout = tensor.layout();
