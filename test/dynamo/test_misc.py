@@ -10453,7 +10453,8 @@ def ___make_guard_fn():
 
             @torch.compile(backend="eager", fullgraph=True)
             def f2(tensors, dim, num_chunks, out):
-                return torch.ops.mylib.chunk_cat(tensors, dim, num_chunks, out=out)
+                torch.ops.mylib.chunk_cat(tensors, dim, num_chunks, out=out)
+                return out.size(), out
 
             x = torch.zeros(100, dtype=torch.int64)
             tensors = [
@@ -10464,8 +10465,10 @@ def ___make_guard_fn():
             ]
             dim = 0
             num_chunks = 2
-            out = torch.empty(2, 272)
-            f2(tensors, dim, num_chunks, out)
+            out = torch.empty(1)
+            out_size, out_value = f2(tensors, dim, num_chunks, out)
+            self.assertEqual(out_size, torch.Size([2, 272]))
+            self.assertEqual(out_value.shape, torch.Size([2, 272]))
 
     @torch._dynamo.config.patch(capture_scalar_outputs=True)
     def test_runtime_assert_replacement(self):
