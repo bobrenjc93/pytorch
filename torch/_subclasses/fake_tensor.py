@@ -527,16 +527,6 @@ class FakeTensorConverter:
                         hint=value,
                         source=item_source,
                     )
-        if (
-            out.item_memo is None
-            and make_constant
-            and _is_plain_tensor(t)
-            and t.dim() == 0
-            and t.device.type == "cpu"
-        ):
-            value = t.item()
-            if isinstance(value, (bool, int, float)):
-                out.item_memo = value
         if make_constant:
             self.add_constant_storage_mapping(out)
         # NB: meta_converter set the memo
@@ -688,6 +678,62 @@ class SymNumberMemoDescriptor:
             setattr(obj, self._memo_epoch(obj), obj.fake_mode.epoch)
 
 
+class PythonScalarMemoDescriptor:
+    _name: str
+
+    def __set_name__(self, owner: str, name: str) -> None:
+        self._name = name
+
+    def _memo(self, obj: FakeTensor) -> str:
+        return f"_{self._name}"
+
+    def _memo_vc(self, obj: FakeTensor) -> str:
+        return f"_{self._name}_vc"
+
+    def _memo_epoch(self, obj: FakeTensor) -> str:
+        return f"_{self._name}_epoch"
+
+    def __get__(
+        self, obj: FakeTensor, objtype: type[FakeTensor] | None = None
+    ) -> bool | int | float | None:
+        if (r := getattr(obj, self._memo(obj))) is None:
+            return None
+
+        if (
+            getattr(obj, self._memo_vc(obj)) != obj._version
+            or getattr(obj, self._memo_epoch(obj)) != obj.fake_mode.epoch
+        ):
+            setattr(obj, self._memo(obj), None)
+            return None
+        return r
+
+    def __set__(self, obj: FakeTensor, value: bool | int | float | None) -> None:
+        if value is None:
+            setattr(obj, self._memo(obj), None)
+            setattr(obj, self._memo_vc(obj), None)
+            setattr(obj, self._memo_epoch(obj), None)
+        elif not obj.is_inference():
+            setattr(obj, self._memo(obj), value)
+            setattr(obj, self._memo_vc(obj), obj._version)
+            setattr(obj, self._memo_epoch(obj), obj.fake_mode.epoch)
+
+
+def _extract_constant_scalar(t: Tensor | None) -> bool | int | float | None:
+    if (
+        t is None
+        or not _is_plain_tensor(t)
+        or t.dim() != 0
+        or t.device.type != "cpu"
+    ):
+        return None
+
+    with no_dispatch():
+        value = t.item()
+    if isinstance(value, (bool, int, float)):
+        return value
+    return None
+
+
 class FakeTensor(Tensor):
     """
     Meta tensors give you the ability to run PyTorch code without having to
@@ -707,6 +753,7 @@ class FakeTensor(Tensor):
     # memo mechanism here won't work)
     nonzero_memo: SymNumberMemoDescriptor | int | None = SymNumberMemoDescriptor()
     item_memo = SymNumberMemoDescriptor()
+    constant_scalar_memo = PythonScalarMemoDescriptor()
     unique_memo: SymNumberMemoDescriptor | int | None = SymNumberMemoDescriptor()
     unique_consecutive_memo: SymNumberMemoDescriptor | int | None = (
         SymNumberMemoDescriptor()
@@ -839,6 +886,7 @@ class FakeTensor(Tensor):
         self.real_tensor = real_tensor
         self.nonzero_memo = None
         self.item_memo = None
+        self.constant_scalar_memo = _extract_constant_scalar(constant)
         self.unique_memo = None
         self.unique_consecutive_memo = None
         self.nested_int_memo = None
@@ -1091,8 +1139,8 @@ class FakeTensor(Tensor):
         if self.constant is not None:
             with no_dispatch():
                 return bool(self.constant)
-        if isinstance((item := self.item_memo), (bool, int, float)):
-            return bool(item)
+        if (scalar := self.constant_scalar_memo) is not None:
+            return bool(scalar)
         return super().__bool__()
 
 
