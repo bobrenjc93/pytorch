@@ -2861,6 +2861,16 @@ class FakeTensorPreferDeviceType(TestCase):
                 self.assertTrue(isinstance(result, FakeTensor))
 
 
+class FakeTensorMetaDevicePropagation(TestCase):
+    def test_inplace_add_with_meta_rhs_keeps_destination_device(self):
+        with FakeTensorMode():
+            log_det = torch.zeros(2)
+            log_det += torch.zeros(2, device="meta")
+
+            self.assertEqual(log_det.device, torch.device("cpu"))
+            self.assertTrue(isinstance(log_det, FakeTensor))
+
+
 class FakeTensorViewCopy(TestCase):
     def test_expand_then_view_copy_matches_eager_mode(self):
         x = torch.arange(7)

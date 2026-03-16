@@ -965,6 +965,12 @@ class FakeTensor(Tensor):
             aten._foreach_copy.default,
         )
 
+        # These in-place ops keep the destination tensor's device even if the
+        # rhs was explicitly constructed on meta.
+        meta_rhs_mixed_device_fns = ordered_set(
+            aten.add_.Tensor,
+        )
+
         # list of ops not using zero dim cpu tensor logic to align with the eager mode.
         bypass_zero_dim_cpu_tensor_check_ops = ordered_set(
             aten.nextafter.default,
@@ -972,6 +978,9 @@ class FakeTensor(Tensor):
 
         def check_cpu_device(device: torch.device) -> bool:
             return device.type == "cpu"
+
+        def check_meta_device(device: torch.device) -> bool:
+            return device.type == "meta"
 
         def cpu_zero_dim(t: Tensor) -> bool:
             return check_cpu_device(t.device) and t.dim() == 0
@@ -1014,6 +1023,10 @@ class FakeTensor(Tensor):
             # throwing an error
             if func in mixed_device_fns:
                 if any(map(check_cpu_device, (common_device, t.device))):
+                    return
+
+            if func in meta_rhs_mixed_device_fns:
+                if any(map(check_meta_device, (common_device, t.device))):
                     return
 
             # if prefer_device_type is set, prefer that device type over others
