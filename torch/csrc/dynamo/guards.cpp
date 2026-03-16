@@ -2735,6 +2735,7 @@ void add_relational_guard_resetter_to_cloned_root(
     std::shared_ptr<RelationalGuard> guard);
 std::shared_ptr<RelationalGuard> get_no_tensor_aliasing_guard(
     RootGuardManager* _root);
+const LocalState& get_local_state(RootGuardManager* root);
 // std::string get_compile_id(RootGuardManager* root);
 
 struct WeakEntry {
@@ -3218,7 +3219,7 @@ class GuardManager {
     for (const auto& recorded_tensor : it->second) {
       if (!THPVariable_Check(recorded_tensor.tensor_ptr) ||
           !recorded_tensor.metadata.check(
-              _root->_local_state,
+              get_local_state(_root),
               THPVariable_Unpack(recorded_tensor.tensor_ptr))) {
         return false;
       }
@@ -4559,6 +4560,10 @@ void record_tensor_metadata(RootGuardManager* root, PyObject* tensor_pointer) {
 std::shared_ptr<RelationalGuard> get_no_tensor_aliasing_guard(
     RootGuardManager* _root) {
   return _root->get_no_tensor_aliasing_guard();
+}
+
+const LocalState& get_local_state(RootGuardManager* root) {
+  return root->_local_state;
 }
 
 // std::string get_compile_id(RootGuardManager* root) {
