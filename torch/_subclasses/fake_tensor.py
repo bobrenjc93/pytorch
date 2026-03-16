@@ -527,6 +527,16 @@ class FakeTensorConverter:
                         hint=value,
                         source=item_source,
                     )
+        if (
+            out.item_memo is None
+            and make_constant
+            and _is_plain_tensor(t)
+            and t.dim() == 0
+            and t.device.type == "cpu"
+        ):
+            value = t.item()
+            if isinstance(value, (bool, int, float)):
+                out.item_memo = value
         if make_constant:
             self.add_constant_storage_mapping(out)
         # NB: meta_converter set the memo
@@ -1081,13 +1091,9 @@ class FakeTensor(Tensor):
         if self.constant is not None:
             with no_dispatch():
                 return bool(self.constant)
+        if isinstance((item := self.item_memo), (bool, int, float)):
+            return bool(item)
         return super().__bool__()
-
-    def untyped_storage(self):
-        # Nested dispatch modes may inspect storages for alias or memory
-        # tracking. That read should not perturb FakeTensor constant state.
-        with no_dispatch():
-            return super().untyped_storage()
 
 
 _MetadataIntLike = Union[IntLikeType, "_PySymInputStub", "_SymIntOutputStub"]
