@@ -2353,7 +2353,7 @@ For now, dynamo will explicitly graph break when it encounters user code with th
             #
             # For guard-tracked `out=` tensors, we still take the conservative
             # approach and graph break on size changes. In fullgraph mode,
-            # local/intermediate `out=` tensors instead update their original
+            # local/intermediate `out=` tensors instead refresh their original
             # VTs after fake propagation so later local uses see the resized
             # metadata without graph breaking.
             #
@@ -2384,8 +2384,6 @@ For now, dynamo will explicitly graph break when it encounters user code with th
                         continue
 
                     if saved_out_shape is None:
-                        if result_out_vt is not None and result_out_vt.is_tensor():
-                            out_tensor_vt.proxy = result_out_vt.as_proxy()  # type: ignore[attr-defined]
                         out_tensor_vt.synchronize_attributes(tx)  # type: ignore[attr-defined]
                     else:
                         fake_out = out_tensor_vt.as_proxy().node.meta["example_value"]
@@ -2432,8 +2430,6 @@ For now, dynamo will explicitly graph break when it encounters user code with th
             else:
                 assert out_kwarg_vt is not None and out_kwarg_vt.is_tensor()
                 if saved_out_shapes is None:
-                    if tensor_variable.is_tensor():
-                        out_kwarg_vt.proxy = tensor_variable.as_proxy()  # type: ignore[attr-defined]
                     out_kwarg_vt.synchronize_attributes(tx)  # type: ignore[attr-defined]
                 else:
                     assert "example_value" in out_kwarg_vt.as_proxy().node.meta
