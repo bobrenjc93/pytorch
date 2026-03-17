@@ -6137,7 +6137,11 @@ class CommonTemplate:
         with self.assertRaises(RuntimeError) as compiled_error:
             torch.compile(m)(x)
 
-        self.assertIn(expected_message, str(compiled_error.exception))
+        compiled_message = str(compiled_error.exception).replace('\\"', '"').replace(
+            "\\'", "'"
+        )
+
+        self.assertIn(expected_message, compiled_message)
 
     @torch._functorch.config.patch("donated_buffer", True)
     def test_matmul_layer_norm(self):
