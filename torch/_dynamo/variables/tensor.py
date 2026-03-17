@@ -282,6 +282,13 @@ class TensorVariable(VariableTracker):
             "is_quantized": value.is_quantized,
             "is_sparse": value.is_sparse,
             "class_type": type(value),
+            # Shape-derived metadata is only valid when specialize() can
+            # recompute it from the current fake tensor. Setting these to None
+            # lets synchronize_attributes() clear stale cached values after an
+            # out= resize updates the proxy to a symbolic-shape fake tensor.
+            "_size": None,
+            "stride": None,
+            "is_contiguous": None,
         }
         try:
             props["has_grad_fn"] = value.grad_fn is not None
