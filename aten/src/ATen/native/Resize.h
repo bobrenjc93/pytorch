@@ -181,24 +181,35 @@ inline void checkSetStorage(Tensor& result, Storage storage, T storage_offset,
  * (size, stride, storage_offset) must be in bounds for self's storage.
  */
 template <typename T>
+inline void checkAsStridedArgs(
+    ArrayRef<T> size,
+    ArrayRef<T> stride,
+    T storage_offset) {
+  TORCH_CHECK(
+      size.size() == stride.size(), "mismatch in length of strides and shape");
+  for (const auto& val : stride) {
+    TORCH_CHECK(
+        val >= 0,
+        "as_strided: Negative strides are not supported at the moment, "
+        "got strides: ",
+        stride);
+  }
+  TORCH_CHECK(
+      storage_offset >= 0, "Tensor: invalid storage offset ", storage_offset);
+}
+
+template <typename T>
 inline void setStrided(
     const Tensor& self,
     ArrayRef<T> size,
     ArrayRef<T> stride,
     T storage_offset) {
-  TORCH_CHECK(size.size() == stride.size(), "mismatch in length of strides and shape");
-  for (const auto& val : stride) {
-    TORCH_CHECK(val >= 0,
-                "as_strided: Negative strides are not supported at the moment, "
-                "got strides: ", stride);
-  }
+  checkAsStridedArgs(size, stride, storage_offset);
 
   auto* self_ = self.unsafeGetTensorImpl();
   checkInBoundsForStorage(
       size, stride, storage_offset, self_->dtype(), self_->storage());
 
-  /* storage offset */
-  TORCH_CHECK(storage_offset >= 0, "Tensor: invalid storage offset ", storage_offset);
   self_->set_sizes_and_strides(size, stride, storage_offset);
 }
 
