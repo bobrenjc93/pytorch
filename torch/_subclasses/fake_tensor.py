@@ -360,6 +360,8 @@ class FakeTensorConverter:
         if weak_st not in self.constant_storage_mapping:
             return
 
+        live_refs: list[ReferenceType[FakeTensor]] = []
+        keep_tracking_scalar = False
         for weak_tensor_ref in self.constant_storage_mapping[weak_st]:
             ten = weak_tensor_ref()
             if ten is not None:
@@ -368,8 +370,16 @@ class FakeTensorConverter:
                 ten.constant = None
                 if clear_constant_scalar:
                     ten.constant_scalar = None
+                elif ten.constant_scalar is not None:
+                    keep_tracking_scalar = True
+                live_refs.append(weak_tensor_ref)
 
-        del self.constant_storage_mapping[weak_st]
+        if clear_constant_scalar or not keep_tracking_scalar:
+            del self.constant_storage_mapping[weak_st]
+        else:
+            # Storage exposure clears tensor-wide constness, but later tensor
+            # writes must still be able to find and clear the scalar fallback.
+            self.constant_storage_mapping[weak_st] = live_refs
 
     def _get_memo(self, t: Tensor) -> FakeTensor | None:
         tid = self.meta_converter.describer.lookup_tensor.get(t)
@@ -3140,6 +3150,16 @@ class FakeTensorMode(TorchDispatchMode):
         aten.set_.source_Storage_storage_offset,
         aten._sparse_coo_tensor_with_dims_and_tensors.default,
     )
+    # Storage-backed set_ exposes aliasing without overwriting the scalar
+    # payload yet, so keep scalar tracking alive until a later tensor write.
+    _preserve_constant_scalar_ops = ordered_set(
+        op
+        for op in (
+            getattr(aten.set_, "source_Storage", None),
+            aten.set_.source_Storage_storage_offset,
+        )
+        if op is not None
+    )
 
     _unbacked_special_fake_handling_ops = ordered_set(
         aten.view.default,
@@ -3169,15 +3189,13 @@ class FakeTensorMode(TorchDispatchMode):
         args: Sequence[object],
         kwargs: Mapping[str, object],
     ) -> None:
-        any_constant = any(e.constant is not None for e in flat_arg_fake_tensors)
+        any_constant = any(
+            e.constant is not None or e.constant_scalar is not None
+            for e in flat_arg_fake_tensors
+        )
         schema_info = get_schema_info(func)
         if any_constant and schema_info.is_mutable():
-            # Storage escapes invalidate tensor-wide constness, but a scalar can
-            # still be read from its live backing tensor until a real tensor write
-            # invalidates that source as well.
-            clear_constant_scalar = any(
-                isinstance(ret.type, torch.TensorType) for ret in func._schema.returns
-            )
+            clear_constant_scalar = func not in self._preserve_constant_scalar_ops
             _, new_kwargs = normalize_function(  # type: ignore[misc]
                 func,
                 args=args,  # type: ignore[arg-type]
@@ -3189,10 +3207,14 @@ class FakeTensorMode(TorchDispatchMode):
                 if (
                     self.is_our_fake(v)
                     and schema_info.is_mutable(k)
-                    and v.constant is not None
                 ):
+                    real_constant = (
+                        v.constant if v.constant is not None else v.constant_scalar
+                    )
+                    if real_constant is None:
+                        continue
                     self.fake_tensor_converter.invalidate_constant_aliases(
-                        v.constant, clear_constant_scalar=clear_constant_scalar
+                        real_constant, clear_constant_scalar=clear_constant_scalar
                     )
 
     def from_tensor(

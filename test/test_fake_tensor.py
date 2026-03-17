@@ -1303,6 +1303,18 @@ class FakeTensorConstHandling(TestCase):
             self.assertTrue(torch.all(mask == 1))
             self.assertFalse(torch.all(mask == 0))
 
+    def test_bool_storage_escape_then_set_data_invalidates_scalar(self):
+        with FakeTensorMode():
+            mask = torch.tensor(1, dtype=torch.int64)
+            mask.untyped_storage()
+            self.assertTrue(bool(mask))
+            torch.ops.aten.set_data.default(mask, torch.tensor(0, dtype=torch.int64))
+            self.assertIsNone(mask.constant_scalar)
+            with self.assertRaises(
+                torch._subclasses.fake_tensor.DataDependentOutputException
+            ):
+                bool(mask)
+
     def test_inplace_add(self):
         with FakeTensorMode():
             x = torch.tensor(4.0)
