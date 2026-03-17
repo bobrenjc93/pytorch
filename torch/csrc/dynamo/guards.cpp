@@ -5207,8 +5207,7 @@ class DictGetItemGuardAccessor : public GuardAccessor {
   // NB: Intentional duplication between check_nopybind and
   // check_verbose_nopybind.
   bool check_nopybind(PyObject* obj, bool matches_dict_tag = false) override {
-    if (matches_dict_tag && _is_immutable_object &&
-        !_is_tensor &&
+    if (matches_dict_tag && _is_immutable_object && !_is_tensor &&
         !is_recording_dict_pointers(get_guard_manager()->get_root()) &&
         _guard_manager->has_no_accessors()) {
       return true;
