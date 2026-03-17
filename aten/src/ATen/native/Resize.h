@@ -189,13 +189,15 @@ inline void checkAsStridedArgs(
       size.size() == stride.size(), "mismatch in length of strides and shape");
   for (const auto& val : stride) {
     TORCH_CHECK(
-        val >= 0,
+        TORCH_GUARD_OR_TRUE(sym_ge(val, 0)),
         "as_strided: Negative strides are not supported at the moment, "
         "got strides: ",
         stride);
   }
   TORCH_CHECK(
-      storage_offset >= 0, "Tensor: invalid storage offset ", storage_offset);
+      TORCH_GUARD_OR_TRUE(sym_ge(storage_offset, 0)),
+      "Tensor: invalid storage offset ",
+      storage_offset);
 }
 
 template <typename T>
