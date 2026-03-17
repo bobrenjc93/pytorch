@@ -12,6 +12,7 @@ import traceback
 import types
 import typing
 import weakref
+from collections.abc import Sequence
 from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any, cast, Literal, TYPE_CHECKING, TypeGuard, TypeVar, Union
@@ -53,7 +54,7 @@ from ._fake_tensor_utils import _CacheKeyState, _PySymInputStub, _SymIntOutputSt
 
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Generator, Iterable, Mapping, Sequence
+    from collections.abc import Callable, Generator, Iterable, Mapping
     from types import TracebackType
 
     from torch._guards import Source
@@ -350,13 +351,21 @@ class FakeTensorConverter:
             self.constant_storage_mapping[weak_st] = []
         self.constant_storage_mapping[weak_st].append(weakref.ref(fake_tensor))
 
-    def invalidate_constant_aliases(
-        self, tensor: Tensor, *, clear_constant_scalar: bool = True
-    ) -> None:
-        if isinstance(tensor, FakeTensor):
-            raise AssertionError("Expected a real tensor, not a FakeTensor")
+    def _constant_storage_ref(self, tensor: Tensor) -> StorageWeakRef | None:
+        if is_sparse_any(tensor):
+            return None
+        try:
+            return StorageWeakRef(tensor._typed_storage())
+        except TypeError:
+            return None
 
-        weak_st = StorageWeakRef(tensor._typed_storage())
+    def has_constant_alias(self, tensor: Tensor) -> bool:
+        weak_st = self._constant_storage_ref(tensor)
+        return weak_st is not None and weak_st in self.constant_storage_mapping
+
+    def _invalidate_constant_aliases_by_ref(
+        self, weak_st: StorageWeakRef, *, clear_constant_scalar: bool = True
+    ) -> None:
         if weak_st not in self.constant_storage_mapping:
             return
 
@@ -380,6 +389,31 @@ class FakeTensorConverter:
             # Storage exposure clears tensor-wide constness, but later tensor
             # writes must still be able to find and clear the scalar fallback.
             self.constant_storage_mapping[weak_st] = live_refs
+
+    def invalidate_constant_aliases(
+        self, tensor: Tensor, *, clear_constant_scalar: bool = True
+    ) -> None:
+        if isinstance(tensor, FakeTensor):
+            raise AssertionError("Expected a real tensor, not a FakeTensor")
+
+        weak_st = self._constant_storage_ref(tensor)
+        if weak_st is None:
+            return
+
+        self._invalidate_constant_aliases_by_ref(
+            weak_st, clear_constant_scalar=clear_constant_scalar
+        )
+
+    def invalidate_constant_aliases_of_fake(
+        self, fake_tensor: FakeTensor, *, clear_constant_scalar: bool = True
+    ) -> None:
+        weak_st = self._constant_storage_ref(fake_tensor)
+        if weak_st is None:
+            return
+
+        self._invalidate_constant_aliases_by_ref(
+            weak_st, clear_constant_scalar=clear_constant_scalar
+        )
 
     def _get_memo(self, t: Tensor) -> FakeTensor | None:
         tid = self.meta_converter.describer.lookup_tensor.get(t)
@@ -3226,7 +3260,9 @@ class FakeTensorMode(TorchDispatchMode):
         kwargs: Mapping[str, object],
     ) -> None:
         any_constant = any(
-            e.constant is not None or e.constant_scalar is not None
+            e.constant is not None
+            or e.constant_scalar is not None
+            or self.fake_tensor_converter.has_constant_alias(e)
             for e in flat_arg_fake_tensors
         )
         schema_info = get_schema_info(func)
@@ -3239,21 +3275,31 @@ class FakeTensorMode(TorchDispatchMode):
             )
             for k, v in new_kwargs.items():
                 k = k if (k != "input" or schema_info.has_argument(k)) else "self"
-                if (
-                    self.is_our_fake(v)
-                    and schema_info.is_mutable(k)
-                ):
+                if self.is_our_fake(v) and schema_info.is_mutable(k):
                     real_constant = (
                         v.constant if v.constant is not None else v.constant_scalar
                     )
-                    if real_constant is None:
-                        continue
-                    clear_constant_scalar = not self._preserves_constant_scalar_on_write(
-                        func, new_kwargs, real_constant
+                    clear_constant_scalar = (
+                        real_constant is None
+                        or not self._preserves_constant_scalar_on_write(
+                            func, new_kwargs, real_constant
+                        )
                     )
-                    self.fake_tensor_converter.invalidate_constant_aliases(
-                        real_constant, clear_constant_scalar=clear_constant_scalar
-                    )
+
+                    # Clear the mutated tensor first, then invalidate any
+                    # tracked aliases that still point at the same storage.
+                    v.constant = None
+                    if clear_constant_scalar:
+                        v.constant_scalar = None
+
+                    if real_constant is not None:
+                        self.fake_tensor_converter.invalidate_constant_aliases(
+                            real_constant, clear_constant_scalar=clear_constant_scalar
+                        )
+                    elif self.fake_tensor_converter.has_constant_alias(v):
+                        self.fake_tensor_converter.invalidate_constant_aliases_of_fake(
+                            v, clear_constant_scalar=clear_constant_scalar
+                        )
 
     def from_tensor(
         self,
