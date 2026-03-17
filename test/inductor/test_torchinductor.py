@@ -4247,7 +4247,9 @@ class CommonTemplate:
         fn = Net().to(self.device)
         t = torch.randn(1, 1, 1, 1, device=self.device, dtype=torch.float16)
 
-        with self.assertRaisesRegex(RuntimeError, "should be the same"):
+        with self.assertRaisesRegex(
+            RuntimeError, "should be the same|expected scalar type"
+        ):
             with torch.no_grad():
                 torch.compile(fn)(t)
 

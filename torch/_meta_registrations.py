@@ -2599,22 +2599,43 @@ def meta_conv(
     output_padding: list[int],
     groups: int,
 ):
-    def _check_same_type(
-        tensor: torch.Tensor, other: torch.Tensor, tensor_name: str, other_name: str
-    ) -> None:
-        # Keep fake/meta validation aligned with eager so invalid convolutions
-        # fail during tracing instead of compiling incorrect kernels.
-        torch._check(
-            tensor.dtype == other.dtype and tensor.device == other.device,
-            lambda: (
-                f"{tensor_name} type ({tensor.type()}) and {other_name} type "
-                f"({other.type()}) should be the same"
-            ),
-        )
+    if is_transposed:
+        def _same_type_as_input(other: torch.Tensor) -> bool:
+            if (
+                input_tensor.dtype == other.dtype
+                and input_tensor.device == other.device
+                and input_tensor.is_mkldnn == other.is_mkldnn
+            ):
+                return True
+            return (
+                input_tensor.is_mkldnn
+                and not other.is_mkldnn
+                and other.device.type == "cpu"
+                and other.dtype == torch.float
+            )
 
-    _check_same_type(input_tensor, weight, "Input", "weight")
-    if bias is not None:
-        _check_same_type(input_tensor, bias, "Input", "bias")
+        def _error_message(other: torch.Tensor, other_name: str) -> str:
+            message = (
+                f"Input type ({input_tensor.type()}) and {other_name} type "
+                f"({other.type()}) should be the same"
+            )
+            if input_tensor.is_mkldnn:
+                message += (
+                    f" or input should be a MKLDNN tensor and {other_name} is a dense tensor"
+                )
+            return message
+
+        # Keep fake/meta validation aligned with eager so invalid ConvTranspose
+        # inputs fail during tracing instead of compiling incorrect kernels.
+        torch._check(
+            _same_type_as_input(weight),
+            lambda: _error_message(weight, "weight"),
+        )
+        if bias is not None:
+            torch._check(
+                _same_type_as_input(bias),
+                lambda: _error_message(bias, "bias"),
+            )
 
     shape_out = calc_conv_nd_return_shape(
         input_tensor,
@@ -3711,20 +3732,6 @@ def meta_convolution_backward(
         if fmt1 == torch.channels_last_3d or fmt2 == torch.channels_last_3d:
             return torch.channels_last_3d
         return torch.contiguous_format
-
-    def _check_same_type(
-        tensor: torch.Tensor, other: torch.Tensor, tensor_name: str, other_name: str
-    ) -> None:
-        torch._check(
-            tensor.dtype == other.dtype and tensor.device == other.device,
-            lambda: (
-                f"{tensor_name} type ({tensor.type()}) and {other_name} type "
-                f"({other.type()}) should be the same"
-            ),
-        )
-
-    _check_same_type(input_, weight_, "Input", "weight")
-    _check_same_type(grad_output_, weight_, "grad_output", "weight")
 
     if output_mask[0]:
         memory_format = _conv_memory_format(grad_output_, weight_)

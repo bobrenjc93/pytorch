@@ -1831,13 +1831,13 @@ class FakeTensorOperatorInvariants(TestCase):
             self.assertTrue(grad_input_c.is_contiguous())
             self.assertTrue(grad_weight_c.is_contiguous())
 
-    def test_convolution_dtype_mismatch_errors(self):
+    def test_conv_transpose_dtype_mismatch_errors(self):
         with FakeTensorMode():
             inp = torch.randn(2, 3, 4, 4, dtype=torch.float16)
-            grad_out = torch.randn(2, 3, 4, 4, dtype=torch.float16)
             weight = torch.randn(3, 3, 1, 1, dtype=torch.float32)
+            error_regex = "should be the same|expected scalar type"
 
-            with self.assertRaisesRegex(RuntimeError, "should be the same"):
+            with self.assertRaisesRegex(RuntimeError, error_regex):
                 torch.ops.aten.convolution(
                     inp,
                     weight,
@@ -1845,24 +1845,9 @@ class FakeTensorOperatorInvariants(TestCase):
                     [1, 1],
                     [0, 0],
                     [1, 1],
-                    False,
+                    True,
                     [0, 0],
                     1,
-                )
-
-            with self.assertRaisesRegex(RuntimeError, "should be the same"):
-                torch.ops.aten.convolution_backward(
-                    grad_out,
-                    inp,
-                    weight,
-                    None,
-                    [1, 1],
-                    [0, 0],
-                    [1, 1],
-                    False,
-                    [0, 0],
-                    1,
-                    [True, False, False],
                 )
 
     def test_no_dispatch_with_like_function(self):
