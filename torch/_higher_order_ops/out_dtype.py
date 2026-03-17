@@ -7,6 +7,7 @@ from torch._higher_order_ops.utils import autograd_not_implemented
 from torch._ops import HigherOrderOperator
 from torch._prims_common import elementwise_dtypes, ELEMENTWISE_TYPE_PROMOTION_KIND
 from torch._subclasses.fake_tensor import FakeTensorMode
+from torch._subclasses.functional_tensor import FunctionalTensorMode
 from torch.fx.experimental.proxy_tensor import (
     disable_proxy_modes_tracing,
     maybe_handle_decomp,
@@ -151,7 +152,16 @@ def out_dtype_fake_tensor_mode(
     output_dtype: torch.dtype,
     *args,
 ):
-    with mode:
+    # Reuse the ambient functional mode when it exists because it may carry
+    # tracing state; otherwise create a temporary one so nested casts on
+    # FunctionalTensors still dispatch correctly.
+    functional_mode = torch.utils._python_dispatch._detect_infra_mode(
+        torch._C._TorchDispatchModeKey.FUNCTIONAL
+    )
+    functional_mode_ctx = (
+        functional_mode if functional_mode is not None else FunctionalTensorMode()
+    )
+    with functional_mode_ctx, mode:
         return out_dtype_dense(op, output_dtype, *args)
 
 

@@ -4920,7 +4920,6 @@ def forward(self, arg0_1, arg1_1, arg2_1):
     return (linear,)""",
         )
 
-    @unittest.expectedFailure
     def test_aot_export_predispatch_outdtype(self):
         class M(torch.nn.Module):
             def __init__(self, weight):
@@ -4939,19 +4938,8 @@ def forward(self, arg0_1, arg1_1, arg2_1):
         inp = torch.randint(-128, 127, (5, 5), dtype=torch.int8)
 
         gm, _ = aot_export_module(mod, [inp], trace_joint=False, pre_dispatch=True)
-        self.assertExpectedInline(
-            str(gm.code).strip(),
-            """\
-def forward(self, arg0_1, arg1_1):
-    _set_grad_enabled = torch._C._set_grad_enabled(True);  _set_grad_enabled = None
-    mm = torch.ops.aten.mm.default(arg1_1, arg1_1)
-    _set_grad_enabled_1 = torch._C._set_grad_enabled(False);  _set_grad_enabled_1 = None
-    add = torch.ops.aten.add.Tensor(mm, 2);  mm = None
-    sum_1 = torch.ops.aten.sum.default(arg1_1);  arg1_1 = None
-    sum_2 = torch.ops.aten.sum.default(add);  add = None
-    add_1 = torch.ops.aten.add.Tensor(sum_1, sum_2);  sum_1 = sum_2 = None
-    return (add_1,)""",
-        )
+        self.assertEqual(mod(inp), gm(inp))
+        FileCheck().check("torch.ops.higher_order.out_dtype").run(gm.code)
 
     def test_aot_export_predispatch_func_view(self):
         def fn(p, x):
@@ -7947,6 +7935,25 @@ Expected a .* tangent but got a plain Tensor.""",
         y3 = torch.compile(fn, fullgraph=True)(torch.randn(2, 3, requires_grad=True))
         # Test coercion WrapperSubclass -> Tensor
         y3.backward(gradient=WrapperSubclass(torch.randn(2, 3)))
+
+    def test_out_dtype_wrapper_subclass_aot_eager(self):
+        class M(torch.nn.Module):
+            def __init__(self, weight):
+                super().__init__()
+                self.weight = weight
+
+            def forward(self, x):
+                return out_dtype(torch.ops.aten.mm.default, torch.int32, x, self.weight)
+
+        weight = torch.randint(-128, 127, (5, 5), dtype=torch.int8)
+        mod = M(weight)
+        x = WrapperSubclass(torch.randint(-128, 127, (5, 5), dtype=torch.int8))
+
+        out_ref = mod(x)
+        out_test = torch.compile(mod, backend="aot_eager", fullgraph=True)(x)
+
+        self.assertIsInstance(out_test, WrapperSubclass)
+        self.assertEqual(out_ref.a, out_test.a)
 
     @torch._inductor.config.patch({"freezing": True})
     def test_inductor_freezing_with_subclasses(self):
