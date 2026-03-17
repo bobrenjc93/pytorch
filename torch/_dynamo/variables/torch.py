@@ -2349,51 +2349,28 @@ For now, dynamo will explicitly graph break when it encounters user code with th
             #
             # For guard-tracked `out=` tensors, we still take the conservative
             # approach and graph break on size changes. For local/intermediate
-            # `out=` tensors, prefer the returned proxy when the op produces
-            # one, but still handle custom ops that mutate `out` and return
-            # None by synchronizing the original VT metadata.
+            # `out=` tensors, fake propagation mutates the existing fake tensor
+            # in place, so synchronize the original VT metadata afterward.
             #
             # Note that although these tensor variables would hold different
             # metadata after fake propagation, the in-place mutation semantics
             # is preserved in the FX graph, so we won't have correctness issues.
             if isinstance(saved_out_shapes, list):
-                result_out_vts = (
-                    tensor_variable.items
-                    if isinstance(
-                        tensor_variable,
-                        (TupleVariable, ListVariable, NamedTupleVariable),
-                    )
-                    else [None] * len(saved_out_shapes)
-                )
-                for (
-                    out_tensor_vt,
-                    result_out_vt,
-                    saved_out_shape,
-                    saved_out_version,
-                ) in zip(
+                for out_tensor_vt, saved_out_shape, saved_out_version in zip(
                     out_kwarg_vt.items,  # type: ignore[union-attr]
-                    result_out_vts,
                     saved_out_shapes,
                     saved_out_versions,  # type: ignore[arg-type]
                 ):
                     if not out_tensor_vt.is_tensor():
                         continue
 
-                    if saved_out_shape is None:
-                        if result_out_vt is not None and result_out_vt.is_tensor():
-                            out_tensor_vt.proxy = (  # type: ignore[attr-defined]
-                                result_out_vt.as_proxy()
-                            )
-                        out_tensor_vt.synchronize_attributes(tx)  # type: ignore[attr-defined]
-                    else:
-                        fake_out = out_tensor_vt.as_proxy().node.meta["example_value"]
-                        if (
-                            saved_out_version is not None
-                            and fake_out._version > saved_out_version
-                        ):
-                            out_tensor_vt.synchronize_attributes(tx)  # type: ignore[attr-defined]
-
                     fake_out = out_tensor_vt.as_proxy().node.meta["example_value"]
+                    if (
+                        saved_out_version is not None
+                        and fake_out._version > saved_out_version
+                    ):
+                        out_tensor_vt.synchronize_attributes(tx)  # type: ignore[attr-defined]
+                        fake_out = out_tensor_vt.as_proxy().node.meta["example_value"]
                     if (
                         saved_out_shape is not None
                         and saved_out_shape != fake_out.shape
@@ -2424,19 +2401,14 @@ For now, dynamo will explicitly graph break when it encounters user code with th
                         )
             else:
                 assert out_kwarg_vt is not None and out_kwarg_vt.is_tensor()
-                if saved_out_shapes is None:
-                    if tensor_variable.is_tensor():
-                        out_kwarg_vt.proxy = tensor_variable.as_proxy()  # type: ignore[attr-defined]
-                    out_kwarg_vt.synchronize_attributes(tx)  # type: ignore[attr-defined]
-                else:
-                    assert "example_value" in out_kwarg_vt.as_proxy().node.meta
-                    fake_out = out_kwarg_vt.as_proxy().node.meta["example_value"]
-                    if (
-                        saved_out_versions is not None
-                        and fake_out._version > saved_out_versions
-                    ):
-                        out_kwarg_vt.synchronize_attributes(tx)  # type: ignore[attr-defined]
+                assert "example_value" in out_kwarg_vt.as_proxy().node.meta
                 fake_out = out_kwarg_vt.as_proxy().node.meta["example_value"]
+                if (
+                    saved_out_versions is not None
+                    and fake_out._version > saved_out_versions
+                ):
+                    out_kwarg_vt.synchronize_attributes(tx)  # type: ignore[attr-defined]
+                    fake_out = out_kwarg_vt.as_proxy().node.meta["example_value"]
                 if saved_out_shapes is not None and saved_out_shapes != fake_out.shape:
                     # It's hard to get out variants with resizing on graph inputs work
                     # properly across dynamo/aot/inductor, just fall back.
