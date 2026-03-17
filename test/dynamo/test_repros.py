@@ -4615,6 +4615,20 @@ class ReproTests(torch._dynamo.test_case.TestCase):
         self.assertEqual(x1.data, x2.data)
         self.assertEqual(y1, y2)
 
+    def test_source_tensor_integral_div_inplace_graph_break(self):
+        def func(x, y):
+            x.div_(y)
+            return x
+
+        x = torch.tensor([1], dtype=torch.int64)
+        y = torch.tensor([0], dtype=torch.int64)
+        compiled = torch.compile(func, backend="aot_eager")
+
+        with self.assertRaisesRegex(
+            RuntimeError, "can't be cast to the desired output type"
+        ):
+            compiled(x, y)
+
     def test_user_ctor_ctx_manager(self):
         class UserCtxManager:
             def __enter__(self):
