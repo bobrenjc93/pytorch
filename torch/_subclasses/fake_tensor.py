@@ -12,8 +12,8 @@ import traceback
 import types
 import typing
 import weakref
-from collections.abc import Sequence
 from collections import defaultdict
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, cast, Literal, TYPE_CHECKING, TypeGuard, TypeVar, Union
 from typing_extensions import Self
@@ -49,6 +49,7 @@ from torch.utils._python_dispatch import (
 from torch.utils._pytree import KeyPath, keystr, PyTree, tree_map, tree_map_, TreeSpec
 from torch.utils._stats import count
 from torch.utils._traceback import CapturedTraceback
+from torch.utils.weak import WeakTensorKeyDictionary
 
 from ._fake_tensor_utils import _CacheKeyState, _PySymInputStub, _SymIntOutputStub
 
@@ -327,7 +328,7 @@ class FakeTensorConverter:
 
     meta_converter: MetaConverter[FakeTensor]
     constant_storage_mapping: dict[StorageWeakRef, list[ReferenceType[FakeTensor]]]
-    constant_storage_refs: weakref.WeakKeyDictionary[FakeTensor, StorageWeakRef]
+    constant_storage_refs: WeakTensorKeyDictionary
     export: bool
 
     def __init__(self, *, copy_data: bool = False, export: bool = False) -> None:
@@ -336,7 +337,7 @@ class FakeTensorConverter:
 
         # map from to storage to corresponding constant tensors
         self.constant_storage_mapping = {}
-        self.constant_storage_refs = weakref.WeakKeyDictionary()
+        self.constant_storage_refs = WeakTensorKeyDictionary()
 
     def add_constant_storage_mapping(self, fake_tensor: FakeTensor) -> None:
         # when you have a constant, aliased tensor:
@@ -735,12 +736,7 @@ class SymNumberMemoDescriptor:
 
 
 def _constant_scalar_tensor(t: Tensor | None) -> Tensor | None:
-    if (
-        t is None
-        or not _is_plain_tensor(t)
-        or t.dim() != 0
-        or t.device.type != "cpu"
-    ):
+    if t is None or not _is_plain_tensor(t) or t.dim() != 0 or t.device.type != "cpu":
         return None
     return t
 
