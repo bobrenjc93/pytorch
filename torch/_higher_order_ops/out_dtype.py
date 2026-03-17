@@ -161,8 +161,15 @@ def out_dtype_fake_tensor_mode(
     functional_mode_ctx = (
         functional_mode if functional_mode is not None else FunctionalTensorMode()
     )
-    with functional_mode_ctx, mode:
-        return out_dtype_dense(op, output_dtype, *args)
+    # Wrapper subclasses can redispatch casts to real inner tensors before
+    # FakeTensorMode sees them; let fake mode lift those inputs during fallback.
+    old_allow_non_fake_inputs = mode.allow_non_fake_inputs
+    mode.allow_non_fake_inputs = True
+    try:
+        with functional_mode_ctx, mode:
+            return out_dtype_dense(op, output_dtype, *args)
+    finally:
+        mode.allow_non_fake_inputs = old_allow_non_fake_inputs
 
 
 @out_dtype.py_functionalize_impl
