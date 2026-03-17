@@ -6124,24 +6124,21 @@ class CommonTemplate:
 
     def test_layer_norm_rejects_complex_inputs(self):
         if self.device not in ("cpu", "cuda"):
-            raise unittest.SkipTest("Only validated against eager CPU/CUDA errors")
+            raise unittest.SkipTest("Only validated on CPU/CUDA")
 
         m = torch.nn.LayerNorm(10).to(self.device)
         x = torch.randn(1, 1, 10, device=self.device, dtype=torch.complex64)
 
-        with self.assertRaises(RuntimeError) as eager_error:
+        with self.assertRaises(RuntimeError):
             m(x)
-
-        expected_message = str(eager_error.exception).splitlines()[0]
 
         with self.assertRaises(RuntimeError) as compiled_error:
             torch.compile(m)(x)
 
-        compiled_message = (
-            str(compiled_error.exception).replace('\\"', '"').replace("\\'", "'")
+        self.assertIn(
+            "native_layer_norm does not support complex inputs",
+            str(compiled_error.exception),
         )
-
-        self.assertIn(expected_message, compiled_message)
 
     @torch._functorch.config.patch("donated_buffer", True)
     def test_matmul_layer_norm(self):

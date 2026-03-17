@@ -3329,35 +3329,6 @@ def _unsqueeze_multiple(x: TensorLikeType, dimensions: list[int]) -> TensorLikeT
     return x
 
 
-_layer_norm_complex_dtype_names = {
-    torch.complex32: "ComplexHalf",
-    torch.complex64: "ComplexFloat",
-    torch.complex128: "ComplexDouble",
-}
-
-
-def _native_layer_norm_complex_error(
-    input: Tensor, weight: Tensor | None, bias: Tensor | None
-) -> str:
-    # Match eager layer_norm dtype validation so tracing rejects unsupported
-    # complex inputs with the same backend-specific error.
-    if input.device.type == "cpu":
-        mixed_type = False
-        for parameter in (weight, bias):
-            if parameter is not None:
-                mixed_type = parameter.dtype != input.dtype
-                break
-
-        if mixed_type:
-            for parameter in (weight, bias):
-                if parameter is not None and parameter.dtype != torch.float:
-                    return "mixed dtype (CPU): expect parameter to have scalar type of Float"
-            return "mixed dtype (CPU): all inputs must share same datatype."
-
-    dtype_name = _layer_norm_complex_dtype_names.get(input.dtype, str(input.dtype))
-    return f"\"LayerNormKernelImpl\" not implemented for '{dtype_name}'"
-
-
 @register_decomposition(aten.native_group_norm.default)
 def native_group_norm(
     input: Tensor,
@@ -3484,7 +3455,7 @@ def native_layer_norm(
     )
     torch._check(
         not input.is_complex(),
-        lambda: _native_layer_norm_complex_error(input, weight, bias),
+        lambda: "native_layer_norm does not support complex inputs",
     )
 
     input = contiguous(input)
