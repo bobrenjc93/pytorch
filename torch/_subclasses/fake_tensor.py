@@ -327,6 +327,7 @@ class FakeTensorConverter:
 
     meta_converter: MetaConverter[FakeTensor]
     constant_storage_mapping: dict[StorageWeakRef, list[ReferenceType[FakeTensor]]]
+    constant_storage_refs: weakref.WeakKeyDictionary[FakeTensor, StorageWeakRef]
     export: bool
 
     def __init__(self, *, copy_data: bool = False, export: bool = False) -> None:
@@ -335,6 +336,7 @@ class FakeTensorConverter:
 
         # map from to storage to corresponding constant tensors
         self.constant_storage_mapping = {}
+        self.constant_storage_refs = weakref.WeakKeyDictionary()
 
     def add_constant_storage_mapping(self, fake_tensor: FakeTensor) -> None:
         # when you have a constant, aliased tensor:
@@ -350,6 +352,7 @@ class FakeTensorConverter:
         if weak_st not in self.constant_storage_mapping:
             self.constant_storage_mapping[weak_st] = []
         self.constant_storage_mapping[weak_st].append(weakref.ref(fake_tensor))
+        self.constant_storage_refs[fake_tensor] = weak_st
 
     def _constant_storage_ref(self, tensor: Tensor) -> StorageWeakRef | None:
         if is_sparse_any(tensor):
@@ -359,9 +362,8 @@ class FakeTensorConverter:
         except TypeError:
             return None
 
-    def has_constant_alias(self, tensor: Tensor) -> bool:
-        weak_st = self._constant_storage_ref(tensor)
-        return weak_st is not None and weak_st in self.constant_storage_mapping
+    def has_constant_alias(self, fake_tensor: FakeTensor) -> bool:
+        return fake_tensor in self.constant_storage_refs
 
     def _invalidate_constant_aliases_by_ref(
         self, weak_st: StorageWeakRef, *, clear_constant_scalar: bool = True
@@ -370,6 +372,7 @@ class FakeTensorConverter:
             return
 
         live_refs: list[ReferenceType[FakeTensor]] = []
+        live_tensors: list[FakeTensor] = []
         keep_tracking_scalar = False
         for weak_tensor_ref in self.constant_storage_mapping[weak_st]:
             ten = weak_tensor_ref()
@@ -381,13 +384,18 @@ class FakeTensorConverter:
                     ten.constant_scalar = None
                 elif ten.constant_scalar is not None:
                     keep_tracking_scalar = True
+                live_tensors.append(ten)
                 live_refs.append(weak_tensor_ref)
 
         if clear_constant_scalar or not keep_tracking_scalar:
+            for ten in live_tensors:
+                self.constant_storage_refs.pop(ten, None)
             del self.constant_storage_mapping[weak_st]
         else:
             # Storage exposure clears tensor-wide constness, but later tensor
             # writes must still be able to find and clear the scalar fallback.
+            for ten in live_tensors:
+                self.constant_storage_refs[ten] = weak_st
             self.constant_storage_mapping[weak_st] = live_refs
 
     def invalidate_constant_aliases(
@@ -407,7 +415,7 @@ class FakeTensorConverter:
     def invalidate_constant_aliases_of_fake(
         self, fake_tensor: FakeTensor, *, clear_constant_scalar: bool = True
     ) -> None:
-        weak_st = self._constant_storage_ref(fake_tensor)
+        weak_st = self.constant_storage_refs.get(fake_tensor)
         if weak_st is None:
             return
 
