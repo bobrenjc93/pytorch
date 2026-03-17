@@ -1189,7 +1189,7 @@ void Engine::evaluate_function(
       if (!exec_info_.empty()) {
         auto it = exec_info_.find(next.function.get());
         if (it == exec_info_.end() || !it->second.should_execute()) {
-          continue;
+          return;
         }
       }
       // No buffers have been allocated for the function
