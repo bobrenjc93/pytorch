@@ -3027,6 +3027,11 @@ Your tensor subclass must implement __coerce_same_metadata_as_tangent__."""
                 )
                 return out
 
+        if CompiledFunction.metadata.backward_output_order is not None:
+            CompiledFunction._backward_next_edges_order = (  # type: ignore[attr-defined]
+                CompiledFunction.metadata.backward_output_order
+            )
+
         compiled_function = RuntimeWrapper(
             indices_of_inps_to_detach=indices_of_inps_to_detach,
             trace_joint=True,

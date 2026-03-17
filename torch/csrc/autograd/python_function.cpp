@@ -74,6 +74,68 @@ inline void check_legacy_fn_attr_access(
       "https://pytorch.org/docs/stable/autograd.html#torch.autograd.Function ");
 }
 
+std::vector<uint32_t> get_backward_next_edges_order(
+    PyObject* cls,
+    size_t num_next_edges) {
+  THPObjectPtr order_attr(PyObject_GetAttrString(cls, "_backward_next_edges_order"));
+  if (!order_attr) {
+    if (PyErr_ExceptionMatches(PyExc_AttributeError)) {
+      PyErr_Clear();
+      return {};
+    }
+    throw python_error();
+  }
+  if (order_attr.get() == Py_None) {
+    return {};
+  }
+
+  THPObjectPtr order_seq(PySequence_Fast(
+      order_attr.get(),
+      "autograd.Function._backward_next_edges_order must be a sequence"));
+  if (!order_seq) {
+    throw python_error();
+  }
+
+  const auto order_len =
+      static_cast<size_t>(PySequence_Fast_GET_SIZE(order_seq.get()));
+  TORCH_CHECK(
+      order_len == num_next_edges,
+      "autograd.Function._backward_next_edges_order must have length ",
+      num_next_edges,
+      ", got ",
+      order_len);
+
+  std::vector<bool> seen(num_next_edges, false);
+  std::vector<uint32_t> order;
+  order.reserve(order_len);
+  bool is_identity = true;
+
+  for (const auto i : c10::irange(order_len)) {
+    const auto idx =
+        THPUtils_unpackLong(PySequence_Fast_GET_ITEM(order_seq.get(), i));
+    if (PyErr_Occurred()) {
+      throw python_error();
+    }
+    TORCH_CHECK(
+        idx >= 0 && static_cast<size_t>(idx) < num_next_edges,
+        "autograd.Function._backward_next_edges_order must contain values in [0, ",
+        num_next_edges,
+        "), got ",
+        idx);
+    TORCH_CHECK(
+        !seen[idx],
+        "autograd.Function._backward_next_edges_order must be a permutation");
+    seen[idx] = true;
+    is_identity &= static_cast<size_t>(idx) == i;
+    order.push_back(static_cast<uint32_t>(idx));
+  }
+
+  if (is_identity) {
+    order.clear();
+  }
+  return order;
+}
+
 // TODO: We shouldn't need to call this function because the engine
 // can already persist the errors for us. This still seems to be
 // needed for the DistEngine however.
@@ -1372,7 +1434,11 @@ PyObject* THPFunction_apply(PyObject* cls, PyObject* inputs) {
 
   // Initialize backward function (and ctx)
   bool is_executable = input_info.is_executable;
+  auto next_edges_order = is_executable
+      ? get_backward_next_edges_order(cls, input_info.next_edges.size())
+      : std::vector<uint32_t>{};
   cdata->set_next_edges(std::move(input_info.next_edges));
+  cdata->set_next_edges_order(std::move(next_edges_order));
   ctx->needs_input_grad = input_info.needs_input_grad.release();
   ctx->is_variable_input = std::move(input_info.is_variable_input);
 

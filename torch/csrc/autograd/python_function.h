@@ -51,8 +51,18 @@ struct PyNode : public Node {
       const variable_list& inputs,
       SwapSavedVariables& saved) override;
 
+  c10::ArrayRef<uint32_t> next_edges_order() const noexcept override {
+    return next_edges_order_;
+  }
+
+  void set_next_edges_order(std::vector<uint32_t> order) {
+    next_edges_order_ = std::move(order);
+  }
+
   // THPFunction this Function is wrapping.  Owning!
   PyObject* obj;
+
+  std::vector<uint32_t> next_edges_order_;
 
   // NOLINTNEXTLINE(bugprone-exception-escape)
   ~PyNode() override {

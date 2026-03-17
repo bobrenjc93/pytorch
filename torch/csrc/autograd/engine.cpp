@@ -1161,12 +1161,13 @@ void Engine::evaluate_function(
   // Lock mutex for the accesses to GraphTask dependencies_, not_ready_ and
   // cpu_ready_queue_ below
   std::lock_guard<std::mutex> lock(graph_task->mutex_);
-  for (const auto i : c10::irange(num_outputs)) {
+  const auto output_order = fn.next_edges_order();
+  auto handle_output = [&](const size_t i) {
     auto& output = outputs[i];
     const auto& next = fn.next_edge(i);
 
     if (!next.is_valid())
-      continue;
+      return;
 
     // Check if the next function is ready to be computed
     bool is_ready = false;
@@ -1228,6 +1229,18 @@ void Engine::evaluate_function(
             NodeTask(graph_task, next.function, std::move(input_buffer)));
         not_ready.erase(not_ready_it);
       }
+    }
+  };
+
+  if (output_order.empty()) {
+    for (const auto i : c10::irange(num_outputs)) {
+      handle_output(i);
+    }
+  } else {
+    TORCH_INTERNAL_ASSERT(output_order.size() == num_outputs);
+    for (const auto i : output_order) {
+      TORCH_INTERNAL_ASSERT(i < num_outputs);
+      handle_output(i);
     }
   }
 }

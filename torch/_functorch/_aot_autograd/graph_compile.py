@@ -116,6 +116,39 @@ def maybe_skip_decompose(aot_config: AOTConfig) -> Generator[None, None, None]:
         aot_config.decompositions = old_decomp
 
 
+def _get_backward_output_order(
+    bw_module: GraphModule,
+    bw_outs: Any,
+) -> list[int] | None:
+    topo_order = {node: i for i, node in enumerate(bw_module.graph.nodes)}
+
+    def get_source_node(bw_out: Any) -> torch.fx.Node | None:
+        if not isinstance(bw_out, torch.fx.Node):
+            return None
+        if (
+            bw_out.op == "call_function"
+            and bw_out.target is operator.getitem
+            and isinstance(bw_out.args[0], torch.fx.Node)
+        ):
+            return bw_out.args[0]
+        return bw_out
+
+    def sort_key(idx: int) -> tuple[int, int]:
+        source = get_source_node(bw_outs[idx])
+        if source is None:
+            return (-1, -1)
+        # Eager gives later forward ops priority in backward via sequence numbers.
+        # For tuple-producing nodes, use the shared source node so equal seq_nrs
+        # preserve the source node's output order.
+        seq_nr = source.meta.get("seq_nr")
+        if isinstance(seq_nr, int):
+            return (seq_nr, 0)
+        return (-1, topo_order[source])
+
+    order = sorted(range(len(bw_outs)), key=sort_key, reverse=True)
+    return None if order == list(range(len(bw_outs))) else order
+
+
 # Saved tensor hooks context
 # Compiled saved tensor hooks are convenient way to inline some logic in the graphs
 # for saved nodes from forward to backward. (E.g. activations quantization)
@@ -1950,6 +1983,9 @@ def _aot_stage2a_partition(
                     f"expected len(bw_outs_no_rng_no_tokens) == {len(fw_metadata.input_info)}, "
                     f"got {len(bw_outs_no_rng_no_tokens)}"
                 )
+            fw_metadata.backward_output_order = _get_backward_output_order(
+                bw_module, bw_outs_no_rng_no_tokens
+            )
 
             for i, (bw_out) in enumerate(bw_outs_no_rng_no_tokens):
                 # If our input experiences a metadata mutation inside the graph (e.g. set_()),

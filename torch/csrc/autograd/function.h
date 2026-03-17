@@ -13,6 +13,7 @@
 #include <ATen/SequenceNumber.h>
 #include <ATen/core/Tensor.h>
 #include <ATen/record_function.h>
+#include <c10/util/ArrayRef.h>
 #include <c10/util/Exception.h>
 #include <c10/util/irange.h>
 
@@ -326,6 +327,13 @@ struct TORCH_API Node : std::enable_shared_from_this<Node> {
 
   uint32_t num_outputs() const noexcept {
     return next_edges_.size();
+  }
+
+  // Some nodes need to prioritize a subset of outputs when scheduling their
+  // next edges. When present, the engine visits outputs in this order while
+  // preserving the underlying output-to-edge mapping.
+  virtual c10::ArrayRef<uint32_t> next_edges_order() const noexcept {
+    return c10::ArrayRef<uint32_t>();
   }
 
   // Miscellaneous Methods
