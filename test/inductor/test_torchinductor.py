@@ -6137,8 +6137,8 @@ class CommonTemplate:
         with self.assertRaises(RuntimeError) as compiled_error:
             torch.compile(m)(x)
 
-        compiled_message = str(compiled_error.exception).replace('\\"', '"').replace(
-            "\\'", "'"
+        compiled_message = (
+            str(compiled_error.exception).replace('\\"', '"').replace("\\'", "'")
         )
 
         self.assertIn(expected_message, compiled_message)
