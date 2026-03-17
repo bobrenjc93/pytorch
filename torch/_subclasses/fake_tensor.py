@@ -1153,6 +1153,22 @@ class FakeTensor(Tensor):
         else:
             return [elem.tolist() for elem in self]
 
+    def _invalidate_constant_on_storage_access(self) -> None:
+        # Storage inspection exposes aliasing, so later writes must stop
+        # treating the touched constant storage as tensor-wide immutable.
+        if self.constant is not None:
+            self.fake_mode.fake_tensor_converter.invalidate_constant_aliases(
+                self.constant, clear_constant_scalar=False
+            )
+        elif self.fake_mode.fake_tensor_converter.has_constant_alias(self):
+            self.fake_mode.fake_tensor_converter.invalidate_constant_aliases_of_fake(
+                self, clear_constant_scalar=False
+            )
+
+    def untyped_storage(self):
+        self._invalidate_constant_on_storage_access()
+        return super().untyped_storage()
+
     def __bool__(self):
         if self.constant is not None:
             with no_dispatch():
