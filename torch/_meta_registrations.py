@@ -2599,6 +2599,23 @@ def meta_conv(
     output_padding: list[int],
     groups: int,
 ):
+    def _check_same_type(
+        tensor: torch.Tensor, other: torch.Tensor, tensor_name: str, other_name: str
+    ) -> None:
+        # Keep fake/meta validation aligned with eager so invalid convolutions
+        # fail during tracing instead of compiling incorrect kernels.
+        torch._check(
+            tensor.dtype == other.dtype and tensor.device == other.device,
+            lambda: (
+                f"{tensor_name} type ({tensor.type()}) and {other_name} type "
+                f"({other.type()}) should be the same"
+            ),
+        )
+
+    _check_same_type(input_tensor, weight, "Input", "weight")
+    if bias is not None:
+        _check_same_type(input_tensor, bias, "Input", "bias")
+
     shape_out = calc_conv_nd_return_shape(
         input_tensor,
         weight,
@@ -3694,6 +3711,20 @@ def meta_convolution_backward(
         if fmt1 == torch.channels_last_3d or fmt2 == torch.channels_last_3d:
             return torch.channels_last_3d
         return torch.contiguous_format
+
+    def _check_same_type(
+        tensor: torch.Tensor, other: torch.Tensor, tensor_name: str, other_name: str
+    ) -> None:
+        torch._check(
+            tensor.dtype == other.dtype and tensor.device == other.device,
+            lambda: (
+                f"{tensor_name} type ({tensor.type()}) and {other_name} type "
+                f"({other.type()}) should be the same"
+            ),
+        )
+
+    _check_same_type(input_, weight_, "Input", "weight")
+    _check_same_type(grad_output_, weight_, "grad_output", "weight")
 
     if output_mask[0]:
         memory_format = _conv_memory_format(grad_output_, weight_)

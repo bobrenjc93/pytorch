@@ -4230,6 +4230,27 @@ class CommonTemplate:
         with self.assertRaisesRegex(RuntimeError, "Autograd not support dtype:.*"):
             torch.compile(fn)(t)
 
+    def test_conv_transpose_mixed_dtype(self):
+        if self.device not in ("cpu", "cuda"):
+            raise unittest.SkipTest(
+                "mixed-dtype conv_transpose regression is CPU/CUDA only"
+            )
+
+        class Net(nn.Module):
+            def __init__(self) -> None:
+                super(Net, self).__init__()  # noqa: UP008
+                self.deconv = nn.ConvTranspose2d(1, 1, kernel_size=1)
+
+            def forward(self, x):
+                return self.deconv(x)
+
+        fn = Net().to(self.device)
+        t = torch.randn(1, 1, 1, 1, device=self.device, dtype=torch.float16)
+
+        with self.assertRaisesRegex(RuntimeError, "should be the same"):
+            with torch.no_grad():
+                torch.compile(fn)(t)
+
     @unittest.skipIf(
         not IS_BIG_GPU, "Skipping triton backend only since not big GPU (not enough SM)"
     )
