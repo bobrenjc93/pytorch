@@ -2010,6 +2010,16 @@ def _aot_stage2b_bw_compile(
     - the placeholder list for the backward graph
     - the compiled backward function
     """
+
+    def is_placeholder_only_backward_graph(module: torch.fx.GraphModule) -> bool:
+        # Some degenerate backwards only thread tangent placeholders back out.
+        # They never trigger lazy runtime compilation, so cached autograd entries
+        # would otherwise never get saved for them.
+        return all(
+            node.op in ("placeholder", "output", "get_attr")
+            for node in module.graph.nodes
+        )
+
     with torch.no_grad():
         # NB: It's important to compile backwards ahead of time, as this may
         # add extra guards which we need to apply to the Dynamo cache at
@@ -2091,10 +2101,10 @@ def _aot_stage2b_bw_compile(
             should_eagerly_compile_backward = (
                 num_symints_saved_for_bw > 0
                 or aot_config.force_non_lazy_backward_lowering
-                # Autograd cache entries need both the forward and backward artifacts.
-                # If we leave the backward lazy here, graphs with no saved symints can
-                # repeatedly miss the cache because there is nothing to serialize yet.
-                or aot_config.cache_info is not None
+                or (
+                    aot_config.cache_info is not None
+                    and is_placeholder_only_backward_graph(bw_module)
+                )
             )
             if should_eagerly_compile_backward:
                 try:
