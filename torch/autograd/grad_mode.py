@@ -379,8 +379,12 @@ class _force_original_view_tracking(_DecoratorContextManager):
         torch._C._set_view_replay_enabled(mode)
         self.mode = mode
 
+    def __call__(self, orig_func: F) -> F:
+        torch._C._set_view_replay_enabled(self.prev)
+        return super().__call__(orig_func)
+
     def __enter__(self) -> None:
-        pass
+        torch._C._set_view_replay_enabled(self.mode)
 
     def __exit__(self, exc_type: Any, exc_value: Any, traceback: Any) -> None:
         torch._C._set_view_replay_enabled(self.prev)
