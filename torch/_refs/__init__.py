@@ -1183,6 +1183,7 @@ def _make_elementwise_binary_reference(
 
     return inner
 
+
 def _binary_op_dtype(
     a: TensorLikeType | NumberType, b: TensorLikeType | NumberType
 ) -> torch.dtype:
