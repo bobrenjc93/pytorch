@@ -2384,7 +2384,10 @@ For now, dynamo will explicitly graph break when it encounters user code with th
                         continue
 
                     if saved_out_shape is None:
+                        # Local/intermediate `out=` tensors skip shape guards,
+                        # but they still need the contiguity check below.
                         out_tensor_vt.synchronize_attributes(tx)  # type: ignore[attr-defined]
+                        fake_out = out_tensor_vt.as_proxy().node.meta["example_value"]
                     else:
                         fake_out = out_tensor_vt.as_proxy().node.meta["example_value"]
                         if (
@@ -2392,17 +2395,10 @@ For now, dynamo will explicitly graph break when it encounters user code with th
                             and fake_out._version > saved_out_version
                         ):
                             out_tensor_vt.synchronize_attributes(tx)  # type: ignore[attr-defined]
-                    fake_out = out_tensor_vt.as_proxy().node.meta["example_value"]
-                    if (
-                        saved_out_shape is not None
-                        and result_out_vt is not None
-                        and result_out_vt.is_tensor()
-                    ):
-                        fake_out = result_out_vt.as_proxy().node.meta["example_value"]
-                    if (
-                        saved_out_shape is not None
-                        and saved_out_shape != fake_out.shape
-                    ):
+                            fake_out = out_tensor_vt.as_proxy().node.meta["example_value"]
+                        if result_out_vt is not None and result_out_vt.is_tensor():
+                            fake_out = result_out_vt.as_proxy().node.meta["example_value"]
+                    if saved_out_shape is not None and saved_out_shape != fake_out.shape:
                         # It's hard to get out variants with resizing on graph inputs work
                         # properly across dynamo/aot/inductor, just fall back.
                         unimplemented(
