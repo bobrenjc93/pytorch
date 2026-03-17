@@ -3161,6 +3161,42 @@ class FakeTensorMode(TorchDispatchMode):
         if op is not None
     )
 
+    def _preserves_constant_scalar_on_write(
+        self,
+        func: OpOverload,
+        kwargs: Mapping[str, object],
+        real_constant: Tensor,
+    ) -> bool:
+        if func not in self._preserve_constant_scalar_ops:
+            return False
+
+        source = kwargs.get("source")
+        if source is None:
+            return False
+
+        try:
+            same_storage = StorageWeakRef(source) == StorageWeakRef(
+                real_constant.untyped_storage()
+            )
+        except TypeError:
+            return False
+        if not same_storage:
+            return False
+
+        if func is not aten.set_.source_Storage_storage_offset:
+            return False
+
+        # Rebinding the exact same scalar view keeps the cached scalar valid;
+        # swapping to different storage or metadata (for example via set_data)
+        # must clear it.
+        return (
+            kwargs.get("storage_offset") == real_constant.storage_offset()
+            and tuple(cast(Sequence[object], kwargs.get("size", ())))
+            == tuple(real_constant.size())
+            and tuple(cast(Sequence[object], kwargs.get("stride", ())))
+            == tuple(real_constant.stride())
+        )
+
     _unbacked_special_fake_handling_ops = ordered_set(
         aten.view.default,
         aten._unsafe_view.default,
@@ -3195,7 +3231,6 @@ class FakeTensorMode(TorchDispatchMode):
         )
         schema_info = get_schema_info(func)
         if any_constant and schema_info.is_mutable():
-            clear_constant_scalar = func not in self._preserve_constant_scalar_ops
             _, new_kwargs = normalize_function(  # type: ignore[misc]
                 func,
                 args=args,  # type: ignore[arg-type]
@@ -3213,6 +3248,9 @@ class FakeTensorMode(TorchDispatchMode):
                     )
                     if real_constant is None:
                         continue
+                    clear_constant_scalar = not self._preserves_constant_scalar_on_write(
+                        func, new_kwargs, real_constant
+                    )
                     self.fake_tensor_converter.invalidate_constant_aliases(
                         real_constant, clear_constant_scalar=clear_constant_scalar
                     )
