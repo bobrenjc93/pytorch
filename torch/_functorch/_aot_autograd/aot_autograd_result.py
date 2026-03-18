@@ -37,8 +37,6 @@ from torch._inductor.output_code import (
 from torch._inductor.utils import should_use_remote_fx_graph_cache
 from torch._logging import getArtifactLogger
 from torch.fx.experimental._backward_state import BackwardState
-from torch.fx.experimental.symbolic_shapes import fx_placeholder_vals
-
 from .runtime_wrappers import (
     AOTDispatchAutograd,
     AOTDispatchSubclassWrapper,
@@ -550,12 +548,11 @@ class GenericAOTAutogradResult(Generic[TForward, TBackward]):
             cached_lazy_backward = None
             if self.serialized_bw_module is not None:
                 if self.compiled_bw is None:
-                    bw_module = self.serialized_bw_module.deserialize()
                     cached_lazy_backward = AutogradLazyBackwardCompileInfo(
-                        bw_module=bw_module,
-                        placeholder_list=fx_placeholder_vals(bw_module),
-                        saved_context=None,
-                        saved_compile_context=None,
+                        bw_module=self.serialized_bw_module.deserialize(),
+                        placeholder_list=None,
+                        saved_context=torch._guards.TracingContext.try_get(),
+                        saved_compile_context=torch._guards.CompileContext.try_get(),
                     )
                 else:
                     cached_lazy_backward = CachedAutogradLazyBackwardCompileInfo(
