@@ -376,8 +376,10 @@ class DTensor(torch.Tensor):
         """
         return ["_local_tensor"], (self._spec, self.requires_grad)
 
-    @staticmethod
-    def __tensor_unflatten__(inner_tensors, flatten_spec, outer_size, outer_stride):
+    @classmethod
+    def __tensor_unflatten__(
+        cls, inner_tensors, flatten_spec, outer_size, outer_stride
+    ):
         if flatten_spec is None:
             raise AssertionError(
                 "Expecting spec to be not None from `__tensor_flatten__` return value!"
@@ -395,7 +397,7 @@ class DTensor(torch.Tensor):
             tensor_meta=unflatten_tensor_meta,
         )
         # pyrefly: ignore [bad-argument-type]
-        return DTensor(
+        return cls(
             # pyrefly: ignore [bad-argument-count]
             local_tensor,
             unflatten_spec,

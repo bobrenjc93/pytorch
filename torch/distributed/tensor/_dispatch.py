@@ -152,6 +152,18 @@ def found_inf_reduce_handler(
     target_tensor.copy_(found_inf)
 
 
+DEFAULT_CUSTOM_OP_HANDLERS = {
+    aten.is_same_size.default: is_same_size_handler,
+    aten.is_pinned.default: is_pinned_handler,
+    aten.convolution.default: convolution_handler,
+    aten.convolution_backward.default: convolution_backward_handler,
+    aten._amp_foreach_non_finite_check_and_unscale_.default: found_inf_reduce_handler,
+    aten.as_strided.default: as_strided_handler,
+    aten.argmin.default: argminmax_handler,
+    aten.argmax.default: argminmax_handler,
+}
+
+
 class OpDispatcher:
     """
     Op dispatching class instance to handle args/kwargs pre-processing (un-wrapping), sharding
@@ -194,16 +206,7 @@ class OpDispatcher:
             aten.bernoulli.default,
             aten.bernoulli_.float,
         }
-        self._custom_op_handlers = {
-            aten.is_same_size.default: is_same_size_handler,
-            aten.is_pinned.default: is_pinned_handler,
-            aten.convolution.default: convolution_handler,
-            aten.convolution_backward.default: convolution_backward_handler,
-            aten._amp_foreach_non_finite_check_and_unscale_.default: found_inf_reduce_handler,
-            aten.as_strided.default: as_strided_handler,
-            aten.argmin.default: argminmax_handler,
-            aten.argmax.default: argminmax_handler,
-        }
+        self._custom_op_handlers = dict(DEFAULT_CUSTOM_OP_HANDLERS)
 
     def rebase_sharding_propagator(self, base_dispatcher: "OpDispatcher") -> None:
         if base_dispatcher is self:
@@ -239,17 +242,24 @@ class OpDispatcher:
         dtensor_type: "type[dtensor.DTensor]",
     ):
         handler = self._custom_op_handlers.get(op_call)
-        if handler is not None:
+        default_handler = DEFAULT_CUSTOM_OP_HANDLERS.get(op_call)
+        if handler is not None and handler is not default_handler:
             return handler
 
+        inherited_handler = None
         for base_type in dtensor_type.__mro__[1:]:
             dispatcher = getattr(base_type, "_op_dispatcher", None)
             if not isinstance(dispatcher, OpDispatcher) or dispatcher is self:
                 continue
-            handler = dispatcher._custom_op_handlers.get(op_call)
-            if handler is not None:
-                return handler
-        return None
+            base_handler = dispatcher._custom_op_handlers.get(op_call)
+            if base_handler is None:
+                continue
+            if inherited_handler is None:
+                inherited_handler = base_handler
+            if base_handler is not DEFAULT_CUSTOM_OP_HANDLERS.get(op_call):
+                return base_handler
+
+        return handler if handler is not None else inherited_handler
 
     def dispatch(
         self,

@@ -273,6 +273,34 @@ class DTensorTest(DTensorTestBase):
         self.assertEqual(result.to_local(), local_tensor + local_tensor)
 
     @with_comms
+    def test_dtensor_subclass_tensor_unflatten_preserves_type(self):
+        device_mesh = self.build_device_mesh()
+        local_tensor = torch.arange(
+            16, device=self.device_type, dtype=torch.float32
+        ).reshape(4, 4)
+        base = DTensor.from_local(local_tensor, device_mesh, [Replicate()])
+
+        class MyDTensor(DTensor):
+            _op_dispatcher = type(DTensor._op_dispatcher)()
+
+        my_dt = MyDTensor(
+            base._local_tensor,
+            base._spec,
+            requires_grad=base.requires_grad,
+        )
+        inner_tensors, flatten_spec = my_dt.__tensor_flatten__()
+        rebuilt = type(my_dt).__tensor_unflatten__(
+            {"_local_tensor": my_dt._local_tensor},
+            flatten_spec,
+            my_dt.size(),
+            my_dt.stride(),
+        )
+
+        self.assertEqual(inner_tensors, ["_local_tensor"])
+        self.assertEqual(type(rebuilt), MyDTensor)
+        self.assertEqual(rebuilt.to_local(), my_dt.to_local())
+
+    @with_comms
     def test_dtensor_subclass_loss_parallel_custom_handlers(self):
         device_mesh = self.build_device_mesh()
         comm_mode = CommDebugMode()
@@ -467,6 +495,60 @@ class DTensorTest(DTensorTestBase):
                 base_prop.op_strategy_funcs.pop(base_strategy_op, None)
             else:
                 base_prop.op_strategy_funcs[base_strategy_op] = base_strategy_backup
+
+    @with_comms
+    def test_dtensor_nested_subclass_inherits_custom_handler_overrides(self):
+        device_mesh = self.build_device_mesh()
+        local_input = torch.arange(
+            16, device=self.device_type, dtype=torch.float32
+        ).reshape(1, 1, 4, 4)
+        local_weight = torch.ones(
+            1, 1, 1, 1, device=self.device_type, dtype=torch.float32
+        )
+        input_dt = distribute_tensor(local_input, device_mesh, [Replicate()])
+        base_weight = distribute_tensor(local_weight, device_mesh, [Replicate()])
+
+        class ParentDTensor(DTensor):
+            _op_dispatcher = type(DTensor._op_dispatcher)()
+
+        parent_dispatcher = ParentDTensor._op_dispatcher
+        parent_conv_handler = parent_dispatcher._custom_op_handlers[
+            torch.ops.aten.convolution.default
+        ]
+        parent_handler_calls = []
+
+        def overriding_parent_conv_handler(
+            op_call, args, kwargs, *, dtensor_type=None
+        ):
+            parent_handler_calls.append(dtensor_type)
+            return parent_conv_handler(
+                op_call,
+                args,
+                kwargs,
+                dtensor_type=dtensor_type,
+            )
+
+        parent_dispatcher._custom_op_handlers[torch.ops.aten.convolution.default] = (
+            overriding_parent_conv_handler
+        )
+        try:
+            class ChildDTensor(ParentDTensor):
+                _op_dispatcher = type(DTensor._op_dispatcher)()
+
+            weight = ChildDTensor(
+                base_weight._local_tensor,
+                base_weight._spec,
+                requires_grad=base_weight.requires_grad,
+            )
+            result = F.conv2d(input_dt, weight)
+        finally:
+            parent_dispatcher._custom_op_handlers[torch.ops.aten.convolution.default] = (
+                parent_conv_handler
+            )
+
+        self.assertEqual(parent_handler_calls, [ChildDTensor])
+        self.assertEqual(type(result), ChildDTensor)
+        self.assertEqual(result.to_local(), F.conv2d(local_input, local_weight))
 
     @with_comms
     def test_from_local_backward(self):
