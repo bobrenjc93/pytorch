@@ -100,8 +100,7 @@ std::vector<uint32_t> get_backward_next_edges_order(
 
   const auto order_len =
       static_cast<size_t>(PySequence_Fast_GET_SIZE(order_seq.get()));
-  const auto num_forward_inputs =
-      static_cast<size_t>(is_variable_input.size());
+  const auto num_forward_inputs = static_cast<size_t>(is_variable_input.size());
   TORCH_CHECK(
       order_len == num_forward_inputs,
       "autograd.Function._backward_next_edges_order must have length ",
