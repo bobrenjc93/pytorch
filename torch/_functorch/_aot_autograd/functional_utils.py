@@ -9,6 +9,7 @@ This file contains utilities related to functionalization in AOTAutograd:
 from __future__ import annotations
 
 from dataclasses import dataclass
+import operator
 from typing import Any, TypeGuard
 
 import torch
@@ -556,10 +557,117 @@ def was_tensor_metadata_updated(arg: Any, new_arg: Any) -> bool:
         ) == StorageWeakRef(new_arg.untyped_storage())
 
 
+def _get_input_mutation_nodes(arg: Any) -> list[torch.fx.Node]:
+    if isinstance(arg, torch.fx.Node):
+        return [arg]
+    if isinstance(arg, (list, tuple)):
+        return [node for node in arg if isinstance(node, torch.fx.Node)]
+    return []
+
+
+def _get_input_mutation_sources(node: torch.fx.Node) -> list[torch.fx.Node]:
+    if node.target is torch.ops.aten.copy_.default:
+        return _get_input_mutation_nodes(node.args[1])
+    if node.target is torch.ops.aten._foreach_copy_.default:
+        return _get_input_mutation_nodes(node.args[1])
+    return []
+
+
+def _is_foreach_op(node: torch.fx.Node) -> bool:
+    return (
+        node.op == "call_function"
+        and isinstance(node.target, torch._ops.OpOverload)
+        and node.target.name().startswith("aten::_foreach_")
+    )
+
+
+def _get_foreach_copy_candidate(
+    node: torch.fx.Node,
+) -> tuple[torch.fx.Node, int, torch.fx.Node, torch.fx.Node] | None:
+    if (
+        node.op != "call_function"
+        or node.target is not torch.ops.aten.copy_.default
+        or node.kwargs
+        or len(node.args) != 2
+        or node.users
+    ):
+        return None
+
+    dst, src = node.args
+    if not (isinstance(dst, torch.fx.Node) and isinstance(src, torch.fx.Node)):
+        return None
+    if src.op != "call_function" or src.target is not operator.getitem:
+        return None
+
+    parent, index = src.args
+    if not (isinstance(parent, torch.fx.Node) and isinstance(index, int)):
+        return None
+    if not _is_foreach_op(parent):
+        return None
+
+    return parent, index, dst, src
+
+
+def fold_foreach_input_mutation_ops(fx_g: torch.fx.Graph) -> None:
+    groups: list[
+        list[tuple[torch.fx.Node, torch.fx.Node, int, torch.fx.Node, torch.fx.Node]]
+    ] = []
+    current_group: list[
+        tuple[torch.fx.Node, torch.fx.Node, int, torch.fx.Node, torch.fx.Node]
+    ] = []
+    current_key: tuple[torch.fx.Node, str | None] | None = None
+    seen_indices: set[int] = set()
+
+    def flush() -> None:
+        nonlocal current_key
+        if len(current_group) > 1:
+            groups.append(current_group.copy())
+        current_group.clear()
+        current_key = None
+        seen_indices.clear()
+
+    for node in fx_g.nodes:
+        candidate = _get_foreach_copy_candidate(node)
+        if candidate is None:
+            flush()
+            continue
+
+        parent, index, dst, src = candidate
+        candidate_key = (parent, node.meta.get("partitioner_tag"))
+        if current_group and (candidate_key != current_key or index in seen_indices):
+            flush()
+
+        if current_key is None:
+            current_key = candidate_key
+        current_group.append((node, parent, index, dst, src))
+        seen_indices.add(index)
+
+    flush()
+
+    for group in groups:
+        sorted_group = sorted(group, key=lambda entry: entry[2])
+        first_copy = sorted_group[0][0]
+        dsts = [dst for _, _, _, dst, _ in sorted_group]
+        srcs = [src for _, _, _, _, src in sorted_group]
+
+        with fx_g.inserting_before(first_copy):
+            foreach_copy = fx_g.call_function(
+                torch.ops.aten._foreach_copy_.default, args=(dsts, srcs)
+            )
+
+        foreach_copy.meta.update(first_copy.meta)
+        foreach_copy.meta["val"] = None
+        foreach_copy.meta.pop("tensor_meta", None)
+
+        for copy_node, *_ in sorted_group:
+            fx_g.erase_node(copy_node)
+
+
 # Returns the number of detected copy_
 def _is_functional_graph(fx_g: torch.fx.Graph) -> tuple[str | None, int]:
     allowed_mutation_ops = [
         torch.ops.aten.copy_.default,
+        torch.ops.aten._foreach_copy_.default,
         torch.ops.aten.set_.source_Tensor,
     ]
     if hasattr(torch.ops.fsdp, "copy_"):
@@ -579,10 +687,13 @@ def _is_functional_graph(fx_g: torch.fx.Graph) -> tuple[str | None, int]:
                 # Can only copy_/set_ into an input
                 # this is mostly a hack to avoid failing XLA tests.
                 # See https://github.com/pytorch/pytorch/pull/122434#issuecomment-2101012113
-                if "set_buffer_donor_" not in str(n.args[0]):
-                    if n.args[0] not in placeholders:
+                mutated_inputs = _get_input_mutation_nodes(n.args[0])
+                for mutated_input in mutated_inputs:
+                    if "set_buffer_donor_" in str(mutated_input):
+                        continue
+                    if mutated_input not in placeholders:
                         error = f"n={str(n)}, n.args[0]={str(n.args[0])}, placeholders={str(placeholders)}, graph={str(fx_g)}"
-                mutation_count += 1
+                mutation_count += len(mutated_inputs)
             else:
                 if n.target._schema.is_mutable:
                     error = f"aot_autograd expected to have an entirely functional graph, but found {n.format_node()}"
@@ -602,20 +713,26 @@ def propagate_input_mutation_stacktraces(fx_g: torch.fx.Graph) -> None:
         if n.op == "placeholder":
             placeholders.add(n)
         if isinstance(n.target, torch._ops.OpOverload):
-            if n.target is torch.ops.aten.copy_.default:
+            if n.target in (
+                torch.ops.aten.copy_.default,
+                torch.ops.aten._foreach_copy_.default,
+            ):
                 # Can only copy_ into an input, and can only do so once
-                if "set_buffer_donor_" not in str(n.args[0]):
-                    if n.args[0] not in placeholders:
+                for mutated_input in _get_input_mutation_nodes(n.args[0]):
+                    if "set_buffer_donor_" in str(mutated_input):
+                        continue
+                    if mutated_input not in placeholders:
                         raise AssertionError(
                             f"n={str(n)}, n.args[0]={str(n.args[0])}, placeholders={str(placeholders)}, graph={str(fx_g)}"
                         )
-                    placeholders.remove(n.args[0])
-                copy_from_node = n.args[1]
+                    placeholders.remove(mutated_input)
                 # Pre-condition: every node has a "stack_trace" field in its meta,
                 # but copy_() nodes do not (since we manually added them during functionalization).
                 # Instead, we manually propagate here.
-                if "stack_trace" in copy_from_node.meta:
-                    n.meta["stack_trace"] = copy_from_node.meta["stack_trace"]
+                for copy_from_node in _get_input_mutation_sources(n):
+                    if "stack_trace" in copy_from_node.meta:
+                        n.meta["stack_trace"] = copy_from_node.meta["stack_trace"]
+                        break
 
 
 def _check_if_mutation_can_be_in_graph(

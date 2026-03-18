@@ -5384,6 +5384,39 @@ def forward(self, s77 : torch.SymInt, s27 : torch.SymInt, L_x_ : torch.Tensor):
     #         )
     #         self.assertEqual(out_ref, out_test)
 
+    def test_foreach_input_mutation_emits_foreach_copy(self):
+        fw_graph[0] = None
+
+        @torch.compile(backend=aot_graph_capture_backend, fullgraph=True)
+        def fn(args):
+            torch._foreach_mul_(args, 2)
+            return args[0]
+
+        inps = [torch.ones(10) for _ in range(4)]
+        out = fn(inps)
+
+        self.assertEqual(out, torch.full((10,), 2.0))
+        self.assertIsNotNone(fw_graph[0])
+
+        foreach_copy_nodes = list(
+            fw_graph[0].graph.find_nodes(
+                op="call_function", target=torch.ops.aten._foreach_copy_.default
+            )
+        )
+        copy_nodes = list(
+            fw_graph[0].graph.find_nodes(
+                op="call_function", target=torch.ops.aten.copy_.default
+            )
+        )
+
+        self.assertEqual(len(foreach_copy_nodes), 1)
+        self.assertEqual(len(copy_nodes), 0)
+
+        foreach_copy = foreach_copy_nodes[0]
+        dsts, srcs = foreach_copy.args[:2]
+        self.assertEqual(len(dsts), len(inps))
+        self.assertEqual([src.args[1] for src in srcs], list(range(len(inps))))
+
     def test_super_in_staticmethod(self):
         class A:
             @staticmethod
