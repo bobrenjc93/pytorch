@@ -16,8 +16,9 @@ import operator
 import time
 import traceback
 from collections import defaultdict
-from collections.abc import Callable, Generator
+from collections.abc import Callable, Generator, Sequence
 from contextlib import nullcontext
+from functools import cmp_to_key
 from typing import Any, TYPE_CHECKING
 
 from torch._library.fake_class_registry import FakeScriptObject
@@ -117,32 +118,129 @@ def maybe_skip_decompose(aot_config: AOTConfig) -> Generator[None, None, None]:
 
 
 def _get_backward_output_order(
-    _bw_module: GraphModule,
+    bw_module: GraphModule,
     bw_outs: Any,
 ) -> list[int] | None:
-    def get_source_node(bw_out: Any) -> torch.fx.Node | None:
-        while isinstance(bw_out, torch.fx.Node):
-            if bw_out.op != "call_function" or bw_out.target is not operator.getitem:
-                return bw_out
-            if not isinstance(bw_out.args[0], torch.fx.Node):
-                return bw_out
-            bw_out = bw_out.args[0]
-        return None
+    topo_orders: dict[int, dict[torch.fx.Node, int]] = {}
 
-    def sort_key(idx: int) -> tuple[int, int]:
-        source = get_source_node(bw_outs[idx])
-        if source is None:
-            return (0, 0)
-        # Eager gives later forward ops priority in backward via sequence numbers.
-        # For tuple/list-producing nodes, use the shared source node so equal
-        # seq_nrs preserve the flattened output order. If eager recorded no
-        # priority for this output, keep the original index order.
+    def get_topo_order(module: GraphModule) -> dict[torch.fx.Node, int]:
+        module_id = id(module)
+        topo_order = topo_orders.get(module_id)
+        if topo_order is None:
+            topo_order = {node: idx for idx, node in enumerate(module.graph.nodes)}
+            topo_orders[module_id] = topo_order
+        return topo_order
+
+    def unwrap_getitems(value: Any) -> tuple[Any, tuple[int, ...]]:
+        path = []
+        while isinstance(value, torch.fx.Node):
+            if (
+                value.op != "call_function"
+                or value.target is not operator.getitem
+                or len(value.args) < 2
+                or not isinstance(value.args[0], torch.fx.Node)
+                or not isinstance(value.args[1], int)
+            ):
+                break
+            path.append(value.args[1])
+            value = value.args[0]
+        path.reverse()
+        return value, tuple(path)
+
+    def get_invoke_subgraph_module(
+        module: GraphModule, value: torch.fx.Node
+    ) -> GraphModule | None:
+        if (
+            value.op != "call_function"
+            or value.target is not torch._higher_order_ops.invoke_subgraph
+            or not value.args
+            or not isinstance(value.args[0], torch.fx.Node)
+            or value.args[0].op != "get_attr"
+            or not isinstance(value.args[0].target, str)
+        ):
+            return None
+
+        submodule = module.get_submodule(value.args[0].target)
+        return submodule if isinstance(submodule, GraphModule) else None
+
+    def resolve_graph_output(
+        module: GraphModule, path: tuple[int, ...]
+    ) -> tuple[Any, tuple[int, ...]] | None:
+        output_node = next(reversed(module.graph.find_nodes(op="output")))
+        current = output_node.args[0]
+        if not path:
+            if isinstance(current, Sequence) and not isinstance(current, (str, bytes)):
+                if len(current) != 1:
+                    return None
+                current = current[0]
+            return current, ()
+
+        remaining = list(path)
+        while remaining and isinstance(current, Sequence) and not isinstance(
+            current, (str, bytes)
+        ):
+            index = remaining.pop(0)
+            if index < -len(current) or index >= len(current):
+                return None
+            current = current[index]
+
+        return current, tuple(remaining)
+
+    def build_priority(
+        module: GraphModule,
+        value: Any,
+        remaining_path: tuple[int, ...] = (),
+    ) -> tuple[tuple[bool, int, int], ...]:
+        source, path = unwrap_getitems(value)
+        full_path = path + remaining_path
+        if not isinstance(source, torch.fx.Node):
+            return ()
+
         seq_nr = source.meta.get("seq_nr")
-        if isinstance(seq_nr, int):
-            return (1, seq_nr)
-        return (0, 0)
+        has_seq_nr = isinstance(seq_nr, int)
+        topo_idx = get_topo_order(module)[source]
+        priority = (
+            (
+                has_seq_nr,
+                seq_nr if has_seq_nr else 0,
+                topo_idx if has_seq_nr else 0,
+            ),
+        )
 
-    order = sorted(range(len(bw_outs)), key=sort_key, reverse=True)
+        submodule = get_invoke_subgraph_module(module, source)
+        if submodule is None:
+            return priority
+
+        inner_output = resolve_graph_output(submodule, full_path)
+        if inner_output is None:
+            return priority
+
+        inner_value, inner_path = inner_output
+        return priority + build_priority(submodule, inner_value, inner_path)
+
+    def compare_priority(
+        lhs: tuple[tuple[bool, int, int], ...],
+        rhs: tuple[tuple[bool, int, int], ...],
+    ) -> int:
+        for lhs_level, rhs_level in zip(lhs, rhs):
+            lhs_has_seq_nr, lhs_seq_nr, lhs_topo_idx = lhs_level
+            rhs_has_seq_nr, rhs_seq_nr, rhs_topo_idx = rhs_level
+            if lhs_has_seq_nr != rhs_has_seq_nr:
+                return -1 if lhs_has_seq_nr else 1
+            if lhs_has_seq_nr:
+                if lhs_seq_nr != rhs_seq_nr:
+                    return -1 if lhs_seq_nr > rhs_seq_nr else 1
+                if lhs_topo_idx != rhs_topo_idx:
+                    return -1 if lhs_topo_idx > rhs_topo_idx else 1
+        return 0
+
+    priorities = [build_priority(bw_module, bw_out) for bw_out in bw_outs]
+    order = sorted(
+        range(len(bw_outs)),
+        key=cmp_to_key(
+            lambda lhs, rhs: compare_priority(priorities[lhs], priorities[rhs])
+        ),
+    )
     return None if order == list(range(len(bw_outs))) else order
 
 

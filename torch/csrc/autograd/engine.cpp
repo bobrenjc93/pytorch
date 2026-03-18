@@ -462,15 +462,17 @@ std::vector<Node*> get_current_graph_task_execution_order() {
     heap.pop();
 
     out.push_back(fn);
-    for (const auto& edge : fn->next_edges()) {
+    const auto output_order = fn->next_edges_order();
+    auto add_next_fn = [&](const size_t i) {
+      const auto& edge = fn->next_edge(i);
       Node* next_ptr = edge.function.get();
       if (!next_ptr) {
-        continue;
+        return;
       }
       if (check_exec_info) {
         auto it = task->exec_info_.find(next_ptr);
         if (it == task->exec_info_.end() || !it->second.should_execute()) {
-          continue;
+          return;
         }
       }
       auto it = dependencies.find(edge.function.get());
@@ -478,6 +480,17 @@ std::vector<Node*> get_current_graph_task_execution_order() {
       if (--it->second == 0) {
         dependencies.erase(it);
         heap.push(next_ptr);
+      }
+    };
+    if (output_order.empty()) {
+      for (const auto i : c10::irange(fn->next_edges().size())) {
+        add_next_fn(i);
+      }
+    } else {
+      TORCH_INTERNAL_ASSERT(output_order.size() == fn->next_edges().size());
+      for (const auto i : output_order) {
+        TORCH_INTERNAL_ASSERT(i < fn->next_edges().size());
+        add_next_fn(i);
       }
     }
   }

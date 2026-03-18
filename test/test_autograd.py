@@ -4954,6 +4954,56 @@ SinBackward0, MulBackward0, torch::autograd::AccumulateGrad
         for h in all_hooks:
             h.remove()
 
+    @skipIfTorchDynamo(
+        "_current_graph_task_execution_order requires active backward pass"
+    )
+    def test_current_graph_task_execution_order_honors_next_edges_order(self):
+        predicted = [None]
+        actual = []
+        all_hooks = []
+
+        class ReorderedFunction(torch.autograd.Function):
+            _backward_next_edges_order = (1, 0)
+
+            @staticmethod
+            def forward(ctx, x, y):
+                return x + y
+
+            @staticmethod
+            def backward(ctx, grad_output):
+                return grad_output, grad_output
+
+        def hook(_):
+            predicted[0] = torch._C._current_graph_task_execution_order()
+
+        def grad_fn(tensor):
+            if tensor.requires_grad and tensor.grad_fn is None:
+                return tensor.clone().grad_fn.next_functions[0][0]
+            return tensor.grad_fn
+
+        def register_logging_hook(name, tensor):
+            def tensor_hook(_):
+                actual.append(name)
+
+            all_hooks.append(tensor.register_hook(tensor_hook))
+
+        a = torch.tensor(1.0, requires_grad=True)
+        b = torch.tensor(2.0, requires_grad=True)
+        out = ReorderedFunction.apply(a, b)
+        register_logging_hook("a", a)
+        register_logging_hook("b", b)
+        register_logging_hook("out", out)
+        all_hooks.append(out.register_hook(hook))
+
+        with torch.autograd.set_multithreading_enabled(False):
+            out.backward()
+
+        self.assertEqual(actual, ["out", "b", "a"])
+        self.assertEqual(predicted[0], [out.grad_fn, grad_fn(b), grad_fn(a)])
+
+        for h in all_hooks:
+            h.remove()
+
     @skipIfWindows(msg="node name demangling inconsistent on windows")
     def test_backward_hook_relative_ordering(self):
         order = []

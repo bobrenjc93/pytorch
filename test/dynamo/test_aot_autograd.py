@@ -75,6 +75,60 @@ class AotAutogradFallbackTests(torch._inductor.test_case.TestCase):
         bw_module = torch.fx.GraphModule(torch.nn.Module(), graph)
         self.assertIsNone(_get_backward_output_order(bw_module, [grad0, grad1]))
 
+    def test_get_backward_output_order_uses_topology_for_seq_nr_ties(self):
+        graph = torch.fx.Graph()
+        grad = graph.placeholder("grad")
+        low_priority = graph.call_function(operator.neg, args=(grad,))
+        low_priority.meta["seq_nr"] = 1
+        high_priority = graph.call_function(operator.mul, args=(grad, grad))
+        high_priority.meta["seq_nr"] = 1
+        graph.output((low_priority, high_priority))
+
+        bw_module = torch.fx.GraphModule(torch.nn.Module(), graph)
+        self.assertEqual(
+            _get_backward_output_order(bw_module, [low_priority, high_priority]),
+            [1, 0],
+        )
+
+    def test_get_backward_output_order_walks_invoke_subgraph_outputs(self):
+        from torch._higher_order_ops import invoke_subgraph
+
+        inner_graph = torch.fx.Graph()
+        inner_grad = inner_graph.placeholder("inner_grad")
+        low_priority = inner_graph.call_function(operator.neg, args=(inner_grad,))
+        low_priority.meta["seq_nr"] = 1
+        high_priority = inner_graph.call_function(
+            operator.mul, args=(inner_grad, inner_grad)
+        )
+        high_priority.meta["seq_nr"] = 2
+        inner_graph.output((low_priority, high_priority))
+        repeated_subgraph = torch.fx.GraphModule(torch.nn.Module(), inner_graph)
+
+        outer_root = torch.nn.Module()
+        outer_root.add_module("repeated_subgraph0", repeated_subgraph)
+        outer_graph = torch.fx.Graph()
+        grad = outer_graph.placeholder("grad")
+        repeated_subgraph0 = outer_graph.get_attr("repeated_subgraph0")
+        invoke_subgraph_0 = outer_graph.call_function(
+            invoke_subgraph, args=(repeated_subgraph0, "invoke_subgraph_0", grad)
+        )
+        invoke_subgraph_0.meta["seq_nr"] = 3
+        low_priority_out = outer_graph.call_function(
+            operator.getitem, args=(invoke_subgraph_0, 0)
+        )
+        high_priority_out = outer_graph.call_function(
+            operator.getitem, args=(invoke_subgraph_0, 1)
+        )
+        outer_graph.output((low_priority_out, high_priority_out))
+
+        bw_module = torch.fx.GraphModule(outer_root, outer_graph)
+        self.assertEqual(
+            _get_backward_output_order(
+                bw_module, [low_priority_out, high_priority_out]
+            ),
+            [1, 0],
+        )
+
     def test_LSTM(self):
         # https://github.com/pytorch/torchdynamo/issues/1147
         class Repro(torch.nn.Module):
