@@ -610,6 +610,25 @@ class FakeTensorTest(TestCase):
             with self.assertRaisesRegex(RuntimeError, error):
                 torch.as_strided(x, (17, 18), (-80, 1), 1)
 
+    def test_as_strided_symbolic_negative_layout_error(self):
+        stride_error = (
+            r"as_strided: Negative strides are not supported at the "
+            r"moment, got strides: \[.*\]"
+        )
+        offset_error = r"Tensor: invalid storage offset .*"
+        shape_env = ShapeEnv()
+        with FakeTensorMode(shape_env=shape_env) as fake_mode:
+            x = fake_mode.from_tensor(
+                torch.empty(4),
+                symbolic_context=StatelessSymbolicContext(
+                    dynamic_sizes=[DimDynamic.DYNAMIC],
+                ),
+            )
+            with self.assertRaisesRegex(RuntimeError, stride_error):
+                torch.as_strided(x, (x.shape[0],), (-x.shape[0],), 0)
+            with self.assertRaisesRegex(RuntimeError, offset_error):
+                torch.as_strided(x, (x.shape[0],), (1,), -x.shape[0])
+
     @unittest.skipIf(not RUN_CUDA, "requires cuda")
     def test_cpu_fallback(self):
         with FakeTensorMode(allow_fallback_kernels=False):

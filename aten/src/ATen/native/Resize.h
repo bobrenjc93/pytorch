@@ -205,24 +205,21 @@ void checkAsStridedArgsAllowUnbackedSymInts(
   TORCH_CHECK(
       size.size() == stride.size(), "mismatch in length of strides and shape");
   if constexpr (std::is_same_v<T, c10::SymInt>) {
-    // FakeTensor/Meta view replay can pass ephemeral symbolic metadata here,
-    // so only validate values once the SymInts become concrete.
+    // FakeTensor/Meta view replay can pass ephemeral symbolic metadata here.
+    // Reject only layouts whose negativity can be proven without installing
+    // new guards on unbacked `positive=None` symbols.
     for (const auto& val : stride) {
-      if (auto maybe_val = val.maybe_as_int()) {
-        TORCH_CHECK(
-            *maybe_val >= 0,
-            "as_strided: Negative strides are not supported at the moment, "
-            "got strides: ",
-            stride);
-      }
+      TORCH_CHECK(
+          !TORCH_STATICALLY_KNOWN_TRUE(sym_lt(val, 0)),
+          "as_strided: Negative strides are not supported at the moment, "
+          "got strides: ",
+          stride);
     }
 
-    if (auto maybe_storage_offset = storage_offset.maybe_as_int()) {
-      TORCH_CHECK(
-          *maybe_storage_offset >= 0,
-          "Tensor: invalid storage offset ",
-          storage_offset);
-    }
+    TORCH_CHECK(
+        !TORCH_STATICALLY_KNOWN_TRUE(sym_lt(storage_offset, 0)),
+        "Tensor: invalid storage offset ",
+        storage_offset);
   } else {
     for (const auto& val : stride) {
       TORCH_CHECK(
