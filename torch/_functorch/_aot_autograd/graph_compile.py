@@ -2001,6 +2001,7 @@ def _aot_stage2b_bw_compile(
     maybe_subclass_meta: SubclassMeta | None,
     fw_metadata: ViewAndMutationMeta,
     fwd_output_strides: list[tuple[int, ...] | None] | None,
+    num_fw_outs_saved_for_bw: int,
     num_symints_saved_for_bw: int,
     aot_config: AOTConfig,
     # pyrefly: ignore [implicit-any]
@@ -2010,15 +2011,6 @@ def _aot_stage2b_bw_compile(
     - the placeholder list for the backward graph
     - the compiled backward function
     """
-
-    def is_placeholder_only_backward_graph(module: torch.fx.GraphModule) -> bool:
-        # Some degenerate backwards only thread tangent placeholders back out.
-        # They never trigger lazy runtime compilation, so cached autograd entries
-        # would otherwise never get saved for them.
-        return all(
-            node.op in ("placeholder", "output", "get_attr")
-            for node in module.graph.nodes
-        )
 
     with torch.no_grad():
         # NB: It's important to compile backwards ahead of time, as this may
@@ -2103,7 +2095,12 @@ def _aot_stage2b_bw_compile(
                 or aot_config.force_non_lazy_backward_lowering
                 or (
                     aot_config.cache_info is not None
-                    and is_placeholder_only_backward_graph(bw_module)
+                    # Some degenerate cacheable backwards have no saved tensors
+                    # or symints at all. Those lazy paths can finish a backward
+                    # without ever materializing a serializable compiled backward,
+                    # so the cache entry still needs an eager compile.
+                    and num_fw_outs_saved_for_bw == 0
+                    and num_symints_saved_for_bw == 0
                 )
             )
             if should_eagerly_compile_backward:
@@ -2225,6 +2222,7 @@ def aot_stage2_autograd(
         maybe_subclass_meta,
         fw_metadata,
         fwd_output_strides,
+        num_fw_outs_saved_for_bw,
         num_symints_saved_for_bw,
         aot_config,
     )
