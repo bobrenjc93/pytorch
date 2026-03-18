@@ -1887,6 +1887,56 @@ def _raise_if_functorch_active() -> None:
     )
 
 
+def _materialize_undefined_grad_outputs(
+    flat_args: Sequence[Any],
+    grad_output_prototypes: Sequence[Tensor | None],
+    metadata: ViewAndMutationMeta,
+) -> tuple[list[Any], list[int]]:
+    num_intermediate_bases = metadata.num_intermediate_bases
+    num_mutated_runtime_inps = metadata.num_mutated_inp_runtime_indices
+    expected_grad_outs = (
+        metadata.num_outputs + num_mutated_runtime_inps + num_intermediate_bases
+    )
+
+    if len(flat_args) != expected_grad_outs:
+        raise AssertionError(
+            f"expected {expected_grad_outs} grad_outs, got {len(flat_args)}"
+        )
+    if len(grad_output_prototypes) != expected_grad_outs:
+        raise AssertionError(
+            "expected grad_output_prototypes to line up with backward grad outputs, "
+            f"got {len(grad_output_prototypes)} != {expected_grad_outs}"
+        )
+
+    output_tangents_start = num_mutated_runtime_inps
+    output_tangents_end = output_tangents_start + metadata.num_outputs
+    materialized_output_indices: list[int] = []
+    materialized_flat_args: list[Any] = []
+
+    for i, (grad_out, prototype) in enumerate(zip(flat_args, grad_output_prototypes)):
+        if grad_out is not None or prototype is None:
+            materialized_flat_args.append(grad_out)
+            continue
+
+        materialized_flat_args.append(torch.zeros_like(prototype))
+        if output_tangents_start <= i < output_tangents_end:
+            output_idx = i - output_tangents_start
+            info = metadata.output_info[output_idx]
+            if (
+                info.output_type
+                in [
+                    OutputType.non_alias,
+                    OutputType.unsafe_view_alias,
+                    OutputType.custom_function_view,
+                ]
+                and issubclass(info.raw_type, torch.Tensor)
+                and info.requires_grad_for_backward
+            ):
+                materialized_output_indices.append(output_idx)
+
+    return materialized_flat_args, materialized_output_indices
+
+
 # NOTE: this function must be torch._dynamo.allow_in_graph-able. Non tensor/symnode inputs must be constants.
 def _backward_prologue_functional(
     ctx_saved_tensors: Sequence[torch.Tensor],
@@ -2016,10 +2066,9 @@ def _backward_prologue_functional(
     #     *unless* the output is used in some subclass compute later in the forward graph,
     #     which will cause its grad_output to become a subclass
     # (2) If an output is a subclass, its grad_out will also be a subclass,
-    #     *unless* the output of the forward did not actually participate in the gradient computation,
-    #     in which case autograd will insert a plain tensor of zeros for the grad_output.
-    #     We could avoid this case with `torch.autograd.Function.set_materialize_grads`,
-    #     although this is not turned on today in AOTAutgrad and would require more work.
+    #     *unless* the user explicitly passes in a plain tensor as the grad_output.
+    #     Undefined gradients from calling backward() on only a subset of outputs are
+    #     handled earlier in Python by materializing zeros from saved output prototypes.
     #
     # Today, we make a guess on subclass-ness based on the above examples,
     # and hard-error in the backward if we guessed wrong.
@@ -2769,12 +2818,63 @@ Your tensor subclass must implement __coerce_same_metadata_as_tangent__."""
                     if isinstance(x, torch.Tensor)
                     and not raw_returns_meta[i].requires_grad
                 ]
+
+                def _needs_grad_output_prototype(i: int) -> bool:
+                    if i < num_mutated_runtime_inps:
+                        input_info_idx = (
+                            CompiledFunction.metadata.mutated_inp_runtime_indices[i]
+                        )
+                        input_info = CompiledFunction.metadata.input_info[input_info_idx]
+                        return input_info.mutates_data and input_info.requires_grad
+                    if i < num_mutated_runtime_inps + num_outputs:
+                        output_info = CompiledFunction.metadata.output_info[
+                            i - num_mutated_runtime_inps
+                        ]
+                        return (
+                            output_info.output_type
+                            in [
+                                OutputType.non_alias,
+                                OutputType.unsafe_view_alias,
+                                OutputType.custom_function_view,
+                            ]
+                            and issubclass(output_info.raw_type, torch.Tensor)
+                            and output_info.requires_grad_for_backward
+                        )
+                    return True
+
+                ctx._grad_output_prototypes = tuple(
+                    out.detach()
+                    if isinstance(out, torch.Tensor) and _needs_grad_output_prototype(i)
+                    else None
+                    for i, out in enumerate(raw_returns)
+                )
                 ctx.mark_non_differentiable(*fw_outs_not_requiring_grad)
+                ctx.set_materialize_grads(False)
                 ctx._materialize_non_diff_grads = False
                 return tuple(raw_returns)
 
             @staticmethod
             def backward(ctx: Any, *flat_args: Any) -> tuple[Any, ...]:
+                flat_args, materialized_output_indices = (
+                    _materialize_undefined_grad_outputs(
+                        flat_args,
+                        ctx._grad_output_prototypes,
+                        CompiledFunction.metadata,
+                    )
+                )
+                if materialized_output_indices:
+                    output_indices = ", ".join(
+                        str(i) for i in materialized_output_indices
+                    )
+                    warnings.warn(
+                        "AOTAutograd materialized undefined grad outputs as zeros "
+                        f"for compiled forward outputs [{output_indices}]. This can "
+                        "run extra backward computation compared to eager. "
+                        "Detach outputs that do not need gradients to avoid it.",
+                        UserWarning,
+                        stacklevel=3,
+                    )
+
                 # Combine tensors from both sources:
                 # 1. ctx.saved_tensors - tensors that went through save_for_backward (with VC check)
                 # 2. ctx._tensors_no_vc_check - tensors stashed directly on ctx (no VC check)

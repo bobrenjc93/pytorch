@@ -970,6 +970,26 @@ def forward(self, primals_1):
         self.assertEqual(x_ref.grad, x_test.grad)
         self.assertEqual(x_ref_view.grad, x_test_view.grad)
 
+    def test_warn_on_unused_differentiable_outputs(self):
+        @torch.compile(backend="aot_eager", fullgraph=True)
+        def f(x):
+            return x.sin(), x.cos(), x.tan()
+
+        x_ref = torch.randn(4, requires_grad=True)
+        x_test = x_ref.detach().clone().requires_grad_()
+
+        out_ref = (x_ref.sin(), x_ref.cos(), x_ref.tan())
+        out_test = f(x_test)
+
+        out_ref[0].sum().backward()
+        with self.assertWarnsRegex(
+            UserWarning,
+            r"forward outputs \[1, 2\].*extra backward computation compared to eager",
+        ):
+            out_test[0].sum().backward()
+
+        self.assertEqual(x_ref.grad, x_test.grad)
+
     def test_nested_subclasses(self):
         @torch.compile(backend="aot_eager")
         def f(x):
