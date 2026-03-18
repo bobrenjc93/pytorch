@@ -764,6 +764,55 @@ class TensorVariable(VariableTracker):
             torch._dynamo.config._autograd_backward_strict_mode_conditional_banned_ops
         )
 
+    def _is_integral_inplace_true_division(
+        self,
+        name: str,
+        kwargs: "dict[str, VariableTracker]",
+    ) -> bool:
+        if (
+            self.source is None
+            or self.dtype is None
+            or self.dtype.is_floating_point
+            or self.dtype.is_complex
+        ):
+            return False
+
+        if name in ("true_divide_", "__itruediv__"):
+            return True
+
+        if name not in ("div_", "divide_"):
+            return False
+
+        rounding_mode = kwargs.get("rounding_mode")
+        return (
+            rounding_mode is None
+            or not rounding_mode.is_python_constant()
+            or rounding_mode.as_python_constant() is None
+        )
+
+    def _graph_break_on_integral_inplace_true_division(
+        self,
+        name: str,
+        args: Sequence[VariableTracker],
+        kwargs: "dict[str, VariableTracker]",
+    ) -> None:
+        if not self._is_integral_inplace_true_division(name, kwargs):
+            return
+
+        unimplemented(
+            gb_type="Integral in-place true division on a source tensor",
+            context=f"Tensor.{name}({args=}, {kwargs=})",
+            explanation=(
+                "AOTAutograd replays source-tensor mutations through copy_(), "
+                "which does not preserve eager error semantics for integral true division."
+            ),
+            hints=[
+                "Move this mutation outside `torch.compile`, or use an out-of-place divide.",
+                "If you need in-place division on integral tensors, pass `rounding_mode='trunc'` or `rounding_mode='floor'`.",
+                *graph_break_hints.SUPPORTABLE,
+            ],
+        )
+
     def call_method(
         self,
         tx: "InstructionTranslator",
@@ -854,30 +903,8 @@ class TensorVariable(VariableTracker):
                     *graph_break_hints.SUPPORTABLE,
                 ],
             )
-        elif (
-            self.source is not None
-            and name in ("div_", "divide_", "true_divide_")
-            and not (self.dtype.is_floating_point or self.dtype.is_complex)
-            and (
-                name == "true_divide_"
-                or "rounding_mode" not in kwargs
-                or not kwargs["rounding_mode"].is_python_constant()
-                or kwargs["rounding_mode"].as_python_constant() is None
-            )
-        ):
-            unimplemented(
-                gb_type="Integral in-place true division on a source tensor",
-                context=f"Tensor.{name}({args=}, {kwargs=})",
-                explanation=(
-                    "AOTAutograd replays source-tensor mutations through copy_(), "
-                    "which does not preserve eager error semantics for integral true division."
-                ),
-                hints=[
-                    "Move this mutation outside `torch.compile`, or use an out-of-place divide.",
-                    "If you need in-place division on integral tensors, pass `rounding_mode='trunc'` or `rounding_mode='floor'`.",
-                    *graph_break_hints.SUPPORTABLE,
-                ],
-            )
+
+        self._graph_break_on_integral_inplace_true_division(name, args, kwargs)
 
         try:
             handler_method = getattr(self, f"method_{name}")

@@ -1319,6 +1319,11 @@ class BuiltinVariable(VariableTracker):
                     tx, fn, unique_id(fn.__name__), args, kwargs
                 )
 
+            if fn is operator.itruediv and isinstance(args[0], TensorVariable):
+                args[0]._graph_break_on_integral_inplace_true_division(
+                    "__itruediv__", args[1:], kwargs
+                )
+
             if fn in IN_PLACE_DESUGARING_MAP and isinstance(
                 args[0], variables.ConstantVariable
             ):
