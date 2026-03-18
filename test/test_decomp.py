@@ -1370,6 +1370,23 @@ class HasDecompTest(TestCase):
         core_aten_ops = useful_decomps - core_decomps
         self.assertExpected("".join(sorted(op.name() + "\n" for op in core_aten_ops)))
 
+    def test_autograd_python_decompositions_also_register_cia(self):
+        ops_missing_cia = sorted(
+            op.name()
+            for op in decomposition_table
+            if isinstance(op, torch._ops.OpOverload)
+            and DispatchKey.Autograd in op.py_kernels
+            and DispatchKey.CompositeImplicitAutograd not in op.py_kernels
+        )
+        self.assertFalse(
+            ops_missing_cia,
+            msg=(
+                "Python decompositions registered to DispatchKey.Autograd should "
+                "also register DispatchKey.CompositeImplicitAutograd. Missing: "
+                + ", ".join(ops_missing_cia)
+            ),
+        )
+
     def test_conv1d_decomposition(self):
         from torch._inductor.decomposition import conv1d_to_conv2d
 
