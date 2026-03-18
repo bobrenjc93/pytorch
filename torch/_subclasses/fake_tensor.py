@@ -1077,9 +1077,6 @@ class FakeTensor(Tensor):
         else:
             return [elem.tolist() for elem in self]
 
-    def __bool__(self):
-        return bool(self.item())
-
 
 _MetadataIntLike = Union[IntLikeType, "_PySymInputStub", "_SymIntOutputStub"]
 

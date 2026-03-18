@@ -1303,6 +1303,19 @@ class FakeTensorConstHandling(TestCase):
             self.assertTrue(torch.all(mask == 1))
             self.assertFalse(torch.all(mask == 0))
 
+    def test_bool_preserves_is_nonzero_cardinality_checks(self):
+        with FakeTensorMode():
+            with self.assertRaisesRegex(
+                RuntimeError, "Boolean value of Tensor with no values is ambiguous"
+            ):
+                bool(torch.tensor([]))
+
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "Boolean value of Tensor with more than one value is ambiguous",
+            ):
+                bool(torch.tensor([1, 1]))
+
     def test_inplace_add(self):
         with FakeTensorMode():
             x = torch.tensor(4.0)
