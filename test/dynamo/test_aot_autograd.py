@@ -19,6 +19,8 @@ from torch._dynamo.testing import (
     rand_strided,
 )
 from torch._functorch._aot_autograd.graph_compile import _get_backward_output_order
+from torch._functorch._aot_autograd.input_output_analysis import remove_dupe_metadata
+from torch._functorch._aot_autograd.schemas import InputAliasInfo, ViewAndMutationMeta
 from torch._functorch.aot_autograd import _aot_export_function, create_functional_call
 from torch._guards import CompileContext, StorageOverlap, TracingContext
 from torch._subclasses.fake_tensor import FakeTensorMode
@@ -128,6 +130,53 @@ class AotAutogradFallbackTests(torch._inductor.test_case.TestCase):
             ),
             [1, 0],
         )
+
+    def test_get_backward_output_order_places_none_grads_last(self):
+        graph = torch.fx.Graph()
+        grad = graph.placeholder("grad")
+        low_priority = graph.call_function(operator.neg, args=(grad,))
+        low_priority.meta["seq_nr"] = 1
+        high_priority = graph.call_function(operator.mul, args=(grad, grad))
+        high_priority.meta["seq_nr"] = 2
+        graph.output((low_priority, None, high_priority))
+
+        bw_module = torch.fx.GraphModule(torch.nn.Module(), graph)
+        self.assertEqual(
+            _get_backward_output_order(bw_module, [low_priority, None, high_priority]),
+            [2, 0, 1],
+        )
+
+    def test_remove_dupe_metadata_remaps_backward_output_order(self):
+        input_info = [
+            InputAliasInfo(
+                is_leaf=True,
+                mutates_data=False,
+                mutates_metadata=False,
+                mutations_hidden_from_autograd=False,
+                mutations_under_no_grad_or_inference_mode=False,
+                mutation_inductor_storage_resize=False,
+                mutates_storage_metadata=False,
+                requires_grad=True,
+                keep_input_mutations=False,
+            )
+            for _ in range(3)
+        ]
+        meta = ViewAndMutationMeta(
+            input_info=input_info,
+            output_info=[],
+            num_intermediate_bases=0,
+            keep_input_mutations=False,
+            traced_tangents=[],
+            traced_tangents_descs=[],
+            subclass_inp_meta=[],
+            subclass_fw_graph_out_meta=[],
+            subclass_tangent_meta=[],
+            is_train=False,
+            backward_output_order=[1, 2, 0],
+        )
+
+        updated = remove_dupe_metadata(meta, [True, True, False], [0, 1, 0])
+        self.assertEqual(updated.backward_output_order, [1, 0])
 
     def test_LSTM(self):
         # https://github.com/pytorch/torchdynamo/issues/1147

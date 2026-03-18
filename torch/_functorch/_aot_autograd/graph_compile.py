@@ -19,14 +19,10 @@ from collections import defaultdict
 from collections.abc import Callable, Generator, Sequence
 from contextlib import nullcontext
 from functools import cmp_to_key
-from typing import Any, TYPE_CHECKING
+from typing import Any
 
 from torch._library.fake_class_registry import FakeScriptObject
 from torch._opaque_base import OpaqueBase
-
-
-if TYPE_CHECKING:
-    from collections.abc import Sequence
 
 import threading
 from contextlib import contextmanager
@@ -222,7 +218,10 @@ def _get_backward_output_order(
         lhs: tuple[tuple[bool, int, int], ...],
         rhs: tuple[tuple[bool, int, int], ...],
     ) -> int:
-        for lhs_level, rhs_level in zip(lhs, rhs):
+        shared_levels = min(len(lhs), len(rhs))
+        for i in range(shared_levels):
+            lhs_level = lhs[i]
+            rhs_level = rhs[i]
             lhs_has_seq_nr, lhs_seq_nr, lhs_topo_idx = lhs_level
             rhs_has_seq_nr, rhs_seq_nr, rhs_topo_idx = rhs_level
             if lhs_has_seq_nr != rhs_has_seq_nr:
@@ -232,6 +231,10 @@ def _get_backward_output_order(
                     return -1 if lhs_seq_nr > rhs_seq_nr else 1
                 if lhs_topo_idx != rhs_topo_idx:
                     return -1 if lhs_topo_idx > rhs_topo_idx else 1
+        if len(lhs) != len(rhs):
+            extra = lhs[shared_levels:] if len(lhs) > len(rhs) else rhs[shared_levels:]
+            if any(has_seq_nr for has_seq_nr, _, _ in extra) or shared_levels == 0:
+                return -1 if len(lhs) > len(rhs) else 1
         return 0
 
     priorities = [build_priority(bw_module, bw_out) for bw_out in bw_outs]
