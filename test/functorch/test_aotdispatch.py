@@ -7949,11 +7949,11 @@ Expected a .* tangent but got a plain Tensor.""",
         mod = M(weight)
         x = WrapperSubclass(torch.randint(-128, 127, (5, 5), dtype=torch.int8))
 
-        out_ref = mod(x)
+        out_ref = mod(x.a)
         out_test = torch.compile(mod, backend="aot_eager", fullgraph=True)(x)
 
         self.assertIsInstance(out_test, WrapperSubclass)
-        self.assertEqual(out_ref.a, out_test.a)
+        self.assertEqual(out_ref, out_test.a)
 
     @torch._inductor.config.patch({"freezing": True})
     def test_inductor_freezing_with_subclasses(self):

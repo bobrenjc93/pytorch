@@ -1,12 +1,14 @@
 # mypy: allow-untyped-defs
 
+import contextlib
+
 import torch
 import torch.utils._pytree as pytree
 from torch._C import DispatchKey
 from torch._higher_order_ops.utils import autograd_not_implemented
 from torch._ops import HigherOrderOperator
 from torch._prims_common import elementwise_dtypes, ELEMENTWISE_TYPE_PROMOTION_KIND
-from torch._subclasses.fake_tensor import FakeTensorMode
+from torch._subclasses.fake_tensor import FakeTensorMode, fake_tensor_tls
 from torch._subclasses.functional_tensor import FunctionalTensorMode
 from torch.fx.experimental.proxy_tensor import (
     disable_proxy_modes_tracing,
@@ -78,6 +80,28 @@ class OutDtypeOperator(HigherOrderOperator):
 out_dtype = OutDtypeOperator()
 
 
+def _dispatch_out_dtype_dense(
+    op: torch._ops.OpOverload,
+    output_dtype: torch.dtype,
+    *args,
+    fake_mode: FakeTensorMode | None = None,
+):
+    functional_mode = torch.utils._python_dispatch._detect_infra_mode(
+        torch._C._TorchDispatchModeKey.FUNCTIONAL
+    )
+    functional_mode_ctx = (
+        functional_mode if functional_mode is not None else FunctionalTensorMode()
+    )
+    fake_mode_ctx = fake_mode if fake_mode is not None else contextlib.nullcontext()
+    old_allow_non_fake_inputs = fake_tensor_tls.allow_non_fake_inputs_override
+    fake_tensor_tls.allow_non_fake_inputs_override = True
+    try:
+        with functional_mode_ctx, fake_mode_ctx:
+            return out_dtype_dense(op, output_dtype, *args)
+    finally:
+        fake_tensor_tls.allow_non_fake_inputs_override = old_allow_non_fake_inputs
+
+
 def trace_out_dtype(proxy_mode, func_overload, op, output_dtype, *args):
     # NB: Long-term we should put the decomposition logic into
     # ProxyTorchDispatchMode so that people do not need to call maybe_handle_decomp
@@ -87,9 +111,7 @@ def trace_out_dtype(proxy_mode, func_overload, op, output_dtype, *args):
         return r
 
     with disable_proxy_modes_tracing():
-        # This is a simplified implementation of this operator just for tracing.
-        # Actual implementation may also first promote the arguments
-        out = op(*args).to(dtype=output_dtype)
+        out = _dispatch_out_dtype_dense(op, output_dtype, *args)
 
     node_args = (op, output_dtype, *args)
     proxy_args = pytree.tree_map(proxy_mode.tracer.unwrap_proxy, node_args)
@@ -152,24 +174,7 @@ def out_dtype_fake_tensor_mode(
     output_dtype: torch.dtype,
     *args,
 ):
-    # Reuse the ambient functional mode when it exists because it may carry
-    # tracing state; otherwise create a temporary one so nested casts on
-    # FunctionalTensors still dispatch correctly.
-    functional_mode = torch.utils._python_dispatch._detect_infra_mode(
-        torch._C._TorchDispatchModeKey.FUNCTIONAL
-    )
-    functional_mode_ctx = (
-        functional_mode if functional_mode is not None else FunctionalTensorMode()
-    )
-    # Wrapper subclasses can redispatch casts to real inner tensors before
-    # FakeTensorMode sees them; let fake mode lift those inputs during fallback.
-    old_allow_non_fake_inputs = mode.allow_non_fake_inputs
-    mode.allow_non_fake_inputs = True
-    try:
-        with functional_mode_ctx, mode:
-            return out_dtype_dense(op, output_dtype, *args)
-    finally:
-        mode.allow_non_fake_inputs = old_allow_non_fake_inputs
+    return _dispatch_out_dtype_dense(op, output_dtype, *args, fake_mode=mode)
 
 
 @out_dtype.py_functionalize_impl
