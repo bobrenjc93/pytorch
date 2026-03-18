@@ -300,6 +300,35 @@ class TestCustomBackendAPI(torch._dynamo.test_case.TestCase):
         opt_f(torch.randn(3, 3))
         self.assertTrue(backend_run)
 
+    def test_aot_autograd_uses_scalar_overload_for_python_numbers(self):
+        from functorch.compile import make_boxed_func
+        from torch._dynamo.backends.common import aot_autograd
+
+        traced_targets: list[torch._ops.OpOverload] | None = None
+
+        def my_compiler(gm, _example_inputs):
+            nonlocal traced_targets
+            traced_targets = [
+                node.target
+                for node in gm.graph.nodes
+                if node.op == "call_function"
+                and isinstance(node.target, torch._ops.OpOverload)
+            ]
+            return make_boxed_func(gm.forward)
+
+        my_backend = aot_autograd(fw_compiler=my_compiler)
+
+        def f(x):
+            return x + 2
+
+        x = torch.randn(3, 3)
+        self.assertTrue(
+            same(torch.compile(f, backend=my_backend, fullgraph=True)(x), f(x))
+        )
+        self.assertIsNotNone(traced_targets)
+        self.assertIn(torch.ops.aten.add.Scalar, traced_targets)
+        self.assertNotIn(torch.ops.aten.add.Tensor, traced_targets)
+
     def test_lookup_backend(self):
         from torch._dynamo import lookup_backend
 

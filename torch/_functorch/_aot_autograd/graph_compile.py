@@ -12,6 +12,7 @@ import copy
 import dataclasses
 import itertools
 import logging
+import numbers
 import operator
 import time
 import traceback
@@ -48,10 +49,11 @@ from torch.fx.experimental._backward_state import BackwardState
 from torch.fx.experimental.proxy_tensor import is_sym_node
 from torch.fx.experimental.symbolic_shapes import fx_placeholder_vals, guard_or_true
 from torch.fx.graph_module import GraphModule
+from torch.fx.node import map_arg
 from torch.fx.passes._tensorify_python_scalars import tensorify_python_scalars
 from torch.multiprocessing.reductions import StorageWeakRef
 from torch.types import py_sym_types
-from torch.utils._python_dispatch import is_traceable_wrapper_subclass
+from torch.utils._python_dispatch import TorchDispatchMode, is_traceable_wrapper_subclass
 from torchgen.utils import dataclass_repr
 
 from .. import config
@@ -331,6 +333,100 @@ def _get_inner_meta(
     )
 
 
+class _OpTraceDispatchMode(TorchDispatchMode):
+    def __init__(self) -> None:
+        super().__init__()
+        self.traced_ops: list[torch._ops.OpOverload] = []
+
+    def __torch_dispatch__(self, func, types, args=(), kwargs=None):
+        self.traced_ops.append(func)
+        return func(*args, **(kwargs or {}))
+
+
+def _contains_python_scalar(arg: Any) -> bool:
+    if isinstance(arg, numbers.Number):
+        return True
+    if isinstance(arg, (tuple, list)):
+        return any(_contains_python_scalar(x) for x in arg)
+    if isinstance(arg, dict):
+        return any(_contains_python_scalar(x) for x in arg.values())
+    return False
+
+
+# AOT graphs can inherit Tensor overloads from the Python API even when a
+# literal number would resolve to a Scalar overload through torch.ops.aten.
+def _resolve_python_scalar_aten_overload(
+    target: torch._ops.OpOverload,
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+    fake_mode: Any,
+) -> torch._ops.OpOverload:
+    if (
+        target._schema.overload_name != "Tensor"
+        or not target._schema.name.startswith("aten::")
+        or not torch._C._should_allow_numbers_as_tensors(target.overloadpacket.__name__)
+        or not (_contains_python_scalar(args) or _contains_python_scalar(kwargs))
+    ):
+        return target
+
+    op_trace_dispatch_mode = _OpTraceDispatchMode()
+    try:
+        with (
+            fake_mode,
+            torch._dispatch.python.enable_python_dispatcher(),
+            op_trace_dispatch_mode,
+        ):
+            target.overloadpacket(*args, **kwargs)
+    except Exception:
+        return target
+
+    if len(op_trace_dispatch_mode.traced_ops) < 1:
+        return target
+
+    new_target = op_trace_dispatch_mode.traced_ops[0]
+    if (
+        not isinstance(new_target, torch._ops.OpOverload)
+        or new_target.overloadpacket != target.overloadpacket
+    ):
+        return target
+
+    return new_target
+
+
+def _apply_python_scalar_overload_resolution(module: torch.fx.GraphModule) -> None:
+    fake_mode = detect_fake_mode()
+    if fake_mode is None:
+        return
+
+    env: dict[torch.fx.Node, Any] = {}
+    updated = False
+    for node in module.graph.nodes:
+        if node.op == "call_function" and isinstance(
+            node.target, torch._ops.OpOverload
+        ):
+            try:
+                args = map_arg(node.args, env.__getitem__)
+                kwargs = map_arg(node.kwargs, env.__getitem__)
+            except KeyError:
+                pass
+            else:
+                new_target = _resolve_python_scalar_aten_overload(
+                    node.target,
+                    args,
+                    kwargs,
+                    fake_mode,
+                )
+                if new_target != node.target:
+                    node.target = new_target
+                    updated = True
+
+        if "val" in node.meta:
+            env[node] = node.meta["val"]
+
+    if updated:
+        module.recompile()
+
+
 def _apply_tensorify_python_scalars(module: torch.fx.GraphModule) -> None:
     """
     Util to apply tensorify_python_scalars.
@@ -442,6 +538,7 @@ def aot_stage2_inference(
         raise AssertionError(
             f"expected fw_module to be GraphModule, got {type(fw_module)}"
         )
+    _apply_python_scalar_overload_resolution(fw_module)
     _apply_tensorify_python_scalars(fw_module)
 
     compiled_fw = _aot_stage2b_inference_compile(
@@ -2175,6 +2272,7 @@ def aot_stage2_autograd(
     CompileEventLogger.try_add_pt2_compile("backend_compile", dispatch_mode="autograd")
     joint_graph_str = _log_joint_graph(fx_g, aot_config)
 
+    _apply_python_scalar_overload_resolution(fx_g)
     _apply_tensorify_python_scalars(fx_g)
 
     (
