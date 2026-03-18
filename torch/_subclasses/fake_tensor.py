@@ -13,7 +13,6 @@ import types
 import typing
 import weakref
 from collections import defaultdict
-from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, cast, Literal, TYPE_CHECKING, TypeGuard, TypeVar, Union
 from typing_extensions import Self
@@ -49,13 +48,12 @@ from torch.utils._python_dispatch import (
 from torch.utils._pytree import KeyPath, keystr, PyTree, tree_map, tree_map_, TreeSpec
 from torch.utils._stats import count
 from torch.utils._traceback import CapturedTraceback
-from torch.utils.weak import WeakTensorKeyDictionary
 
 from ._fake_tensor_utils import _CacheKeyState, _PySymInputStub, _SymIntOutputStub
 
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Generator, Iterable, Mapping
+    from collections.abc import Callable, Generator, Iterable, Mapping, Sequence
     from types import TracebackType
 
     from torch._guards import Source
@@ -336,7 +334,6 @@ class FakeTensorConverter:
 
         # map from to storage to corresponding constant tensors
         self.constant_storage_mapping = {}
-        self.constant_storage_refs = WeakTensorKeyDictionary()
 
     def add_constant_storage_mapping(self, fake_tensor: FakeTensor) -> None:
         # when you have a constant, aliased tensor:
@@ -352,78 +349,23 @@ class FakeTensorConverter:
         if weak_st not in self.constant_storage_mapping:
             self.constant_storage_mapping[weak_st] = []
         self.constant_storage_mapping[weak_st].append(weakref.ref(fake_tensor))
-        self.constant_storage_refs[fake_tensor] = weak_st
 
-    def _constant_storage_ref(self, tensor: Tensor) -> StorageWeakRef | None:
-        if is_sparse_any(tensor):
-            return None
-        try:
-            if isinstance(tensor, FakeTensor):
-                return StorageWeakRef(tensor._raw_untyped_storage())
-            return StorageWeakRef(tensor._typed_storage())
-        except TypeError:
-            return None
+    def invalidate_constant_aliases(self, tensor: Tensor) -> None:
+        if isinstance(tensor, FakeTensor):
+            raise AssertionError("Expected a real tensor, not a FakeTensor")
 
-    def has_constant_alias(self, fake_tensor: FakeTensor) -> bool:
-        return fake_tensor in self.constant_storage_refs
-
-    def _invalidate_constant_aliases_by_ref(
-        self, weak_st: StorageWeakRef, *, clear_constant_scalar: bool = True
-    ) -> None:
+        weak_st = StorageWeakRef(tensor._typed_storage())
         if weak_st not in self.constant_storage_mapping:
             return
 
-        live_refs: list[ReferenceType[FakeTensor]] = []
-        live_tensors: list[FakeTensor] = []
-        keep_tracking_scalar = False
         for weak_tensor_ref in self.constant_storage_mapping[weak_st]:
             ten = weak_tensor_ref()
             if ten is not None:
                 # pyrefly: ignore [missing-attribute]
                 ten._fix_weakref()
                 ten.constant = None
-                if clear_constant_scalar:
-                    ten.constant_scalar = None
-                elif ten.constant_scalar is not None:
-                    keep_tracking_scalar = True
-                live_tensors.append(ten)
-                live_refs.append(weak_tensor_ref)
 
-        if clear_constant_scalar or not keep_tracking_scalar:
-            for ten in live_tensors:
-                self.constant_storage_refs.pop(ten, None)
-            del self.constant_storage_mapping[weak_st]
-        else:
-            # Storage exposure clears tensor-wide constness, but later tensor
-            # writes must still be able to find and clear the scalar fallback.
-            for ten in live_tensors:
-                self.constant_storage_refs[ten] = weak_st
-            self.constant_storage_mapping[weak_st] = live_refs
-
-    def invalidate_constant_aliases(
-        self, tensor: Tensor, *, clear_constant_scalar: bool = True
-    ) -> None:
-        if isinstance(tensor, FakeTensor):
-            raise AssertionError("Expected a real tensor, not a FakeTensor")
-
-        weak_st = self._constant_storage_ref(tensor)
-        if weak_st is None:
-            return
-
-        self._invalidate_constant_aliases_by_ref(
-            weak_st, clear_constant_scalar=clear_constant_scalar
-        )
-
-    def invalidate_constant_aliases_of_fake(
-        self, fake_tensor: FakeTensor, *, clear_constant_scalar: bool = True
-    ) -> None:
-        weak_st = self.constant_storage_refs.get(fake_tensor)
-        if weak_st is None:
-            return
-
-        self._invalidate_constant_aliases_by_ref(
-            weak_st, clear_constant_scalar=clear_constant_scalar
-        )
+        del self.constant_storage_mapping[weak_st]
 
     def _get_memo(self, t: Tensor) -> FakeTensor | None:
         tid = self.meta_converter.describer.lookup_tensor.get(t)
@@ -736,25 +678,6 @@ class SymNumberMemoDescriptor:
             setattr(obj, self._memo_epoch(obj), obj.fake_mode.epoch)
 
 
-def _constant_scalar_tensor(t: Tensor | None) -> Tensor | None:
-    if t is None or not _is_plain_tensor(t) or t.dim() != 0:
-        return None
-    return t
-
-
-def _extract_constant_scalar(
-    t: Tensor | None,
-) -> bool | int | float | complex | None:
-    if (t := _constant_scalar_tensor(t)) is None:
-        return None
-
-    with no_dispatch():
-        value = t.item()
-    if isinstance(value, (bool, int, float, complex)):
-        return value
-    return None
-
-
 class FakeTensor(Tensor):
     """
     Meta tensors give you the ability to run PyTorch code without having to
@@ -767,13 +690,6 @@ class FakeTensor(Tensor):
     _fake_device: torch.device
     fake_mode: FakeTensorMode
     constant: Tensor | None
-    _constant_scalar: Tensor | None
-    _constant_scalar_vc: int | None
-    _constant_scalar_epoch: int | None
-    _constant_scalar_ref: StorageWeakRef | None
-    _constant_scalar_offset: object | None
-    _constant_scalar_size: tuple[object, ...] | None
-    _constant_scalar_stride: tuple[object, ...] | None
     real_tensor: Tensor | None
 
     # TODO: Generalize this as needed, e.g., into a trie of memos, if
@@ -820,61 +736,6 @@ class FakeTensor(Tensor):
     @fake_device.setter
     def fake_device(self, device: torch.device) -> None:
         self._fake_device = self._normalize_fake_device(device)
-
-    def _version_counter(self) -> int | None:
-        try:
-            return self._version
-        except RuntimeError:
-            return None
-
-    @property
-    def constant_scalar(self) -> Tensor | None:
-        r = getattr(self, "_constant_scalar", None)
-        if r is None:
-            return None
-
-        version = getattr(self, "_constant_scalar_vc", None)
-        epoch = getattr(self, "_constant_scalar_epoch", None)
-        storage_ref = getattr(self, "_constant_scalar_ref", None)
-        storage_offset = getattr(self, "_constant_scalar_offset", None)
-        size = getattr(self, "_constant_scalar_size", None)
-        stride = getattr(self, "_constant_scalar_stride", None)
-        if (
-            (version is not None and version != self._version_counter())
-            or (epoch is not None and epoch != self.fake_mode.epoch)
-            or storage_ref
-            != self.fake_mode.fake_tensor_converter._constant_storage_ref(self)
-            or storage_offset != self.storage_offset()
-            or size != tuple(self.size())
-            or stride != tuple(self.stride())
-        ):
-            self.constant_scalar = None
-            return None
-        return r
-
-    @constant_scalar.setter
-    def constant_scalar(self, value: Tensor | None) -> None:
-        self._constant_scalar = value
-        if value is None:
-            self._constant_scalar_vc = None
-            self._constant_scalar_epoch = None
-            self._constant_scalar_ref = None
-            self._constant_scalar_offset = None
-            self._constant_scalar_size = None
-            self._constant_scalar_stride = None
-            return
-
-        # Track both the version counter and the current storage/view state so
-        # `set_data()`-style mutations invalidate the fallback even when they
-        # do not reenter FakeTensor dispatch.
-        self._constant_scalar_vc = self._version_counter()
-        self._constant_scalar_epoch = self.fake_mode.epoch
-        self._constant_scalar_ref = self.fake_mode.fake_tensor_converter._constant_storage_ref(
-            self
-        )
-        self._constant_scalar_offset = self.storage_offset()
-        self._constant_scalar_size = tuple(self.size())
-        self._constant_scalar_stride = tuple(self.stride())
 
     # Note: [Fake Tensor Dispatch Keys]
     # In order to model the behavior of device-specific autocast
@@ -968,7 +829,6 @@ class FakeTensor(Tensor):
         self.real_tensor = real_tensor
         self.nonzero_memo = None
         self.item_memo = None
-        self.constant_scalar = _constant_scalar_tensor(constant)
         self.unique_memo = None
         self.unique_consecutive_memo = None
         self.nested_int_memo = None
@@ -1217,52 +1077,8 @@ class FakeTensor(Tensor):
         else:
             return [elem.tolist() for elem in self]
 
-    def _raw_untyped_storage(self):
-        return super().untyped_storage()
-
-    def _typed_storage(self):
-        return torch.TypedStorage(
-            wrap_storage=self._raw_untyped_storage(),
-            dtype=self.dtype,
-            _internal=True,
-        )
-
-    def storage(self):
-        torch.storage._warn_typed_storage_removal(stacklevel=2)
-        self._invalidate_constant_on_storage_access()
-        return self._typed_storage()
-
-    def _invalidate_constant_on_storage_access(self) -> None:
-        # Storage inspection exposes aliasing, so later writes must stop
-        # treating the touched constant storage as tensor-wide immutable.
-        if self.constant is not None:
-            self.fake_mode.fake_tensor_converter.invalidate_constant_aliases(
-                self.constant, clear_constant_scalar=False
-            )
-        elif self.fake_mode.fake_tensor_converter.has_constant_alias(self):
-            self.fake_mode.fake_tensor_converter.invalidate_constant_aliases_of_fake(
-                self, clear_constant_scalar=False
-            )
-
-    def untyped_storage(self):
-        self._invalidate_constant_on_storage_access()
-        return self._raw_untyped_storage()
-
-    def item(self):
-        if self.constant is not None:
-            with no_dispatch():
-                return self.constant.item()
-        if (scalar := _extract_constant_scalar(self.constant_scalar)) is not None:
-            return scalar
-        return super().item()
-
     def __bool__(self):
-        if self.constant is not None:
-            with no_dispatch():
-                return bool(self.constant)
-        if (scalar := _extract_constant_scalar(self.constant_scalar)) is not None:
-            return bool(scalar)
-        return super().__bool__()
+        return bool(self.item())
 
 
 _MetadataIntLike = Union[IntLikeType, "_PySymInputStub", "_SymIntOutputStub"]
@@ -1339,13 +1155,7 @@ def extract_tensor_metadata(t: Tensor) -> TensorMetadata:
         memory_format,
         storage_offset,
         # Only set storage_bytes for tensors that have storage (not sparse)
-        (
-            t._raw_untyped_storage().nbytes()
-            if isinstance(t, FakeTensor)
-            else t.untyped_storage().nbytes()
-        )
-        if not is_sparse_any(t)
-        else None,
+        t.untyped_storage().nbytes() if not is_sparse_any(t) else None,
         t.requires_grad,
         t.is_quantized,
         t.is_conj(),
@@ -1624,13 +1434,6 @@ class FakeTensorMode(TorchDispatchMode):
         if self._stack is None:
             self._stack = "".join(traceback.format_list(self._stack_trace))
         return self._stack
-
-    def _has_constant_tracking(self, fake_tensor: FakeTensor) -> bool:
-        return (
-            fake_tensor.constant is not None
-            or fake_tensor.constant_scalar is not None
-            or self.fake_tensor_converter.has_constant_alias(fake_tensor)
-        )
 
     @count
     # pyrefly: ignore [bad-override]
@@ -1976,9 +1779,7 @@ class FakeTensorMode(TorchDispatchMode):
             if isinstance(arg, FakeTensor):
                 if not self.is_our_fake(arg):
                     raise _BypassDispatchCache("not our fake")
-                # Constant tracking carries side effects that the cache does not
-                # replay, so mutable ops must re-enter normal dispatch.
-                if self._has_constant_tracking(arg):
+                if arg.constant is not None:
                     raise _BypassDispatchCache("constant attribute")
                 if is_sparse_any(arg):
                     raise _BypassDispatchCache(f"{arg.layout} tensor")
@@ -2044,7 +1845,7 @@ class FakeTensorMode(TorchDispatchMode):
 
         # Avoid caching FakeTensors with constants attached since those
         # can be invalidated.
-        if self._has_constant_tracking(output):
+        if output.constant is not None:
             raise _BypassDispatchCache("constant attribute")
 
         # TODO: support caching sparse outputs?
@@ -2314,7 +2115,7 @@ class FakeTensorMode(TorchDispatchMode):
             view_arg = args[cast(int, entry.view_idx)]
             if not isinstance(view_arg, FakeTensor):
                 raise AssertionError("view_arg must be a FakeTensor")
-            storage = view_arg._raw_untyped_storage()
+            storage = view_arg.untyped_storage()
             with in_kernel_invocation_manager(self), maybe_suppress():
                 empty.set_(storage, storage_offset, shape, stride)
 
@@ -3306,84 +3107,6 @@ class FakeTensorMode(TorchDispatchMode):
         aten.set_.source_Storage_storage_offset,
         aten._sparse_coo_tensor_with_dims_and_tensors.default,
     )
-    # Storage-backed set_ exposes aliasing without overwriting the scalar
-    # payload yet, so keep scalar tracking alive until a later tensor write.
-    _preserve_constant_scalar_ops = ordered_set(
-        op
-        for op in (
-            getattr(aten.set_, "source_Storage", None),
-            aten.set_.source_Storage_storage_offset,
-        )
-        if op is not None
-    )
-
-    def _preserves_constant_scalar_on_write(
-        self,
-        func: OpOverload,
-        kwargs: Mapping[str, object],
-        real_constant: Tensor,
-    ) -> bool:
-        if func not in self._preserve_constant_scalar_ops:
-            return False
-
-        source = kwargs.get("source")
-        if source is None:
-            return False
-        if not isinstance(source, (torch.TypedStorage, torch.UntypedStorage)):
-            return False
-
-        try:
-            same_storage = StorageWeakRef(source) == StorageWeakRef(
-                real_constant.untyped_storage()
-            )
-        except TypeError:
-            return False
-        if not same_storage:
-            return False
-
-        if func is getattr(aten.set_, "source_Storage", None):
-            return True
-
-        if func is not aten.set_.source_Storage_storage_offset:
-            return False
-
-        # Rebinding the exact same scalar view keeps the cached scalar valid;
-        # swapping to different storage or metadata (for example via set_data)
-        # must clear it.
-        return (
-            kwargs.get("storage_offset") == real_constant.storage_offset()
-            and tuple(cast(Sequence[object], kwargs.get("size", ())))
-            == tuple(real_constant.size())
-            and tuple(cast(Sequence[object], kwargs.get("stride", ())))
-            == tuple(real_constant.stride())
-        )
-
-    def _invalidate_fake_tensor_constant(
-        self,
-        fake_tensor: FakeTensor,
-        *,
-        real_constant: Tensor | None = None,
-        clear_constant_scalar: bool = True,
-    ) -> None:
-        if real_constant is None:
-            real_constant = (
-                fake_tensor.constant
-                if fake_tensor.constant is not None
-                else fake_tensor.constant_scalar
-            )
-
-        fake_tensor.constant = None
-        if clear_constant_scalar:
-            fake_tensor.constant_scalar = None
-
-        if real_constant is not None:
-            self.fake_tensor_converter.invalidate_constant_aliases(
-                real_constant, clear_constant_scalar=clear_constant_scalar
-            )
-        elif self.fake_tensor_converter.has_constant_alias(fake_tensor):
-            self.fake_tensor_converter.invalidate_constant_aliases_of_fake(
-                fake_tensor, clear_constant_scalar=clear_constant_scalar
-            )
 
     _unbacked_special_fake_handling_ops = ordered_set(
         aten.view.default,
@@ -3413,30 +3136,7 @@ class FakeTensorMode(TorchDispatchMode):
         args: Sequence[object],
         kwargs: Mapping[str, object],
     ) -> None:
-        if func is aten.set_data.default:
-            fake_self = None
-            if len(args) > 0 and self.is_our_fake(args[0]):
-                fake_self = args[0]
-            else:
-                maybe_self = kwargs.get("self", kwargs.get("input"))
-                if self.is_our_fake(maybe_self):
-                    fake_self = maybe_self
-
-            if fake_self is not None:
-                if (
-                    fake_self.constant is not None
-                    or fake_self.constant_scalar is not None
-                    or self.fake_tensor_converter.has_constant_alias(fake_self)
-                ):
-                    self._invalidate_fake_tensor_constant(fake_self)
-                return
-
-        any_constant = any(
-            e.constant is not None
-            or e.constant_scalar is not None
-            or self.fake_tensor_converter.has_constant_alias(e)
-            for e in flat_arg_fake_tensors
-        )
+        any_constant = any(e.constant is not None for e in flat_arg_fake_tensors)
         schema_info = get_schema_info(func)
         if any_constant and schema_info.is_mutable():
             _, new_kwargs = normalize_function(  # type: ignore[misc]
@@ -3447,24 +3147,12 @@ class FakeTensorMode(TorchDispatchMode):
             )
             for k, v in new_kwargs.items():
                 k = k if (k != "input" or schema_info.has_argument(k)) else "self"
-                if self.is_our_fake(v) and schema_info.is_mutable(k):
-                    real_constant = (
-                        v.constant if v.constant is not None else v.constant_scalar
-                    )
-                    clear_constant_scalar = (
-                        real_constant is None
-                        or not self._preserves_constant_scalar_on_write(
-                            func, new_kwargs, real_constant
-                        )
-                    )
-
-                    # Clear the mutated tensor first, then invalidate any
-                    # tracked aliases that still point at the same storage.
-                    self._invalidate_fake_tensor_constant(
-                        v,
-                        real_constant=real_constant,
-                        clear_constant_scalar=clear_constant_scalar,
-                    )
+                if (
+                    self.is_our_fake(v)
+                    and schema_info.is_mutable(k)
+                    and v.constant is not None
+                ):
+                    self.fake_tensor_converter.invalidate_constant_aliases(v.constant)
 
     def from_tensor(
         self,
