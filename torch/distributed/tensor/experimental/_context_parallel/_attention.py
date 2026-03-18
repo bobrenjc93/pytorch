@@ -902,9 +902,7 @@ def _sdpa_handler(
     dtensor_type: type[DTensor] | None = None,
 ) -> object:
     dtensor_type = (
-        cast(type[DTensor], cast(DTensor, args[0]).__class__)
-        if dtensor_type is None
-        else dtensor_type
+        type(cast(DTensor, args[0])) if dtensor_type is None else dtensor_type
     )
     dispatcher = dtensor_type._op_dispatcher
     # extract local tensor and sharding infos to a OpInfo
@@ -923,12 +921,24 @@ def _sdpa_handler(
         raise AssertionError("inputs need to be redistributed")
 
     call_maps: dict[torch._ops.OpOverload, Callable] = {
-        aten._scaled_dot_product_flash_attention.default: _scaled_dot_product_ring_flash_attention,
-        aten._scaled_dot_product_efficient_attention.default: _scaled_dot_product_ring_efficient_attention,
-        aten._scaled_dot_product_cudnn_attention.default: _scaled_dot_product_ring_cudnn_attention,
-        aten._scaled_dot_product_flash_attention_backward.default: _scaled_dot_product_ring_flash_attention_backward,
-        aten._scaled_dot_product_efficient_attention_backward.default: _scaled_dot_product_ring_efficient_attention_backward,
-        aten._scaled_dot_product_cudnn_attention_backward.default: _scaled_dot_product_ring_cudnn_attention_backward,
+        aten._scaled_dot_product_flash_attention.default: (
+            _scaled_dot_product_ring_flash_attention
+        ),
+        aten._scaled_dot_product_efficient_attention.default: (
+            _scaled_dot_product_ring_efficient_attention
+        ),
+        aten._scaled_dot_product_cudnn_attention.default: (
+            _scaled_dot_product_ring_cudnn_attention
+        ),
+        aten._scaled_dot_product_flash_attention_backward.default: (
+            _scaled_dot_product_ring_flash_attention_backward
+        ),
+        aten._scaled_dot_product_efficient_attention_backward.default: (
+            _scaled_dot_product_ring_efficient_attention_backward
+        ),
+        aten._scaled_dot_product_cudnn_attention_backward.default: (
+            _scaled_dot_product_ring_cudnn_attention_backward
+        ),
     }
     if op_call in call_maps:
         local_results = call_maps[op_call](

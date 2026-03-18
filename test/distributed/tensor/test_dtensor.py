@@ -26,9 +26,13 @@ from torch.distributed.tensor._dtensor_spec import (
     ShardOrderEntry,
     TensorMeta,
 )
-from torch.distributed.tensor._op_schema import RuntimeSchemaInfo
-from torch.distributed.tensor._op_schema import OutputSharding
-from torch.distributed.tensor._ops.single_dim_strategy import _SingleDimStrategyInfo
+from torch.distributed.tensor._op_schema import (
+    OutputSharding,
+    RuntimeSchemaInfo,
+)
+from torch.distributed.tensor._ops.single_dim_strategy import (
+    _SingleDimStrategyInfo,
+)
 from torch.distributed.tensor._redistribute import redistribute_local_tensor
 from torch.distributed.tensor.debug import CommDebugMode
 from torch.distributed.tensor.experimental import implicit_replication
@@ -515,9 +519,8 @@ class DTensorTest(DTensorTestBase):
             _op_dispatcher = type(DTensor._op_dispatcher)()
 
         parent_dispatcher = ParentDTensor._op_dispatcher
-        parent_conv_handler = parent_dispatcher._custom_op_handlers[
-            torch.ops.aten.convolution.default
-        ]
+        op = torch.ops.aten.convolution.default
+        parent_conv_handler = parent_dispatcher._custom_op_handlers[op]
         parent_handler_calls = []
 
         def overriding_parent_conv_handler(
@@ -531,9 +534,7 @@ class DTensorTest(DTensorTestBase):
                 dtensor_type=dtensor_type,
             )
 
-        parent_dispatcher._custom_op_handlers[torch.ops.aten.convolution.default] = (
-            overriding_parent_conv_handler
-        )
+        parent_dispatcher._custom_op_handlers[op] = overriding_parent_conv_handler
         try:
             class ChildDTensor(ParentDTensor):
                 _op_dispatcher = type(DTensor._op_dispatcher)()
@@ -545,9 +546,7 @@ class DTensorTest(DTensorTestBase):
             )
             result = F.conv2d(input_dt, weight)
         finally:
-            parent_dispatcher._custom_op_handlers[torch.ops.aten.convolution.default] = (
-                parent_conv_handler
-            )
+            parent_dispatcher._custom_op_handlers[op] = parent_conv_handler
 
         self.assertEqual(parent_handler_calls, [ChildDTensor])
         self.assertEqual(type(result), ChildDTensor)
@@ -626,7 +625,9 @@ class DTensorTest(DTensorTestBase):
 
         parent_prop = ParentDTensor._op_dispatcher.sharding_propagator
         child_prop = ChildDTensor._op_dispatcher.sharding_propagator
-        parent_prop.register_sharding_prop_rule(op, parent_rule, schema_info=schema_info)
+        parent_prop.register_sharding_prop_rule(
+            op, parent_rule, schema_info=schema_info
+        )
         child_prop.register_sharding_prop_rule(op, child_rule)
 
         base = distribute_tensor(
@@ -655,7 +656,8 @@ class DTensorTest(DTensorTestBase):
         lib.define("rule_overrides_strategy(Tensor input) -> Tensor")
         lib.impl("rule_overrides_strategy", lambda input: input.clone(), "Meta")
         op = (
-            torch.ops.dtensor_subclass_registry_shadow_test.rule_overrides_strategy.default
+            torch.ops.dtensor_subclass_registry_shadow_test
+            .rule_overrides_strategy.default
         )
 
         class ParentDTensor(DTensor):
@@ -707,7 +709,8 @@ class DTensorTest(DTensorTestBase):
         )
         lib.define("cross_registry_schema_override(Tensor input, int dim) -> Tensor")
         op = (
-            torch.ops.dtensor_subclass_cross_registry_schema_info_test.cross_registry_schema_override.default
+            torch.ops.dtensor_subclass_cross_registry_schema_info_test
+            .cross_registry_schema_override.default
         )
 
         class ParentDTensor(DTensor):

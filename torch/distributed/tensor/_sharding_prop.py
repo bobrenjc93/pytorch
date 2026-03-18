@@ -67,7 +67,7 @@ def _length(obj) -> int:
 
 def _get_local_overrides(mapping: MutableMapping[K, V]) -> MutableMapping[K, V]:
     if isinstance(mapping, ChainMap):
-        return cast(MutableMapping[K, V], mapping.maps[0])
+        return mapping.maps[0]
     return mapping
 
 
@@ -78,7 +78,9 @@ def _lookup_schema_info_entry(
     if op_overload not in mapping:
         return False, None
     schema_info = mapping[op_overload]
-    return True, None if schema_info is _NO_SCHEMA_INFO else schema_info
+    if schema_info is _NO_SCHEMA_INFO:
+        return True, None
+    return True, schema_info
 
 
 _SHARDING_RULE_REGISTRATION = "rule"
@@ -90,8 +92,8 @@ def _get_base_mapping(mapping: MutableMapping[K, V]) -> MutableMapping[K, V] | N
     if not isinstance(mapping, ChainMap) or len(mapping.maps) == 1:
         return None
     if len(mapping.maps) == 2:
-        return cast(MutableMapping[K, V], mapping.maps[1])
-    return cast(MutableMapping[K, V], ChainMap(*mapping.maps[1:]))
+        return mapping.maps[1]
+    return ChainMap(*mapping.maps[1:])
 
 
 def _resolve_op_registration(
@@ -109,7 +111,9 @@ def _resolve_op_registration(
 ) -> tuple[str, object] | None:
     # Resolve registrations one inheritance level at a time so a child class can
     # shadow an inherited registration even when it switches registry type.
-    local_single_dim_strategy_mapping = _get_local_overrides(single_dim_strategy_mapping)
+    local_single_dim_strategy_mapping = _get_local_overrides(
+        single_dim_strategy_mapping
+    )
     if op_overload in local_single_dim_strategy_mapping:
         return (
             _SINGLE_DIM_STRATEGY_REGISTRATION,
@@ -302,7 +306,9 @@ def _select_min_redistribute_cost(
 
     # Figure out heuristic hints for unbacked shapes.
     # If available, use shape upper bound. If not, fallback to some integer (inductor size-hinting style).
-    shape_env = next(iter(x for x in costs if not is_concrete_float(x))).node.shape_env  # type: ignore[arg-type]
+    shape_env = next(
+        iter(x for x in costs if not is_concrete_float(x))
+    ).node.shape_env  # type: ignore[arg-type]
     replacements = {}
     for sym in free_unbacked:
         # TODO(laithsakka): unify with optimization_hint API
@@ -416,39 +422,57 @@ class ShardingPropagator:
     _fake_mode_lock = nullcontext()
 
     def __init__(self, base_propagator: "ShardingPropagator | None" = None) -> None:
+        op_to_rules: MutableMapping[
+            OpOverload, Callable[[OpSchema], OutputSharding]
+        ]
+        op_strategy_funcs: MutableMapping[
+            OpOverload,
+            Callable[[OpSchema], StrategyType],
+        ]
+        op_single_dim_strategy_funcs: MutableMapping[
+            OpOverload,
+            _SingleDimStrategyInfo,
+        ]
+        op_to_schema_info: MutableMapping[OpOverload, SchemaInfoEntry]
+        op_to_schema_info_for_single_dim_strategy: MutableMapping[
+            OpOverload, SchemaInfoEntry
+        ]
+
         if base_propagator is None:
-            self.op_to_rules = {}
-            self.op_strategy_funcs = {}
-            self.op_single_dim_strategy_funcs = {}
-            self.op_to_schema_info = {}
-            self.op_to_schema_info_for_single_dim_strategy = {}
+            op_to_rules = {}
+            op_strategy_funcs = {}
+            op_single_dim_strategy_funcs = {}
+            op_to_schema_info = {}
+            op_to_schema_info_for_single_dim_strategy = {}
         else:
-            self.op_to_rules = ChainMap({}, base_propagator.op_to_rules)
-            self.op_strategy_funcs = ChainMap({}, base_propagator.op_strategy_funcs)
-            self.op_single_dim_strategy_funcs = ChainMap(
+            op_to_rules = ChainMap({}, base_propagator.op_to_rules)
+            op_strategy_funcs = ChainMap({}, base_propagator.op_strategy_funcs)
+            op_single_dim_strategy_funcs = ChainMap(
                 {}, base_propagator.op_single_dim_strategy_funcs
             )
-            self.op_to_schema_info = ChainMap({}, base_propagator.op_to_schema_info)
-            self.op_to_schema_info_for_single_dim_strategy = ChainMap(
+            op_to_schema_info = ChainMap({}, base_propagator.op_to_schema_info)
+            op_to_schema_info_for_single_dim_strategy = ChainMap(
                 {}, base_propagator.op_to_schema_info_for_single_dim_strategy
             )
         self.op_to_rules: MutableMapping[
             OpOverload, Callable[[OpSchema], OutputSharding]
-        ]
+        ] = op_to_rules
         self.op_strategy_funcs: MutableMapping[
             OpOverload,
             Callable[[OpSchema], StrategyType],
-        ]
+        ] = op_strategy_funcs
         self.op_single_dim_strategy_funcs: MutableMapping[
             OpOverload,
             _SingleDimStrategyInfo,
-        ]
+        ] = op_single_dim_strategy_funcs
         # op map to save static argnum to decide to reuse sharding prop cache or
         # re-run sharding prop
-        self.op_to_schema_info: MutableMapping[OpOverload, SchemaInfoEntry]
+        self.op_to_schema_info: MutableMapping[
+            OpOverload, SchemaInfoEntry
+        ] = op_to_schema_info
         self.op_to_schema_info_for_single_dim_strategy: MutableMapping[
             OpOverload, SchemaInfoEntry
-        ]
+        ] = op_to_schema_info_for_single_dim_strategy
         self.propagate_op_sharding = LocalLRUCache(
             self.propagate_op_sharding_non_cached
         )
