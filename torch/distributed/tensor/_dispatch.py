@@ -159,7 +159,17 @@ class OpDispatcher:
     """
 
     def __init__(self) -> None:
-        self.sharding_propagator = ShardingPropagator()
+        # DTensor op strategies and propagation rules are registered on the
+        # base DTensor dispatcher. Fresh subclass dispatchers should reuse
+        # that propagator so they inherit the same global registrations and
+        # any runtime extensions (for example CP sharding rules).
+        base_dispatcher = getattr(
+            getattr(dtensor, "DTensor", None), "_op_dispatcher", None
+        )
+        if isinstance(base_dispatcher, OpDispatcher):
+            self.sharding_propagator = base_dispatcher.sharding_propagator
+        else:
+            self.sharding_propagator = ShardingPropagator()
         # NOTE: must stay in sync with is_random_op in
         # torch/csrc/autograd/python_variable.cpp
         self._random_ops = {
