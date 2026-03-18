@@ -1319,7 +1319,7 @@ def _get_sfdp_patterns(input_device: torch.device | None = None):
                     "pass_dicts": patterns,
                     "extra_check": extra_check,
                     "scalar_workaround": inference_workaround,
-                    # with dropout turned into clone, we end up with a number of
+                    # with dropout becoming a no-op in inference, we end up with a number of
                     # semantically identical graphs
                     "skip_duplicates": True,
                 },

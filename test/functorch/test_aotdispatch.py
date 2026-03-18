@@ -4811,25 +4811,20 @@ def forward(self, arg0_1, arg1_1):
 
         fw_graph_cell = [None]
         bw_graph_cell = [None]
+        p, x = inp
 
-        aot_function(
+        compiled_outs = aot_function(
             fn,
             fw_compiler=partial(extract_graph, graph_cell=fw_graph_cell),
             bw_compiler=partial(extract_graph, graph_cell=bw_graph_cell),
             partition_fn=default_partition,
             decompositions=default_decompositions,
             dynamic=True,
-        )(*inp)
+        )(p, x)
         fw_graph = fw_graph_cell[0]
 
-        self.assertExpectedInline(
-            str(fw_graph.code).strip(),
-            """\
-def forward(self, arg0_1, arg1_1):
-    clone = torch.ops.aten.clone.default(arg1_1);  arg1_1 = None
-    add = torch.ops.aten.add.Tensor(clone, 1);  clone = None
-    return (add,)""",
-        )
+        self.assertIs(compiled_outs[0], x)
+        self.assertNotIn("torch.ops.aten.clone.default", str(fw_graph.code))
 
     def test_aot_export_predispatch_func_simple(self):
         def fn(p, x):

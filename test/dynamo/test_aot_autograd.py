@@ -91,6 +91,20 @@ class AotAutogradFallbackTests(torch._inductor.test_case.TestCase):
         # This should not error: we mutated an autograd leaf under no_grad mode.
         aot_fn(x, y)
 
+    def test_dropout_inference_aliasing_matches_eager(self):
+        def dropout_training_false(x):
+            return torch.nn.functional.dropout(x, p=0.5, training=False)
+
+        def dropout_zero_probability(x):
+            return torch.nn.functional.dropout(x, p=0.0, training=True)
+
+        for fn in (dropout_training_false, dropout_zero_probability):
+            x = torch.randn(5)
+            self.assertIs(fn(x), x)
+
+            compiled_fn = torch.compile(fn, backend="aot_eager", fullgraph=True)
+            self.assertIs(compiled_fn(x), x)
+
     def test_mutation1(self):
         def fn(_stack0: torch.Tensor, diagonal_chunked_attention_scores: torch.Tensor):
             getitem = diagonal_chunked_attention_scores[
