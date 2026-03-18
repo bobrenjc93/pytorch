@@ -2374,7 +2374,9 @@ For now, dynamo will explicitly graph break when it encounters user code with th
                         )
                         if should_sync_out:
                             out_tensor_vt.synchronize_attributes(tx)  # type: ignore[attr-defined]
-                            fake_out = out_tensor_vt.as_proxy().node.meta["example_value"]
+                            fake_out = out_tensor_vt.as_proxy().node.meta[
+                                "example_value"
+                            ]
 
                         # Keep resize and contiguity checks attached to the
                         # actual `out=` slots. `@allow_in_graph` and other
