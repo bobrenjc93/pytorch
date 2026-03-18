@@ -120,6 +120,14 @@ class RequiresGradRestartAnalysis(RestartAnalysis):
     """
 
 
+class IntegralInplaceTrueDivisionRestartAnalysis(RestartAnalysis):
+    """Raised when integral in-place true division needs a graph break on retry.
+
+    On restart, Dynamo graph breaks at the offending op so prior side effects
+    are preserved before eager raises the cast error.
+    """
+
+
 class UnspecializeRestartAnalysis(RestartAnalysis):
     pass
 

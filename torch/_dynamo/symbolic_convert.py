@@ -288,6 +288,10 @@ class SpeculationLog:
     # instead of tracing it. Set when we detect that such an intermediate
     # leaks as a graph output with requires_grad=True.
     graph_break_on_requires_grad_: bool = False
+    # If True, graph break at integral in-place true division on source-backed
+    # tensors instead of tracing it. Set when we detect that tracing through
+    # the op would drop eager side effects before the cast error.
+    graph_break_on_integral_inplace_true_division: bool = False
 
     def restart(self) -> None:
         self.index = 0

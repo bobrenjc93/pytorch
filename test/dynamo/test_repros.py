@@ -4649,6 +4649,24 @@ class ReproTests(torch._dynamo.test_case.TestCase):
 
         self._assert_integral_inplace_true_division_raises(func)
 
+    def test_source_tensor_integral_div_inplace_preserves_prior_side_effects(self):
+        def func(x, y, values):
+            values.append("before div_")
+            x.div_(y)
+            return x
+
+        x = torch.tensor([1], dtype=torch.int64)
+        y = torch.tensor([0], dtype=torch.int64)
+        values = []
+        compiled = torch.compile(func, backend="aot_eager")
+
+        with self.assertRaisesRegex(
+            RuntimeError, "can't be cast to the desired output type"
+        ):
+            compiled(x, y, values)
+
+        self.assertEqual(values, ["before div_"])
+
     def test_user_ctor_ctx_manager(self):
         class UserCtxManager:
             def __enter__(self):

@@ -48,6 +48,7 @@ from torch.utils._python_dispatch import is_traceable_wrapper_subclass
 from .. import config, graph_break_hints, variables
 from .._trace_wrapped_higher_order_op import trace_wrapped
 from ..exc import (
+    IntegralInplaceTrueDivisionRestartAnalysis,
     ObservedAttributeError,
     raise_observed_exception,
     TorchRuntimeError,
@@ -809,26 +810,27 @@ class TensorVariable(VariableTracker):
         name: str,
         kwargs: "dict[str, VariableTracker]",
     ) -> bool:
+        if name in ("true_divide_", "__itruediv__"):
+            pass
+        elif name in ("div_", "divide_"):
+            rounding_mode = kwargs.get("rounding_mode")
+            if not (
+                rounding_mode is None
+                or not rounding_mode.is_python_constant()
+                or rounding_mode.as_python_constant() is None
+            ):
+                return False
+        else:
+            return False
+
         if (
-            not self._has_source_or_source_alias(tx)
-            or self.dtype is None
+            self.dtype is None
             or self.dtype.is_floating_point
             or self.dtype.is_complex
         ):
             return False
 
-        if name in ("true_divide_", "__itruediv__"):
-            return True
-
-        if name not in ("div_", "divide_"):
-            return False
-
-        rounding_mode = kwargs.get("rounding_mode")
-        return (
-            rounding_mode is None
-            or not rounding_mode.is_python_constant()
-            or rounding_mode.as_python_constant() is None
-        )
+        return self._has_source_or_source_alias(tx)
 
     def _example_value_for_true_division_arg(
         self, arg: VariableTracker
@@ -859,16 +861,12 @@ class TensorVariable(VariableTracker):
             f"{output_type}"
         )
 
-    def _raise_on_integral_inplace_true_division(
+    def _raise_integral_inplace_true_division_error(
         self,
-        tx: "InstructionTranslator",
         name: str,
         args: Sequence[VariableTracker],
         kwargs: "dict[str, VariableTracker]",
     ) -> None:
-        if not self._is_integral_inplace_true_division(tx, name, kwargs):
-            return
-
         example_self = extract_fake_example_value(self.proxy.node, required=False)
         if isinstance(example_self, torch.Tensor):
             example_args = []
@@ -896,6 +894,39 @@ class TensorVariable(VariableTracker):
                         ) from None
 
         raise TorchRuntimeError(self._integral_inplace_true_division_error_message())
+
+    def _handle_integral_inplace_true_division(
+        self,
+        tx: "InstructionTranslator",
+        name: str,
+        args: Sequence[VariableTracker],
+        kwargs: "dict[str, VariableTracker]",
+    ) -> None:
+        if not self._is_integral_inplace_true_division(tx, name, kwargs):
+            return
+
+        if tx.one_graph or tx.error_on_graph_break:
+            self._raise_integral_inplace_true_division_error(name, args, kwargs)
+
+        if tx.speculation_log.graph_break_on_integral_inplace_true_division:
+            unimplemented(
+                gb_type="Integral in-place true division on a source tensor",
+                context=f"Tensor.{name}({args=}, {kwargs=})",
+                explanation=(
+                    "AOTAutograd replays source-tensor mutations through copy_(), "
+                    "which does not preserve eager error semantics for integral true division."
+                ),
+                hints=[
+                    "Move this mutation outside `torch.compile`, or use an out-of-place divide.",
+                    "If you need in-place division on integral tensors, pass `rounding_mode='trunc'` or `rounding_mode='floor'`.",
+                    *graph_break_hints.SUPPORTABLE,
+                ],
+            )
+
+        tx.speculation_log.graph_break_on_integral_inplace_true_division = True
+        raise IntegralInplaceTrueDivisionRestartAnalysis(
+            restart_reason="integral in-place true division on source-backed tensor"
+        )
 
     def call_method(
         self,
@@ -988,7 +1019,7 @@ class TensorVariable(VariableTracker):
                 ],
             )
 
-        self._raise_on_integral_inplace_true_division(tx, name, args, kwargs)
+        self._handle_integral_inplace_true_division(tx, name, args, kwargs)
 
         try:
             handler_method = getattr(self, f"method_{name}")

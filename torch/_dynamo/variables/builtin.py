@@ -1320,7 +1320,7 @@ class BuiltinVariable(VariableTracker):
                 )
 
             if fn is operator.itruediv and isinstance(args[0], TensorVariable):
-                args[0]._raise_on_integral_inplace_true_division(
+                args[0]._handle_integral_inplace_true_division(
                     tx, "__itruediv__", args[1:], kwargs
                 )
 
