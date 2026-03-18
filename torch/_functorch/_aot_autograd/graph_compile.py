@@ -117,33 +117,30 @@ def maybe_skip_decompose(aot_config: AOTConfig) -> Generator[None, None, None]:
 
 
 def _get_backward_output_order(
-    bw_module: GraphModule,
+    _bw_module: GraphModule,
     bw_outs: Any,
 ) -> list[int] | None:
-    topo_order = {node: i for i, node in enumerate(bw_module.graph.nodes)}
-
     def get_source_node(bw_out: Any) -> torch.fx.Node | None:
-        if not isinstance(bw_out, torch.fx.Node):
-            return None
-        if (
-            bw_out.op == "call_function"
-            and bw_out.target is operator.getitem
-            and isinstance(bw_out.args[0], torch.fx.Node)
-        ):
-            return bw_out.args[0]
-        return bw_out
+        while isinstance(bw_out, torch.fx.Node):
+            if bw_out.op != "call_function" or bw_out.target is not operator.getitem:
+                return bw_out
+            if not isinstance(bw_out.args[0], torch.fx.Node):
+                return bw_out
+            bw_out = bw_out.args[0]
+        return None
 
     def sort_key(idx: int) -> tuple[int, int]:
         source = get_source_node(bw_outs[idx])
         if source is None:
-            return (-1, -1)
+            return (0, 0)
         # Eager gives later forward ops priority in backward via sequence numbers.
-        # For tuple-producing nodes, use the shared source node so equal seq_nrs
-        # preserve the source node's output order.
+        # For tuple/list-producing nodes, use the shared source node so equal
+        # seq_nrs preserve the flattened output order. If eager recorded no
+        # priority for this output, keep the original index order.
         seq_nr = source.meta.get("seq_nr")
         if isinstance(seq_nr, int):
-            return (seq_nr, 0)
-        return (-1, topo_order[source])
+            return (1, seq_nr)
+        return (0, 0)
 
     order = sorted(range(len(bw_outs)), key=sort_key, reverse=True)
     return None if order == list(range(len(bw_outs))) else order

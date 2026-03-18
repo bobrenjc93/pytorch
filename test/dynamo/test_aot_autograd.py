@@ -1,5 +1,6 @@
 # Owner(s): ["module: dynamo"]
 import copy
+import operator
 import re
 import unittest
 from textwrap import dedent
@@ -11,6 +12,7 @@ import torch._dynamo.test_case
 import torch._inductor.test_case
 import torch.fx.traceback as fx_traceback
 import torch.utils._pytree as pytree
+from torch._functorch._aot_autograd.graph_compile import _get_backward_output_order
 from torch._dynamo.testing import (
     CompileCounter,
     CompileCounterWithBackend,
@@ -47,6 +49,32 @@ lib.impl("maybe_dupe_op", maybe_dupe_op, "Meta")
 
 
 class AotAutogradFallbackTests(torch._inductor.test_case.TestCase):
+    def test_get_backward_output_order_unwraps_nested_getitems(self):
+        graph = torch.fx.Graph()
+        grad = graph.placeholder("grad")
+        low_priority = graph.call_function(operator.neg, args=(grad,))
+        low_priority.meta["seq_nr"] = 1
+        high_priority = graph.call_function(operator.mul, args=(grad, grad))
+        high_priority.meta["seq_nr"] = 2
+        outer_getitem = graph.call_function(operator.getitem, args=(high_priority, 0))
+        nested_getitem = graph.call_function(operator.getitem, args=(outer_getitem, 0))
+        graph.output((low_priority, nested_getitem))
+
+        bw_module = torch.fx.GraphModule(torch.nn.Module(), graph)
+        self.assertEqual(
+            _get_backward_output_order(bw_module, [low_priority, nested_getitem]),
+            [1, 0],
+        )
+
+    def test_get_backward_output_order_keeps_index_order_without_seq_nr(self):
+        graph = torch.fx.Graph()
+        grad0 = graph.placeholder("grad0")
+        grad1 = graph.placeholder("grad1")
+        graph.output((grad0, grad1))
+
+        bw_module = torch.fx.GraphModule(torch.nn.Module(), graph)
+        self.assertIsNone(_get_backward_output_order(bw_module, [grad0, grad1]))
+
     def test_LSTM(self):
         # https://github.com/pytorch/torchdynamo/issues/1147
         class Repro(torch.nn.Module):
