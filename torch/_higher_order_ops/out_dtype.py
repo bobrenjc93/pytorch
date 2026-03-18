@@ -61,25 +61,7 @@ class OutDtypeOperator(HigherOrderOperator):
         super().__init__("out_dtype")
 
     def __call__(self, op, output_dtype, *args):
-        if not isinstance(op, torch._ops.OpOverload):
-            raise ValueError("out_dtype's first argument must be an OpOverload")
-        if op._schema.is_mutable:
-            raise ValueError(
-                "out_dtype's first argument needs to be a functional operator"
-            )
-        if not (
-            len(op._schema.returns) == 1
-            and isinstance(op._schema.returns[0].type, torch.TensorType)
-        ):
-            raise ValueError(
-                "out_dtype's can only apply to ops that return a single tensor"
-                f"Instead got {[r.type for r in op._schema.returns]}"
-            )
-
-        if op not in ALLOWABLE_OPS:
-            raise ValueError(
-                f"out_dtype only allows the following operators: {ALLOWABLE_OPS}."
-            )
+        validate_out_dtype_args(op)
 
         # pyrefly: ignore [missing-attribute]
         res = super().__call__(op, output_dtype, *args)
@@ -88,6 +70,34 @@ class OutDtypeOperator(HigherOrderOperator):
 
 
 out_dtype = OutDtypeOperator()
+
+
+def validate_out_dtype_args(op):
+    if not isinstance(op, torch._ops.OpOverload):
+        raise ValueError("out_dtype's first argument must be an OpOverload")
+    if op._schema.is_mutable:
+        raise ValueError(
+            "out_dtype's first argument needs to be a functional operator"
+        )
+    if not (
+        len(op._schema.returns) == 1
+        and isinstance(op._schema.returns[0].type, torch.TensorType)
+    ):
+        raise ValueError(
+            "out_dtype's can only apply to ops that return a single tensor"
+            f"Instead got {[r.type for r in op._schema.returns]}"
+        )
+
+    if op not in ALLOWABLE_OPS:
+        raise ValueError(
+            f"out_dtype only allows the following operators: {ALLOWABLE_OPS}."
+        )
+
+
+def _detect_functional_mode():
+    return torch.utils._python_dispatch._detect_infra_mode(
+        torch._C._TorchDispatchModeKey.FUNCTIONAL
+    )
 
 
 def _unwrap_temporary_functional_result(out):
@@ -109,52 +119,65 @@ def _unwrap_temporary_functional_result(out):
     return torch._from_functional_tensor(out.elem)
 
 
-def _copy_tracked_tensor_tree(src, dst, tracer, *, recurse_subclasses=False):
+def _copy_tracked_tensor_tree(src, dst, tracer):
     if isinstance(src, torch.Tensor):
         if not isinstance(dst, torch.Tensor):
             raise AssertionError(f"expected tensor output, got {type(dst)}")
         set_proxy_slot(dst, tracer, get_proxy_slot(src, tracer))
-        if recurse_subclasses and is_traceable_wrapper_subclass(src):
-            if not is_traceable_wrapper_subclass(dst):
-                raise AssertionError(f"expected subclass output, got {type(dst)}")
-            src_attrs, _ = src.__tensor_flatten__()  # type: ignore[attr-defined]
-            dst_attrs, _ = dst.__tensor_flatten__()  # type: ignore[attr-defined]
-            if src_attrs != dst_attrs:
-                raise AssertionError("expected matching subclass attrs")
-            for attr in src_attrs:
-                _copy_tracked_tensor_tree(
-                    getattr(src, attr),
-                    getattr(dst, attr),
-                    tracer,
-                    recurse_subclasses=True,
-                )
         return
 
     if isinstance(src, tuple):
         if not isinstance(dst, tuple) or len(src) != len(dst):
             raise AssertionError("expected matching tuple outputs")
         for src_item, dst_item in zip(src, dst):
-            _copy_tracked_tensor_tree(
-                src_item, dst_item, tracer, recurse_subclasses=recurse_subclasses
-            )
+            _copy_tracked_tensor_tree(src_item, dst_item, tracer)
         return
 
     if isinstance(src, list):
         if not isinstance(dst, list) or len(src) != len(dst):
             raise AssertionError("expected matching list outputs")
         for src_item, dst_item in zip(src, dst):
-            _copy_tracked_tensor_tree(
-                src_item, dst_item, tracer, recurse_subclasses=recurse_subclasses
-            )
+            _copy_tracked_tensor_tree(src_item, dst_item, tracer)
         return
 
     if isinstance(src, dict):
         if not isinstance(dst, dict) or src.keys() != dst.keys():
             raise AssertionError("expected matching dict outputs")
         for key in src:
-            _copy_tracked_tensor_tree(
-                src[key], dst[key], tracer, recurse_subclasses=recurse_subclasses
-            )
+            _copy_tracked_tensor_tree(src[key], dst[key], tracer)
+
+
+def _copy_wrapper_subclass_inner_proxy_slots(src, dst, tracer):
+    if not is_traceable_wrapper_subclass(src):
+        return
+    if not is_traceable_wrapper_subclass(dst):
+        raise AssertionError(f"expected subclass output, got {type(dst)}")
+
+    src_attrs, _ = src.__tensor_flatten__()  # type: ignore[attr-defined]
+    dst_attrs, _ = dst.__tensor_flatten__()  # type: ignore[attr-defined]
+    if src_attrs != dst_attrs:
+        raise AssertionError("expected matching subclass attrs")
+
+    tensor_attrs = [
+        attr for attr in src_attrs if isinstance(getattr(src, attr), torch.Tensor)
+    ]
+    fallback_proxy = (
+        get_proxy_slot(src, tracer, None) if len(tensor_attrs) == 1 else None
+    )
+
+    for attr in src_attrs:
+        src_inner = getattr(src, attr)
+        dst_inner = getattr(dst, attr)
+        if not isinstance(dst_inner, torch.Tensor):
+            continue
+
+        proxy = get_proxy_slot(src_inner, tracer, None)
+        if proxy is None:
+            proxy = fallback_proxy
+        if proxy is not None:
+            set_proxy_slot(dst_inner, tracer, proxy)
+
+        _copy_wrapper_subclass_inner_proxy_slots(src_inner, dst_inner, tracer)
 
 
 def _dispatch_out_dtype_dense(
@@ -164,9 +187,7 @@ def _dispatch_out_dtype_dense(
     fake_mode: FakeTensorMode | None = None,
     unwrap_temporary_output: bool = False,
 ):
-    functional_mode = torch.utils._python_dispatch._detect_infra_mode(
-        torch._C._TorchDispatchModeKey.FUNCTIONAL
-    )
+    functional_mode = _detect_functional_mode()
     if fake_mode is None:
         for arg in pytree.arg_tree_leaves(*args):
             fake_mode = maybe_get_fake_mode(arg)
@@ -213,11 +234,14 @@ def trace_out_dtype(proxy_mode, func_overload, op, output_dtype, *args):
         for arg in pytree.arg_tree_leaves(*args)
     )
     if has_wrapper_subclass_arg:
+        functional_mode = _detect_functional_mode()
         out = _dispatch_out_dtype_dense(op, output_dtype, *args)
+        if functional_mode is not None:
+            return out
+
         safe_out = pytree.tree_map(_unwrap_temporary_functional_result, out)
-        _copy_tracked_tensor_tree(
-            out, safe_out, proxy_mode.tracer, recurse_subclasses=True
-        )
+        _copy_tracked_tensor_tree(out, safe_out, proxy_mode.tracer)
+        _copy_wrapper_subclass_inner_proxy_slots(out, safe_out, proxy_mode.tracer)
         return safe_out
 
     with disable_proxy_modes_tracing():
@@ -300,3 +324,20 @@ def out_dtype_func(ctx, op, output_dtype, *args):
     with ctx.redispatch_to_next():
         res = out_dtype(op, output_dtype, *unwrapped_args)
     return ctx.wrap_tensors(res)
+
+
+# Generated Dynamo graphs reference these helpers through the exported operator
+# object at `torch._higher_order_ops.out_dtype`, not this module.
+out_dtype._dispatch_out_dtype_dense = _dispatch_out_dtype_dense  # type: ignore[attr-defined]
+out_dtype._unwrap_temporary_functional_result = (  # type: ignore[attr-defined]
+    _unwrap_temporary_functional_result
+)
+out_dtype.elementwise_dtypes = elementwise_dtypes  # type: ignore[attr-defined]
+out_dtype.is_int_mm = is_int_mm  # type: ignore[attr-defined]
+out_dtype.out_dtype_dense = out_dtype_dense  # type: ignore[attr-defined]
+out_dtype.out_dtype_fake_tensor_mode = out_dtype_fake_tensor_mode  # type: ignore[attr-defined]
+out_dtype.out_dtype_fallback = out_dtype_fallback  # type: ignore[attr-defined]
+out_dtype.out_dtype_func = out_dtype_func  # type: ignore[attr-defined]
+out_dtype.out_dtype_proxy = out_dtype_proxy  # type: ignore[attr-defined]
+out_dtype.trace_out_dtype = trace_out_dtype  # type: ignore[attr-defined]
+out_dtype.traceable_out_dtype_dense = traceable_out_dtype_dense  # type: ignore[attr-defined]
