@@ -375,13 +375,13 @@ class _force_original_view_tracking(_DecoratorContextManager):
     """
 
     def __init__(self, mode: bool) -> None:
+        # Defer mutation until the instance is actually used so construction does
+        # not leak state to sibling decorator factories or before a later `with`.
         self.mode = mode
         self.prev = False
         self._used = False
 
     def __del__(self) -> None:
-        # Delay the function-style mutation until the temporary is discarded so
-        # sibling decorator factories do not observe the requested mode.
         torch_c = getattr(torch, "_C", None)
         if not self._used and torch_c is not None:
             torch_c._set_view_replay_enabled(self.mode)
