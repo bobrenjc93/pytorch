@@ -2384,31 +2384,29 @@ For now, dynamo will explicitly graph break when it encounters user code with th
                         continue
 
                     fake_out = out_tensor_vt.as_proxy().node.meta["example_value"]
-                    if saved_out_shape is None:
-                        # Local/intermediate `out=` tensors skip only the resize
-                        # guard; they still flow through the shared contiguity
-                        # safeguard below.
-                        out_tensor_vt.synchronize_attributes(tx)  # type: ignore[attr-defined]
-                        fake_out = out_tensor_vt.as_proxy().node.meta["example_value"]
-                    elif (
+                    should_sync_out = saved_out_shape is None or (
                         saved_out_version is not None
                         and fake_out._version > saved_out_version
-                    ):
+                    )
+                    if should_sync_out:
                         out_tensor_vt.synchronize_attributes(tx)  # type: ignore[attr-defined]
                         fake_out = out_tensor_vt.as_proxy().node.meta["example_value"]
 
-                    shape_checked_fake_out = fake_out
+                    # Local/intermediate `out=` tensors skip only the resize
+                    # guard; they still flow through the shared contiguity
+                    # safeguard below.
+                    resize_checked_fake_out = fake_out
                     if (
                         saved_out_shape is not None
                         and result_out_vt is not None
                         and result_out_vt.is_tensor()
                     ):
-                        shape_checked_fake_out = result_out_vt.as_proxy().node.meta[
+                        resize_checked_fake_out = result_out_vt.as_proxy().node.meta[
                             "example_value"
                         ]
                     if (
                         saved_out_shape is not None
-                        and saved_out_shape != shape_checked_fake_out.shape
+                        and saved_out_shape != resize_checked_fake_out.shape
                     ):
                         # It's hard to get out variants with resizing on graph inputs work
                         # properly across dynamo/aot/inductor, just fall back.
@@ -2417,7 +2415,7 @@ For now, dynamo will explicitly graph break when it encounters user code with th
                             context=f"fn={self.value}, args={args}, kwargs={kwargs}",
                             explanation=(
                                 f"Shape mismatch when calling {self.value} with `out=`. "
-                                f"Provided `out=` shape: {saved_out_shape}. Actual shape: {shape_checked_fake_out.shape}."
+                                f"Provided `out=` shape: {saved_out_shape}. Actual shape: {resize_checked_fake_out.shape}."
                             ),
                             hints=[
                                 *graph_break_hints.SUPPORTABLE,
