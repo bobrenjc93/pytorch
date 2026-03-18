@@ -36,10 +36,13 @@ from torch._inductor.output_code import (
 )
 from torch._inductor.utils import should_use_remote_fx_graph_cache
 from torch._logging import getArtifactLogger
+from torch.fx.experimental._backward_state import BackwardState
+from torch.fx.experimental.symbolic_shapes import fx_placeholder_vals
 
 from .runtime_wrappers import (
     AOTDispatchAutograd,
     AOTDispatchSubclassWrapper,
+    AutogradLazyBackwardCompileInfo,
     CachedAutogradLazyBackwardCompileInfo,
     CompilerWrapper,
     FunctionalizedRngRuntimeWrapper,
@@ -313,8 +316,11 @@ def serialize_graph_module(gm: torch.fx.GraphModule) -> SerializedGraphModule:
     # NOTE: mutates the graph module
     gm.meta = {}
     for node in gm.graph.nodes:
+        placeholder_meta = {}
+        if node.op == "placeholder" and "val" in node.meta:
+            placeholder_meta["val"] = node.meta["val"]
         # pyrefly: ignore [implicit-any]
-        node.meta = {}
+        node.meta = placeholder_meta
     return SerializedGraphModule(gm)
 
 
@@ -461,8 +467,10 @@ class GenericAOTAutogradResult(Generic[TForward, TBackward]):
         with dynamo_timed("AOTAutogradCache.inductor_load"):
             compiled_fw_func = self.compiled_fw.load(args)
             compiled_bw_func = None
+            backward_state_indices = None
             if self.compiled_bw is not None:
                 compiled_bw_func = self.compiled_bw.load(args)
+                backward_state_indices = self.compiled_bw.backward_state_indices
                 needs_autograd = True
                 CompileEventLogger.try_add_pt2_compile(
                     "backend_compile", dispatch_mode="autograd"
@@ -490,13 +498,18 @@ class GenericAOTAutogradResult(Generic[TForward, TBackward]):
                     "is_backward": False,
                 }
 
-                needs_autograd = False
-                CompileEventLogger.try_add_pt2_compile(
-                    "backend_compile", dispatch_mode="inference"
-                )
                 compiled_fw_func = self.compiled_fw.post_compile(
                     compiled_fw_func, inference_fx_config
                 )
+                needs_autograd = self.serialized_bw_module is not None
+                if needs_autograd:
+                    CompileEventLogger.try_add_pt2_compile(
+                        "backend_compile", dispatch_mode="autograd"
+                    )
+                else:
+                    CompileEventLogger.try_add_pt2_compile(
+                        "backend_compile", dispatch_mode="inference"
+                    )
 
         # Wrap the forward function in post compile wrappers
         compiled_fw_func = AOTDispatchSubclassWrapper(
@@ -525,14 +538,31 @@ class GenericAOTAutogradResult(Generic[TForward, TBackward]):
         disable_amp = torch._C._is_any_autocast_enabled()
 
         if needs_autograd:
-            if self.compiled_bw is None:
-                raise AssertionError("compiled_bw must not be None when needs_autograd")
+            num_symints_saved_for_bw = self.runtime_metadata.num_symints_saved_for_bw
+            if num_symints_saved_for_bw is None:
+                raise AssertionError(
+                    "runtime_metadata.num_symints_saved_for_bw must not be None"
+                )
 
             cached_lazy_backward = None
             if self.serialized_bw_module is not None:
-                cached_lazy_backward = CachedAutogradLazyBackwardCompileInfo(
-                    self.serialized_bw_module.deserialize
-                )
+                if self.compiled_bw is None:
+                    bw_module = self.serialized_bw_module.deserialize()
+                    cached_lazy_backward = AutogradLazyBackwardCompileInfo(
+                        bw_module=bw_module,
+                        placeholder_list=fx_placeholder_vals(bw_module),
+                        saved_context=None,
+                        saved_compile_context=None,
+                    )
+                else:
+                    cached_lazy_backward = CachedAutogradLazyBackwardCompileInfo(
+                        self.serialized_bw_module.deserialize
+                    )
+
+            if backward_state_indices is None:
+                backward_state_indices = [
+                    idx for idx, x in enumerate(args) if isinstance(x, BackwardState)
+                ]
             # This function is run on both cache miss and cache hit, either here
             # or in aot_dispatch_autograd. On a cache hit,
             # 1. the bw is already compiled
@@ -542,8 +572,8 @@ class GenericAOTAutogradResult(Generic[TForward, TBackward]):
                 compiled_fw_func,
                 compiled_bw_func,
                 self.maybe_subclass_meta,
-                self.compiled_bw.num_symints_saved_for_bw_,
-                self.compiled_bw.backward_state_indices,
+                num_symints_saved_for_bw,
+                backward_state_indices,
                 disable_amp,
                 self.indices_of_inps_to_detach,
                 cached_lazy_backward,

@@ -2093,15 +2093,6 @@ def _aot_stage2b_bw_compile(
             should_eagerly_compile_backward = (
                 num_symints_saved_for_bw > 0
                 or aot_config.force_non_lazy_backward_lowering
-                or (
-                    aot_config.cache_info is not None
-                    # Some degenerate cacheable backwards have no saved tensors
-                    # or symints at all. Those lazy paths can finish a backward
-                    # without ever materializing a serializable compiled backward,
-                    # so the cache entry still needs an eager compile.
-                    and num_fw_outs_saved_for_bw == 0
-                    and num_symints_saved_for_bw == 0
-                )
             )
             if should_eagerly_compile_backward:
                 try:
@@ -2356,7 +2347,7 @@ def _cache_autograd_info(
         # close over aot_config.cache_info, since aot_config never changes.
         # But closing over random variables is confusing IMO, so I'm leaving it.
         def try_save_cache_entry(  # noqa: F811
-            compiled_bw_func: Callable[..., Any],
+            compiled_bw_func: Callable[..., Any] | None,
             bw_module: torch.fx.GraphModule,
             _fw_metadata: ViewAndMutationMeta,
             aot_config: AOTConfig,
@@ -2366,6 +2357,8 @@ def _cache_autograd_info(
             def should_save_cache() -> bool:
                 if should_bundle_autograd_cache():
                     return True
+                if compiled_bw_func is None:
+                    return hasattr(compiled_fw_func, "_fx_graph_cache_key")
                 else:
                     return hasattr(compiled_fw_func, "_fx_graph_cache_key") and hasattr(
                         compiled_bw_func, "_fx_graph_cache_key"
@@ -2380,7 +2373,11 @@ def _cache_autograd_info(
                 # use the compiled_bw_func's inductor compile time instead.
                 # It's possible this changes in the future, in which case we should
                 # update backward_time_taken_ns to be more inclusive
-                backward_time_taken_ns = getattr(compiled_bw_func, "_time_taken_ns", 0)
+                backward_time_taken_ns = (
+                    getattr(compiled_bw_func, "_time_taken_ns", 0)
+                    if compiled_bw_func is not None
+                    else 0
+                )
 
                 aot_forward_graph_str: str | None = fw_module_str
                 aot_backward_graph_str: str | None = bw_module_str
@@ -2422,6 +2419,22 @@ def _cache_autograd_info(
                 )
             entry = try_save_cache_entry(
                 compiled_bw_func,
+                bw_module,
+                fw_metadata,
+                aot_config,  # type: ignore[arg-type]
+            )
+            try_save_cache_entry = None
+        elif (
+            bw_module is not None
+            and num_fw_outs_saved_for_bw == 0
+            and num_symints_saved_for_bw == 0
+        ):
+            # Save a partial cache entry for degenerate lazy backwards that have
+            # no forward-saved state. These graphs can be compiled lazily from
+            # the serialized backward module on cache hit without forcing an
+            # ahead-of-time backward compile on cache miss.
+            entry = try_save_cache_entry(
+                None,
                 bw_module,
                 fw_metadata,
                 aot_config,  # type: ignore[arg-type]
