@@ -105,12 +105,12 @@ def _unwrap_temporary_functional_result(out):
     return torch._from_functional_tensor(out.elem)
 
 
-def _copy_tracked_tensor_tree(src, dst, tracer):
+def _copy_tracked_tensor_tree(src, dst, tracer, *, recurse_subclasses=False):
     if isinstance(src, torch.Tensor):
         if not isinstance(dst, torch.Tensor):
             raise AssertionError(f"expected tensor output, got {type(dst)}")
         set_proxy_slot(dst, tracer, get_proxy_slot(src, tracer))
-        if is_traceable_wrapper_subclass(src):
+        if recurse_subclasses and is_traceable_wrapper_subclass(src):
             if not is_traceable_wrapper_subclass(dst):
                 raise AssertionError(f"expected subclass output, got {type(dst)}")
             src_attrs, _ = src.__tensor_flatten__()  # type: ignore[attr-defined]
@@ -119,7 +119,10 @@ def _copy_tracked_tensor_tree(src, dst, tracer):
                 raise AssertionError("expected matching subclass attrs")
             for attr in src_attrs:
                 _copy_tracked_tensor_tree(
-                    getattr(src, attr), getattr(dst, attr), tracer
+                    getattr(src, attr),
+                    getattr(dst, attr),
+                    tracer,
+                    recurse_subclasses=True,
                 )
         return
 
@@ -127,21 +130,27 @@ def _copy_tracked_tensor_tree(src, dst, tracer):
         if not isinstance(dst, tuple) or len(src) != len(dst):
             raise AssertionError("expected matching tuple outputs")
         for src_item, dst_item in zip(src, dst):
-            _copy_tracked_tensor_tree(src_item, dst_item, tracer)
+            _copy_tracked_tensor_tree(
+                src_item, dst_item, tracer, recurse_subclasses=recurse_subclasses
+            )
         return
 
     if isinstance(src, list):
         if not isinstance(dst, list) or len(src) != len(dst):
             raise AssertionError("expected matching list outputs")
         for src_item, dst_item in zip(src, dst):
-            _copy_tracked_tensor_tree(src_item, dst_item, tracer)
+            _copy_tracked_tensor_tree(
+                src_item, dst_item, tracer, recurse_subclasses=recurse_subclasses
+            )
         return
 
     if isinstance(src, dict):
         if not isinstance(dst, dict) or src.keys() != dst.keys():
             raise AssertionError("expected matching dict outputs")
         for key in src:
-            _copy_tracked_tensor_tree(src[key], dst[key], tracer)
+            _copy_tracked_tensor_tree(
+                src[key], dst[key], tracer, recurse_subclasses=recurse_subclasses
+            )
 
 
 def _dispatch_out_dtype_dense(
@@ -174,12 +183,18 @@ def trace_out_dtype(proxy_mode, func_overload, op, output_dtype, *args):
     if r is not NotImplemented:
         return r
 
-    owns_functional_mode = (
-        torch.utils._python_dispatch._detect_infra_mode(
-            torch._C._TorchDispatchModeKey.FUNCTIONAL
-        )
-        is None
+    has_wrapper_subclass_arg = any(
+        isinstance(arg, torch.Tensor) and is_traceable_wrapper_subclass(arg)
+        for arg in pytree.arg_tree_leaves(*args)
     )
+    if has_wrapper_subclass_arg:
+        out = _dispatch_out_dtype_dense(op, output_dtype, *args)
+        safe_out = pytree.tree_map(_unwrap_temporary_functional_result, out)
+        _copy_tracked_tensor_tree(
+            out, safe_out, proxy_mode.tracer, recurse_subclasses=True
+        )
+        return safe_out
+
     with disable_proxy_modes_tracing():
         out = _dispatch_out_dtype_dense(op, output_dtype, *args)
 
@@ -189,11 +204,9 @@ def trace_out_dtype(proxy_mode, func_overload, op, output_dtype, *args):
         "call_function", func_overload, proxy_args, {}, name="out_dtype"
     )
     out = track_tensor_tree(out, out_proxy, constant=None, tracer=proxy_mode.tracer)
-    if owns_functional_mode:
-        safe_out = pytree.tree_map(_unwrap_temporary_functional_result, out)
-        _copy_tracked_tensor_tree(out, safe_out, proxy_mode.tracer)
-        return safe_out
-    return out
+    safe_out = pytree.tree_map(_unwrap_temporary_functional_result, out)
+    _copy_tracked_tensor_tree(out, safe_out, proxy_mode.tracer)
+    return safe_out
 
 
 @out_dtype.py_impl(DispatchKey.CompositeExplicitAutograd)
