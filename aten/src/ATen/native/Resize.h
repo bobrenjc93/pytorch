@@ -204,25 +204,34 @@ inline void checkAsStridedArgsUnchecked(
     T storage_offset) {
   TORCH_CHECK(
       size.size() == stride.size(), "mismatch in length of strides and shape");
-  for (const auto& val : stride) {
-    TORCH_MAYBE_SYM_CHECK(
-        sym_ge(val, 0),
-        "as_strided: Negative strides are not supported at the moment, "
-        "got strides: ",
-        stride);
-  }
   if constexpr (std::is_same_v<T, c10::SymInt>) {
-    // Some unchecked view ops (for example FakeTensor select with an
-    // unbacked index) materialize a data-dependent symbolic storage offset
-    // that is resolved later, so only validate symbolic offsets once they
-    // have a concrete hint.
-    if (storage_offset.has_hint()) {
-      TORCH_MAYBE_SYM_CHECK(
-          sym_ge(storage_offset, 0),
+    // Unchecked FakeTensor/Meta view replay can pass ephemeral symbolic
+    // metadata here, so only validate values once they are fully concrete.
+    for (const auto& val : stride) {
+      if (auto maybe_val = val.maybe_as_int()) {
+        TORCH_CHECK(
+            *maybe_val >= 0,
+            "as_strided: Negative strides are not supported at the moment, "
+            "got strides: ",
+            stride);
+      }
+    }
+
+    if (auto maybe_storage_offset = storage_offset.maybe_as_int()) {
+      TORCH_CHECK(
+          *maybe_storage_offset >= 0,
           "Tensor: invalid storage offset ",
           storage_offset);
     }
   } else {
+    for (const auto& val : stride) {
+      TORCH_CHECK(
+          val >= 0,
+          "as_strided: Negative strides are not supported at the moment, "
+          "got strides: ",
+          stride);
+    }
+
     TORCH_CHECK(
         storage_offset >= 0,
         "Tensor: invalid storage offset ",
