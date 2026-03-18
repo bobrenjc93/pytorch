@@ -328,7 +328,6 @@ class FakeTensorConverter:
 
     meta_converter: MetaConverter[FakeTensor]
     constant_storage_mapping: dict[StorageWeakRef, list[ReferenceType[FakeTensor]]]
-    constant_storage_refs: WeakTensorKeyDictionary
     export: bool
 
     def __init__(self, *, copy_data: bool = False, export: bool = False) -> None:
@@ -736,7 +735,7 @@ class SymNumberMemoDescriptor:
 
 
 def _constant_scalar_tensor(t: Tensor | None) -> Tensor | None:
-    if t is None or not _is_plain_tensor(t) or t.dim() != 0 or t.device.type != "cpu":
+    if t is None or not _is_plain_tensor(t) or t.dim() != 0:
         return None
     return t
 
@@ -764,7 +763,13 @@ class FakeTensor(Tensor):
     _fake_device: torch.device
     fake_mode: FakeTensorMode
     constant: Tensor | None
-    constant_scalar: Tensor | None
+    _constant_scalar: Tensor | None
+    _constant_scalar_vc: int | None
+    _constant_scalar_epoch: int | None
+    _constant_scalar_ref: StorageWeakRef | None
+    _constant_scalar_offset: object | None
+    _constant_scalar_size: tuple[object, ...] | None
+    _constant_scalar_stride: tuple[object, ...] | None
     real_tensor: Tensor | None
 
     # TODO: Generalize this as needed, e.g., into a trie of memos, if
@@ -811,6 +816,60 @@ class FakeTensor(Tensor):
     @fake_device.setter
     def fake_device(self, device: torch.device) -> None:
         self._fake_device = self._normalize_fake_device(device)
+
+    def _version_counter(self) -> int | None:
+        try:
+            return self._version
+        except RuntimeError:
+            return None
+
+    @property
+    def constant_scalar(self) -> Tensor | None:
+        r = getattr(self, "_constant_scalar", None)
+        if r is None:
+            return None
+
+        version = getattr(self, "_constant_scalar_vc", None)
+        epoch = getattr(self, "_constant_scalar_epoch", None)
+        storage_ref = getattr(self, "_constant_scalar_ref", None)
+        storage_offset = getattr(self, "_constant_scalar_offset", None)
+        size = getattr(self, "_constant_scalar_size", None)
+        stride = getattr(self, "_constant_scalar_stride", None)
+        if (
+            (version is not None and version != self._version_counter())
+            or (epoch is not None and epoch != self.fake_mode.epoch)
+            or storage_ref != self.fake_mode.fake_tensor_converter._constant_storage_ref(self)
+            or storage_offset != self.storage_offset()
+            or size != tuple(self.size())
+            or stride != tuple(self.stride())
+        ):
+            self.constant_scalar = None
+            return None
+        return r
+
+    @constant_scalar.setter
+    def constant_scalar(self, value: Tensor | None) -> None:
+        self._constant_scalar = value
+        if value is None:
+            self._constant_scalar_vc = None
+            self._constant_scalar_epoch = None
+            self._constant_scalar_ref = None
+            self._constant_scalar_offset = None
+            self._constant_scalar_size = None
+            self._constant_scalar_stride = None
+            return
+
+        # Track both the version counter and the current storage/view state so
+        # `set_data()`-style mutations invalidate the fallback even when they
+        # do not reenter FakeTensor dispatch.
+        self._constant_scalar_vc = self._version_counter()
+        self._constant_scalar_epoch = self.fake_mode.epoch
+        self._constant_scalar_ref = self.fake_mode.fake_tensor_converter._constant_storage_ref(
+            self
+        )
+        self._constant_scalar_offset = self.storage_offset()
+        self._constant_scalar_size = tuple(self.size())
+        self._constant_scalar_stride = tuple(self.stride())
 
     # Note: [Fake Tensor Dispatch Keys]
     # In order to model the behavior of device-specific autocast
@@ -3256,6 +3315,9 @@ class FakeTensorMode(TorchDispatchMode):
         if not same_storage:
             return False
 
+        if func is getattr(aten.set_, "source_Storage", None):
+            return True
+
         if func is not aten.set_.source_Storage_storage_offset:
             return False
 
@@ -3328,11 +3390,11 @@ class FakeTensorMode(TorchDispatchMode):
         if func is aten.set_data.default:
             fake_self = None
             if len(args) > 0 and self.is_our_fake(args[0]):
-                fake_self = cast(FakeTensor, args[0])
+                fake_self = args[0]
             else:
                 maybe_self = kwargs.get("self", kwargs.get("input"))
                 if self.is_our_fake(maybe_self):
-                    fake_self = cast(FakeTensor, maybe_self)
+                    fake_self = maybe_self
 
             if fake_self is not None:
                 if (
