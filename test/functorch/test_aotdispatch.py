@@ -2598,6 +2598,21 @@ def forward(self, primals_1, primals_2):
                 make_inputs_subclasses=True,
             )
 
+    @skipIfDynamoInput("Dynamo removes runtime error")
+    def test_subclass_inputs_expose_inner_aliased_mutation(self):
+        def f(a, b):
+            a.mul_(2)
+            return a + b
+
+        compiled_f = aot_function(f, nop)
+        x = torch.ones(2)
+
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "Encountered aliased inputs that are mutated in the graph, but",
+        ):
+            compiled_f(WrapperSubclass(x), WrapperSubclass(x))
+
     # https://github.com/pytorch/pytorch/issues/106456
     def test_input_mutation_noncontiguous(self):
         def f(a):

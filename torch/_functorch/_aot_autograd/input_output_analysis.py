@@ -9,6 +9,7 @@ In particular, the following analyses are provided:
 2. We also analyze the function signature for export graphs.
 """
 
+import collections
 import contextlib
 import itertools
 from typing import Any
@@ -19,6 +20,7 @@ from torch import Tensor
 from torch._C._dynamo.guards import compute_overlapping_tensors
 from torch._functorch._aot_autograd.schemas import PlainTensorMeta
 from torch._guards import StorageOverlap
+from torch.multiprocessing.reductions import StorageWeakRef
 from torch._subclasses.functional_tensor import FunctionalTensor
 from torch.fx.experimental.symbolic_shapes import is_concrete_int
 
@@ -111,6 +113,46 @@ def remove_dupe_metadata(
         subclass_tangent_meta=subclass_tangent_meta,
         is_train=m.is_train,
     )
+
+
+def has_aliased_input_mutation(
+    aot_config: AOTConfig,
+    fwd_inputs: list[Any],
+    input_info: list[InputAliasInfo],
+) -> bool:
+    """
+    Returns whether any tensor input that mutates data aliases another tensor
+    input. We need to re-run this check after tensor subclasses are desugared,
+    since distinct wrapper subclass inputs can unwrap to aliased dense tensors.
+    """
+    if len(fwd_inputs) != len(input_info):
+        raise AssertionError(
+            f"expected len(fwd_inputs) == len(input_info), "
+            f"got {len(fwd_inputs)} != {len(input_info)}"
+        )
+
+    if not any(info.mutates_data for info in input_info):
+        return False
+
+    storage_ref_to_idx: dict[StorageWeakRef, list[int]] = collections.defaultdict(list)
+    for i, inpt in enumerate(fwd_inputs):
+        if isinstance(inpt, Tensor):
+            storage_ref = StorageWeakRef(inpt.untyped_storage())
+            storage_ref_to_idx[storage_ref].append(i)
+
+    for aliased_input_indices in storage_ref_to_idx.values():
+        if len(aliased_input_indices) <= 1 or not any(
+            input_info[inpt_idx].mutates_data for inpt_idx in aliased_input_indices
+        ):
+            continue
+
+        aliased_input_indices_no_false_sharing = compute_overlapping_inputs(
+            aot_config, fwd_inputs, aliased_input_indices
+        )
+        if len(aliased_input_indices_no_false_sharing) > 1:
+            return True
+
+    return False
 
 
 # Given our ViewAndMutation metadata, this fn constructs a new set of metadata,

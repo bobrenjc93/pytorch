@@ -70,6 +70,7 @@ from .functional_utils import (
     to_fun,
     was_inductor_storage_resized,
 )
+from .input_output_analysis import has_aliased_input_mutation
 from .logging_utils import setup_stacktrace_preservation_hooks
 from .schemas import (
     AOTConfig,
@@ -1302,11 +1303,21 @@ def handle_effect_tokens_fn(
 # - fw_only: this is *always* the forward-only function.
 #   Why do we need this? We need to collect updated ViewAndMutationMeta on our new dense -> dense functions.
 #   In particular, we need this to tell the partitioner how many dense forward outputs there are.
+def _raise_subclass_aliased_input_mutation_error() -> None:
+    raise RuntimeError(
+        """\
+Encountered aliased inputs that are mutated in the graph, but at least one input/output
+to the graph is a tensor subclass. This is not supported today. You can try to
+remove the aliasing yourself as a workaround, or otherwise file an issue on github."""
+    )
+
+
 def aot_dispatch_subclass(
     flat_fn_maybe_joint: JointTraceFn | TraceFn,
     args: list[FxValue] | tuple[list[FxValue], list[FxValue]],
     args_descs: list[AOTInput] | tuple[list[AOTInput], list[AOTInput]],
     *,
+    aot_config: AOTConfig,
     is_joint_structure: bool,
     meta: ViewAndMutationMeta,
     fw_only: Callable[..., Any],
@@ -1460,6 +1471,14 @@ def aot_dispatch_subclass(
         is_train=meta.is_train,
         # pyrefly: ignore [not-iterable]
     )(*primals_unwrapped)
+
+    # The top-level duplicate/synthetic-base wrappers run before wrapper
+    # subclasses are flattened. Distinct subclass inputs can therefore expose
+    # aliased dense tensors only after desugaring, which we must reject.
+    if has_aliased_input_mutation(
+        aot_config, primals_unwrapped, meta_updated.input_info
+    ):
+        _raise_subclass_aliased_input_mutation_error()
 
     subclass_meta.fw_metadata = meta_updated
 
