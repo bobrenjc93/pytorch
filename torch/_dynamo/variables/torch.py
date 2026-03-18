@@ -2380,58 +2380,56 @@ For now, dynamo will explicitly graph break when it encounters user code with th
                     saved_out_shapes,
                     saved_out_versions,  # type: ignore[arg-type]
                 ):
-                    if not out_tensor_vt.is_tensor():
-                        continue
-
-                    fake_out = out_tensor_vt.as_proxy().node.meta["example_value"]
-                    should_sync_out = saved_out_shape is None or (
-                        saved_out_version is not None
-                        and fake_out._version > saved_out_version
-                    )
-                    if should_sync_out:
-                        out_tensor_vt.synchronize_attributes(tx)  # type: ignore[attr-defined]
+                    if out_tensor_vt.is_tensor():
                         fake_out = out_tensor_vt.as_proxy().node.meta["example_value"]
+                        should_sync_out = saved_out_shape is None or (
+                            saved_out_version is not None
+                            and fake_out._version > saved_out_version
+                        )
+                        if should_sync_out:
+                            out_tensor_vt.synchronize_attributes(tx)  # type: ignore[attr-defined]
+                            fake_out = out_tensor_vt.as_proxy().node.meta["example_value"]
 
-                    # Local/intermediate `out=` tensors skip only the resize
-                    # guard; they still flow through the shared contiguity
-                    # safeguard below.
-                    resize_checked_fake_out = fake_out
-                    if (
-                        saved_out_shape is not None
-                        and result_out_vt is not None
-                        and result_out_vt.is_tensor()
-                    ):
-                        resize_checked_fake_out = result_out_vt.as_proxy().node.meta[
-                            "example_value"
-                        ]
-                    if (
-                        saved_out_shape is not None
-                        and saved_out_shape != resize_checked_fake_out.shape
-                    ):
-                        # It's hard to get out variants with resizing on graph inputs work
-                        # properly across dynamo/aot/inductor, just fall back.
-                        unimplemented(
-                            gb_type="Shape mismatch with out= list of tensor variants",
-                            context=f"fn={self.value}, args={args}, kwargs={kwargs}",
-                            explanation=(
-                                f"Shape mismatch when calling {self.value} with `out=`. "
-                                f"Provided `out=` shape: {saved_out_shape}. Actual shape: {resize_checked_fake_out.shape}."
-                            ),
-                            hints=[
-                                *graph_break_hints.SUPPORTABLE,
-                            ],
-                        )
-                    if not torch._prims_common.is_contiguous(fake_out):
-                        # It's difficult to handle strides correctly in functionalization
-                        # when calling an out= op with a non-contiguous out argument
-                        unimplemented(
-                            gb_type="Attempted to call op with non-contiguous `out=` list of tensors",
-                            context=f"self.value={self.value}, args={args}, kwargs={kwargs}",
-                            explanation="Dynamo does not support this.",
-                            hints=[
-                                *graph_break_hints.SUPPORTABLE,
-                            ],
-                        )
+                        # Local/intermediate `out=` tensors skip only the resize
+                        # guard; they still flow through the shared contiguity
+                        # safeguard below.
+                        resize_checked_fake_out = fake_out
+                        if (
+                            saved_out_shape is not None
+                            and result_out_vt is not None
+                            and result_out_vt.is_tensor()
+                        ):
+                            resize_checked_fake_out = result_out_vt.as_proxy().node.meta[
+                                "example_value"
+                            ]
+                        if (
+                            saved_out_shape is not None
+                            and saved_out_shape != resize_checked_fake_out.shape
+                        ):
+                            # It's hard to get out variants with resizing on graph inputs work
+                            # properly across dynamo/aot/inductor, just fall back.
+                            unimplemented(
+                                gb_type="Shape mismatch with out= list of tensor variants",
+                                context=f"fn={self.value}, args={args}, kwargs={kwargs}",
+                                explanation=(
+                                    f"Shape mismatch when calling {self.value} with `out=`. "
+                                    f"Provided `out=` shape: {saved_out_shape}. Actual shape: {resize_checked_fake_out.shape}."
+                                ),
+                                hints=[
+                                    *graph_break_hints.SUPPORTABLE,
+                                ],
+                            )
+                        if not torch._prims_common.is_contiguous(fake_out):
+                            # It's difficult to handle strides correctly in functionalization
+                            # when calling an out= op with a non-contiguous out argument
+                            unimplemented(
+                                gb_type="Attempted to call op with non-contiguous `out=` list of tensors",
+                                context=f"self.value={self.value}, args={args}, kwargs={kwargs}",
+                                explanation="Dynamo does not support this.",
+                                hints=[
+                                    *graph_break_hints.SUPPORTABLE,
+                                ],
+                            )
             else:
                 assert out_kwarg_vt is not None and out_kwarg_vt.is_tensor()
                 if saved_out_shapes is None:
