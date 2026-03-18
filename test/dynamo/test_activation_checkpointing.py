@@ -28,6 +28,7 @@ from torch._dynamo.testing import (
     normalize_gm,
 )
 from torch._higher_order_ops.wrap import tag_activation_checkpoint
+from torch.testing._internal.common_cuda import SM89OrLater
 from torch.testing._internal.common_device_type import instantiate_device_type_tests
 from torch.testing._internal.common_utils import IS_WINDOWS, parametrize, skipIfHpu
 from torch.testing._internal.inductor_utils import HAS_CUDA_AND_TRITON
@@ -853,6 +854,117 @@ Non-primal fwd outputs from model w/o backward hook: {mod_no_hook_fwd_outputs_no
         self.assertEqual(len(cnt.graphs), 2)
         wrap_node = find_first_node(cnt.graphs[0], tag_activation_checkpoint)
         self.assertEqual(len(wrap_node.args), 3)
+
+    @requires_cuda_and_triton
+    @unittest.skipIf(not SM89OrLater, "requires SM89+ GPU")
+    @unittest.skipIf(IS_WINDOWS, "torch.compile doesn't work with windows")
+    @parametrize(
+        "partition_fn",
+        [
+            min_cut_rematerialization_partition,
+            default_partition,
+        ],
+    )
+    def test_compile_selective_checkpoint_scaled_mm_recomputes_inputs(
+        self, device, partition_fn
+    ):
+        float8_dtype = torch.float8_e4m3fn
+
+        def to_float8(x):
+            amax = torch.max(torch.abs(x))
+            scale = torch.finfo(float8_dtype).max / torch.clamp(
+                amax.float(), min=1e-12
+            )
+            x_fp8 = (x.float() * scale).to(float8_dtype)
+            return x_fp8, scale.reciprocal().reshape(1, 1)
+
+        @torch.compiler.allow_in_graph
+        class Fp8LinearFn(torch.autograd.Function):
+            @staticmethod
+            def forward(ctx, x, w_t):
+                x_fp8, scale_a = to_float8(x)
+                w_t_fp8, scale_b = to_float8(w_t)
+                out = torch._scaled_mm(
+                    x_fp8,
+                    w_t_fp8.t(),
+                    scale_a=scale_a,
+                    scale_b=scale_b,
+                    out_dtype=torch.bfloat16,
+                    use_fast_accum=False,
+                )
+                ctx.save_for_backward(x, w_t)
+                return out
+
+            @staticmethod
+            def backward(ctx, grad_out):
+                x, w_t = ctx.saved_tensors
+                grad_x = grad_out @ w_t
+                grad_w_t = grad_out.t() @ x
+                return grad_x, grad_w_t
+
+        def selective_checkpointing_context_fn():
+            def policy_fn(ctx, op, *args, **kwargs):
+                if op == torch.ops.aten._scaled_mm.default:
+                    return CheckpointPolicy.MUST_SAVE
+                return CheckpointPolicy.PREFER_RECOMPUTE
+
+            return create_selective_checkpoint_contexts(policy_fn)
+
+        def gn(x, w):
+            out = Fp8LinearFn.apply(x, w)
+            return x + torch.relu(out)
+
+        def fn(x, w):
+            return torch.utils.checkpoint.checkpoint(
+                gn,
+                x,
+                w,
+                use_reentrant=False,
+                context_fn=selective_checkpointing_context_fn,
+            )
+
+        x = torch.randn(32, 32, requires_grad=True, device=device, dtype=torch.bfloat16)
+        w = torch.randn(32, 32, requires_grad=True, device=device, dtype=torch.bfloat16)
+
+        fw_graphs = []
+
+        def record_graph(gm, _example_inputs):
+            fw_graphs.append(gm)
+            return gm.forward
+
+        backend = aot_autograd(
+            fw_compiler=record_graph,
+            bw_compiler=nop,
+            partition_fn=partition_fn,
+        )
+        self._validate(fn, backend, x, w)
+
+        fw_graph = fw_graphs[0]
+        scaled_mm_node = find_first_node(fw_graph, torch.ops.aten._scaled_mm.default)
+        self.assertIsNotNone(scaled_mm_node)
+
+        return_node = next(node for node in fw_graph.graph.nodes if node.op == "output")
+        saved_outputs = {
+            output.name
+            for output in return_node.args[0]
+            if isinstance(output, torch.fx.Node)
+            and not output.name.startswith("primals_")
+        }
+        scaled_mm_inputs = {
+            arg.name
+            for arg in scaled_mm_node.args
+            if isinstance(arg, torch.fx.Node) and not arg.name.startswith("primals_")
+        }
+        self.assertTrue(scaled_mm_inputs)
+        self.assertFalse(
+            saved_outputs & scaled_mm_inputs,
+            msg=(
+                "SAC should recompute non-primal _scaled_mm inputs instead of "
+                f"saving them in the forward graph outputs, but saved "
+                f"{saved_outputs & scaled_mm_inputs}. "
+                f"Forward outputs: {saved_outputs}. _scaled_mm inputs: {scaled_mm_inputs}."
+            ),
+        )
 
     @requires_cuda_and_triton
     @unittest.skipIf(IS_WINDOWS, "torch.compile doesn't work with windows")
