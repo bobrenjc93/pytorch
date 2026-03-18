@@ -10470,6 +10470,39 @@ def ___make_guard_fn():
             self.assertEqual(out_size, torch.Size([2, 272]))
             self.assertEqual(out_value.shape, torch.Size([2, 272]))
 
+    def test_out_variant_custom_callable_checks_actual_out(self):
+        @allow_in_graph
+        def resize_out_return_view(x, out):
+            torch.diff(x, n=0, out=out)
+            return out[:1]
+
+        @allow_in_graph
+        def resize_out_list_return_partial(x, out):
+            torch.split_with_sizes_copy(x, [1, 2], out=out)
+            return [out[0]]
+
+        @torch.compile(backend="eager", fullgraph=True)
+        def f_single(x, out):
+            resize_out_return_view(x, out=out)
+            return out
+
+        @torch.compile(backend="eager", fullgraph=True)
+        def f_list(x, out):
+            resize_out_list_return_partial(x, out=out)
+            return out
+
+        with self.assertRaisesRegex(
+            torch._dynamo.exc.Unsupported,
+            "Shape mismatch with out= tensor variant",
+        ):
+            f_single(torch.tensor([0.0, 2.0]), torch.empty(1))
+
+        with self.assertRaisesRegex(
+            torch._dynamo.exc.Unsupported,
+            "Shape mismatch with out= list of tensor variants",
+        ):
+            f_list(torch.tensor([0.0, 1.0, 2.0]), [torch.empty(1), torch.empty(1)])
+
     @torch._dynamo.config.patch(capture_scalar_outputs=True)
     def test_runtime_assert_replacement(self):
         @torch.compile(backend="eager")

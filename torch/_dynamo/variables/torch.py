@@ -2361,22 +2361,8 @@ For now, dynamo will explicitly graph break when it encounters user code with th
             # metadata after fake propagation, the in-place mutation semantics
             # is preserved in the FX graph, so we won't have correctness issues.
             if isinstance(saved_out_shapes, list):
-                result_out_vts = (
-                    tensor_variable.items
-                    if isinstance(
-                        tensor_variable,
-                        (TupleVariable, ListVariable, NamedTupleVariable),
-                    )
-                    else [None] * len(saved_out_shapes)
-                )
-                for (
-                    out_tensor_vt,
-                    result_out_vt,
-                    saved_out_shape,
-                    saved_out_version,
-                ) in zip(
+                for out_tensor_vt, saved_out_shape, saved_out_version in zip(
                     out_kwarg_vt.items,  # type: ignore[union-attr]
-                    result_out_vts,
                     saved_out_shapes,
                     saved_out_versions,  # type: ignore[arg-type]
                 ):
@@ -2390,21 +2376,13 @@ For now, dynamo will explicitly graph break when it encounters user code with th
                             out_tensor_vt.synchronize_attributes(tx)  # type: ignore[attr-defined]
                             fake_out = out_tensor_vt.as_proxy().node.meta["example_value"]
 
-                        # Local/intermediate `out=` tensors skip only the resize
-                        # guard; they still flow through the shared contiguity
-                        # safeguard below.
-                        resize_checked_fake_out = fake_out
+                        # Keep resize and contiguity checks attached to the
+                        # actual `out=` slots. `@allow_in_graph` and other
+                        # custom callables can mutate `out=` but return
+                        # something that does not mirror that container.
                         if (
                             saved_out_shape is not None
-                            and result_out_vt is not None
-                            and result_out_vt.is_tensor()
-                        ):
-                            resize_checked_fake_out = result_out_vt.as_proxy().node.meta[
-                                "example_value"
-                            ]
-                        if (
-                            saved_out_shape is not None
-                            and saved_out_shape != resize_checked_fake_out.shape
+                            and saved_out_shape != fake_out.shape
                         ):
                             # It's hard to get out variants with resizing on graph inputs work
                             # properly across dynamo/aot/inductor, just fall back.
@@ -2413,7 +2391,7 @@ For now, dynamo will explicitly graph break when it encounters user code with th
                                 context=f"fn={self.value}, args={args}, kwargs={kwargs}",
                                 explanation=(
                                     f"Shape mismatch when calling {self.value} with `out=`. "
-                                    f"Provided `out=` shape: {saved_out_shape}. Actual shape: {resize_checked_fake_out.shape}."
+                                    f"Provided `out=` shape: {saved_out_shape}. Actual shape: {fake_out.shape}."
                                 ),
                                 hints=[
                                     *graph_break_hints.SUPPORTABLE,
@@ -2443,8 +2421,6 @@ For now, dynamo will explicitly graph break when it encounters user code with th
                     ):
                         out_kwarg_vt.synchronize_attributes(tx)  # type: ignore[attr-defined]
                 fake_out = out_kwarg_vt.as_proxy().node.meta["example_value"]
-                if saved_out_shapes is not None and tensor_variable.is_tensor():
-                    fake_out = tensor_variable.as_proxy().node.meta["example_value"]
                 if saved_out_shapes is not None and saved_out_shapes != fake_out.shape:
                     # It's hard to get out variants with resizing on graph inputs work
                     # properly across dynamo/aot/inductor, just fall back.
