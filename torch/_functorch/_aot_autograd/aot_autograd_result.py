@@ -22,7 +22,7 @@ import json
 import logging
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Sequence
-from copy import copy
+from copy import copy, deepcopy
 from dataclasses import dataclass
 from typing import Any, Generic, TYPE_CHECKING, TypeVar
 
@@ -313,15 +313,18 @@ class SerializedGraphModule:
 
 
 def serialize_graph_module(gm: torch.fx.GraphModule) -> SerializedGraphModule:
-    # NOTE: mutates the graph module
-    gm.meta = {}
-    for node in gm.graph.nodes:
+    # Serialize a copy so lazy backward compilation can keep using the live graph.
+    with torch._subclasses.fake_tensor.unset_fake_temporarily():
+        serialized_gm = deepcopy(gm)
+
+    serialized_gm.meta = {}
+    for node in serialized_gm.graph.nodes:
         placeholder_meta = {}
         if node.op == "placeholder" and "val" in node.meta:
             placeholder_meta["val"] = node.meta["val"]
         # pyrefly: ignore [implicit-any]
         node.meta = placeholder_meta
-    return SerializedGraphModule(gm)
+    return SerializedGraphModule(serialized_gm)
 
 
 TForward = TypeVar("TForward", bound="InductorOutput[Any]")
