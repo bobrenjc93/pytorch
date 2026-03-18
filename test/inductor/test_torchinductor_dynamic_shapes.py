@@ -151,6 +151,45 @@ if HAS_CPU:
             self.assertIs(may_get_constant_buffer_dtype(symint), torch.int64)
             self.assertIs(may_get_constant_buffer_dtype(symbool), torch.bool)
 
+        def _make_graph_with_symbool_input(self):
+            from torch.fx.experimental.symbolic_shapes import ShapeEnv
+
+            shape_env = ShapeEnv()
+            pred_input = shape_env.create_unbacked_symbool()
+            self.assertIsInstance(pred_input.node.expr, sympy.Equality)
+
+            x_input = torch.randn(2, 3)
+            fake_mode = torch._subclasses.FakeTensorMode(shape_env=shape_env)
+            with fake_mode:
+                fake_x = fake_mode.from_tensor(x_input)
+                fake_y = torch.ops.aten.neg.default(fake_x)
+
+            graph = torch.fx.Graph()
+            x = graph.placeholder("x")
+            pred = graph.placeholder("pred")
+            y = graph.call_function(torch.ops.aten.neg.default, (x,))
+            graph.output((y, pred))
+
+            gm = torch.fx.GraphModule({}, graph)
+            x.meta["val"] = fake_x
+            pred.meta["val"] = pred_input
+            y.meta["val"] = fake_y
+            gm.graph.lint()
+            gm.recompile()
+            return gm, shape_env, fake_mode, x_input, pred_input
+
+        def _make_graph_lowering(
+            self, gm, shape_env, x_input, pred_input, **graph_kwargs
+        ):
+            from torch._inductor.graph import GraphLowering
+
+            return GraphLowering(
+                gm,
+                example_inputs=(x_input, pred_input),
+                shape_env=shape_env,
+                **graph_kwargs,
+            )
+
         def test_graph_lowering_accepts_sympy_eq_graph_input(self):
             from torch._inductor.debug import DebugContext
             from torch._inductor.graph import GraphLowering
@@ -195,36 +234,14 @@ if HAS_CPU:
 
         def test_graph_lowering_codegen_preserves_unbacked_symbool_graph_input(self):
             from torch._inductor.debug import DebugContext
-            from torch._inductor.graph import (
-                GraphLowering,
-                may_get_constant_buffer_dtype,
+            from torch._inductor.graph import may_get_constant_buffer_dtype
+
+            gm, shape_env, fake_mode, x_input, pred_input = (
+                self._make_graph_with_symbool_input()
             )
-            from torch.fx.experimental.symbolic_shapes import ShapeEnv
-
-            shape_env = ShapeEnv()
-            pred_input = shape_env.create_unbacked_symbool()
-            self.assertIsInstance(pred_input.node.expr, sympy.Equality)
-
-            x_input = torch.randn(2, 3)
-            fake_mode = torch._subclasses.FakeTensorMode(shape_env=shape_env)
-            with fake_mode:
-                fake_x = fake_mode.from_tensor(x_input)
-                fake_y = torch.ops.aten.neg.default(fake_x)
-
-            graph = torch.fx.Graph()
-            x = graph.placeholder("x")
-            pred = graph.placeholder("pred")
-            y = graph.call_function(torch.ops.aten.neg.default, (x,))
-            graph.output((y, pred))
-
-            gm = torch.fx.GraphModule({}, graph)
-            x.meta["val"] = fake_x
-            pred.meta["val"] = pred_input
-            y.meta["val"] = fake_y
-            gm.graph.lint()
-            gm.recompile()
-
-            graph_lowering = GraphLowering(gm, shape_env=shape_env)
+            graph_lowering = self._make_graph_lowering(
+                gm, shape_env, x_input, pred_input
+            )
             with (
                 V.set_fake_mode(fake_mode),
                 V.set_graph_handler(graph_lowering),
@@ -237,6 +254,33 @@ if HAS_CPU:
 
                 wrapper_code, _ = graph_lowering.codegen()
                 self.assertIn(", pred, )", wrapper_code.value)
+
+        def test_graph_lowering_aot_cpp_wrapper_accepts_unbacked_symbool_graph_input(
+            self,
+        ):
+            from torch._inductor.debug import DebugContext
+
+            gm, shape_env, fake_mode, x_input, pred_input = (
+                self._make_graph_with_symbool_input()
+            )
+            graph_lowering = self._make_graph_lowering(
+                gm,
+                shape_env,
+                x_input,
+                pred_input,
+                cpp_wrapper=True,
+                aot_mode=True,
+            )
+            with (
+                V.set_fake_mode(fake_mode),
+                V.set_graph_handler(graph_lowering),
+                V.set_debug_handler(DebugContext()),
+            ):
+                graph_lowering.run(x_input, pred_input)
+                wrapper_code, _ = graph_lowering.codegen_with_cpp_wrapper()
+                self.assertIn(
+                    "aoti_torch_item_bool(inputs[1], &pred)", wrapper_code.value
+                )
 
         def test_graph_lowering_avoids_int_placeholder_name_collisions(self):
             from torch._inductor.debug import DebugContext

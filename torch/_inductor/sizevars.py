@@ -29,6 +29,7 @@ from . import config
 from .runtime.runtime_utils import is_power_of_2
 from .utils import (
     has_free_symbols,
+    is_sympy_boolean,
     sympy_index_symbol,
     sympy_index_symbol_with_prefix,
     sympy_subs,
@@ -711,9 +712,13 @@ class SizeVarAllocator:
 
         return None
 
-    def optimization_hint(self, expr: Expr | int, fallback: int | None = None) -> int:
+    def optimization_hint(
+        self,
+        expr: Expr | sympy.logic.boolalg.Boolean | int | bool,
+        fallback: int | bool | None = None,
+    ) -> int:
         """
-        Return a concrete integer hint for an expression.
+        Return a concrete integer or boolean hint for an expression.
 
         This function should be used for non-guarding based optimizations. If you
         want a hint that you can guard on, use the guarding_hint API instead.
@@ -723,11 +728,20 @@ class SizeVarAllocator:
         that try to maximize consistency with the shape environment.
 
         Special cases:
+        - Boolean relations: evaluates them with a boolean fallback.
         - Complex numbers (containing sympy.I): raises an error since tensor
           dimensions cannot be complex.
         - Infinity (int_oo, sympy.oo): returns sys.maxsize.
         - NaN (sympy.nan): returns the fallback value.
         """
+        if isinstance(expr, bool):
+            return expr
+        if is_sympy_boolean(expr):
+            return self.evaluate_expr(
+                expr,
+                fallback_value=False if fallback is None else bool(fallback),
+            )
+
         # Read config at call time to respect runtime patches (e.g., in tests)
         if fallback is None:
             fallback = config.unbacked_symint_fallback

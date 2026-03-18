@@ -60,6 +60,7 @@ from ..utils import (
     is_sympy_boolean,
     is_using_cudagraph_partition,
     LineContext,
+    SYMBOLIC_SCALAR_TYPES,
     sympy_product,
     sympy_str,
     sympy_subs,
@@ -93,7 +94,6 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 pexpr = PythonPrinter().doprint
-SYMBOLIC_SCALAR_TYPES = (sympy.Expr, sympy.logic.boolalg.Boolean)
 
 
 ReuseKey = tuple[torch.device, torch.dtype, str, bool]
@@ -1525,8 +1525,11 @@ class PythonWrapperCodegen(CodeGen):
                 replacements[value] = sympy.Symbol(name, **value.assumptions0)
                 continue
 
-            # Boolean graph-input relations, such as Eq(u0, 1), need to be
-            # materialized as standalone placeholders at graph boundaries.
+            # torch.compile commonly materializes SymBool placeholders as
+            # relations like Eq(u0, 1) rather than standalone Symbol nodes.
+            # When those relations cross a graph boundary, rewrite the whole
+            # relation to the runtime placeholder name so wrapper-emitted
+            # expressions do not leak internal unbacked symbols such as u0/u1.
             if is_sympy_boolean(value):
                 assert isinstance(value, sympy.Basic)
                 if not value.is_Atom:
@@ -2512,24 +2515,17 @@ class PythonWrapperCodegen(CodeGen):
                         output.writeline("import pickle")
                     output.writeline(f"global {name}")
                     add_torchbind_input(name, value.get_real_obj())
-                elif isinstance(value, sympy.Expr):  # Don't need to add symbolic
+                elif isinstance(value, SYMBOLIC_SCALAR_TYPES):  # Don't need to add symbolic
                     # TODO: this fallback and those below actually will generate possibly
                     # invalid benchmark code, because it's not guaranteed 42
                     # is actually a valid value for the kernel in question.
                     # See https://github.com/pytorch/pytorch/issues/124686
-                    if getattr(value, "is_Boolean", False):
-                        add_expr_input(
-                            name,
-                            V.graph.sizevars.evaluate_expr(value, fallback_value=False),
-                        )
-                    else:
-                        add_expr_input(
-                            name, V.graph.sizevars.optimization_hint(value, fallback=42)
-                        )
-                elif isinstance(value, sympy.logic.boolalg.Boolean):
                     add_expr_input(
                         name,
-                        V.graph.sizevars.evaluate_expr(value, fallback_value=False),
+                        V.graph.sizevars.optimization_hint(
+                            value,
+                            fallback=False if is_sympy_boolean(value) else 42,
+                        ),
                     )
                 elif isinstance(value, ir.GeneratorState):
                     add_expr_input(

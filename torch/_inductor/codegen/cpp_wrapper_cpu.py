@@ -35,6 +35,7 @@ from ..utils import (
     is_sympy_boolean,
     LineContext,
     normalize_name,
+    SYMBOLIC_SCALAR_TYPES,
 )
 from ..virtualized import V
 from .aoti_hipify_utils import maybe_hipify_code_wrapper
@@ -62,10 +63,6 @@ if TYPE_CHECKING:
 
 class HasWriteLine(Protocol):
     def writeline(self, line: LineContext | DeferredLineBase | str) -> None: ...
-
-
-SYMBOLIC_SCALAR_TYPES = (sympy.Expr, sympy.logic.boolalg.Boolean)
-
 
 class CppWrapperCpu(PythonWrapperCodegen):
     """

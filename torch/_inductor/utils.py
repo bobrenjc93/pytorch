@@ -2814,6 +2814,15 @@ def get_sympy_Expr_dtype(val: sympy.Expr) -> torch.dtype:
         return torch.float64
 
 
+SYMBOLIC_SCALAR_TYPES = (sympy.Expr, sympy.logic.boolalg.Boolean)
+
+
+def is_symbolic_scalar(
+    expr: object,
+) -> TypeGuard[sympy.Expr | sympy.logic.boolalg.Boolean]:
+    return isinstance(expr, SYMBOLIC_SCALAR_TYPES)
+
+
 def is_sympy_boolean(expr: sympy.Basic) -> TypeGuard[sympy.logic.boolalg.Boolean]:
     # SymPy symbols are also instances of Boolean at runtime, so guard on
     # non-Expr booleans to distinguish actual relations/boolean atoms.

@@ -109,10 +109,12 @@ from .utils import (
     get_donated_idxs,
     get_sympy_Expr_dtype,
     GraphPartitionMap,
+    is_symbolic_scalar,
     is_same_tensor,
     is_sympy_boolean,
     maybe_get_suppress_shape_guards_ctx,
     normalize_name,
+    SYMBOLIC_SCALAR_TYPES,
     should_assume_input_aligned,
     should_fallback_by_default,
     SUPPORTED_MKLDNN_DEVICES,
@@ -156,30 +158,15 @@ else:
 def may_get_constant_buffer_dtype(
     constant_buffer: sympy.Expr | SympyBoolean,
 ) -> torch.dtype | None:
-    assert isinstance(
-        constant_buffer,
-        (
-            sympy.Symbol,
-            sympy.Expr,
-            sympy.logic.boolalg.Boolean,
-            sympy.core.numbers.Integer,
-        ),
-    ), "get_constant_buffer_dtype only supports symbolic scalar inputs"
-    if isinstance(constant_buffer, sympy.core.numbers.Integer):
-        return torch.int64
+    assert is_symbolic_scalar(constant_buffer), (
+        "get_constant_buffer_dtype only supports symbolic scalar inputs"
+    )
 
     if is_sympy_boolean(constant_buffer):
         return torch.bool
 
-    if isinstance(constant_buffer, sympy.Expr):
-        return get_sympy_Expr_dtype(constant_buffer)
-
-    if constant_buffer.is_integer:
-        return torch.int64
-    elif constant_buffer.is_float:
-        return torch.float32
-    else:
-        return None
+    assert isinstance(constant_buffer, sympy.Expr)
+    return get_sympy_Expr_dtype(constant_buffer)
 
 
 def is_magic_method(op: Any) -> bool:
@@ -1202,25 +1189,29 @@ class GraphLowering(torch.fx.Interpreter):
 
             return non_dup_const_name
 
-    def _allocate_int_placeholder_symbol(self, target: str) -> sympy.Symbol:
-        base_name = f"{target}_symint"
-        existing_names = OrderedSet(
+    @functools.cached_property
+    def _reserved_int_placeholder_names(self) -> OrderedSet[str]:
+        reserved_names = OrderedSet(
             self.qualify_name(node.target)
             for node in self.module.graph.nodes  # type: ignore[union-attr]
             if node.op == "placeholder"
         )
-        existing_names.update(
+        reserved_names.update(
             str(value)
             for value in self.graph_inputs.values()
             if isinstance(value, sympy.Symbol)
         )
+        return reserved_names
 
+    def _allocate_int_placeholder_symbol(self, target: str) -> sympy.Symbol:
+        base_name = f"{target}_symint"
         symbol_name = base_name
         counter = 0
-        while symbol_name in existing_names:
+        while symbol_name in self._reserved_int_placeholder_names:
             counter += 1
             symbol_name = f"{base_name}_{counter}"
 
+        self._reserved_int_placeholder_names.add(symbol_name)
         return sympy.Symbol(symbol_name, integer=True)
 
     # pyrefly: ignore [bad-override]
@@ -1582,8 +1573,7 @@ class GraphLowering(torch.fx.Interpreter):
                     ir.Constant,
                     type(None),
                     ir.ConstantBuffer,
-                    sympy.Expr,
-                    sympy.logic.boolalg.Boolean,
+                    *SYMBOLIC_SCALAR_TYPES,
                     int,
                     ir.EffectfulKernel,
                     ir.ShapeAsConstantBuffer,
@@ -1632,8 +1622,7 @@ class GraphLowering(torch.fx.Interpreter):
                 value,
                 (
                     TensorBox,
-                    sympy.Expr,
-                    sympy.logic.boolalg.Boolean,
+                    *SYMBOLIC_SCALAR_TYPES,
                     torch._inductor.ir.GeneratorState,
                 ),
             ), f"Unsupported inductor graph input type: {type(value)}"

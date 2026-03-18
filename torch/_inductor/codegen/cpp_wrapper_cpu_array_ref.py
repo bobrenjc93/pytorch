@@ -2,14 +2,12 @@
 from collections.abc import Callable, Sequence
 from typing import Any
 
-import sympy
-
 import torch
 import torch._inductor.async_compile  # noqa: F401 required to warm up AsyncCompile pools
 import torch._ops
 
 from .. import config, ir
-from ..utils import sympy_product
+from ..utils import sympy_product, SYMBOLIC_SCALAR_TYPES
 from ..virtualized import V
 from .cpp_utils import DTYPE_TO_CPP
 from .cpp_wrapper_cpu import CppWrapperCpu
@@ -31,7 +29,6 @@ BufferName = str
 # - Windows: 1 MB
 # Just pick something comfortably smaller than the smallest for now.
 MAX_STACK_ALLOCATION_SIZE = 1024 * 100
-SYMBOLIC_SCALAR_TYPES = (sympy.Expr, sympy.logic.boolalg.Boolean)
 
 
 class CppWrapperCpuArrayRef(CppWrapperCpu):

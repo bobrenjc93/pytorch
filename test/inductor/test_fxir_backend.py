@@ -1111,6 +1111,43 @@ def forward(self, arg0_1, arg1_1, arg2_1):
         x = torch.randn(7, device=self.device)
         self.check(M(), (x,), dynamic_shapes=({0: Dim.DYNAMIC},))
 
+    def test_aoti_fx_symbool_placeholder_input(self):
+        from torch.fx.experimental.symbolic_shapes import ShapeEnv
+
+        class M(torch.nn.Module):
+            def forward(self, pred, x):
+                def true_fn(t):
+                    return t + 1
+
+                def false_fn(t):
+                    return t - 1
+
+                return torch.cond(pred, true_fn, false_fn, (x,))
+
+        # AOT partition boundaries can present symbolic compares such as
+        # `EP > 1` to the FX wrapper as explicit SymBool placeholders.
+        shape_env = ShapeEnv()
+        pred = shape_env.create_unbacked_symbool()
+        x = torch.ones(4, device=self.device)
+
+        ep = torch.export.export(M(), (pred, x), strict=False)
+        gm = torch._inductor.aot_compile(
+            ep.module(),
+            (pred, x),
+            options={"fx_wrapper": True, **test_config},
+        )
+
+        self.assertEqual(
+            len(
+                gm.graph.find_nodes(
+                    op="call_function", target=torch.ops.higher_order.cond
+                )
+            ),
+            1,
+        )
+        self.assertEqual(len(gm.graph.find_nodes(op="placeholder")), 2)
+        self.assertTrue(same(ep.module()(pred, x), gm(pred, x)))
+
     @parametrize("dynamic", (False, True))
     @parametrize("input_", (1.5, 2, False))
     def test_item(self, input_, dynamic: bool):
