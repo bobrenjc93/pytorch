@@ -358,6 +358,8 @@ class FakeTensorConverter:
         if is_sparse_any(tensor):
             return None
         try:
+            if isinstance(tensor, FakeTensor):
+                return StorageWeakRef(tensor._raw_untyped_storage())
             return StorageWeakRef(tensor._typed_storage())
         except TypeError:
             return None
@@ -740,13 +742,15 @@ def _constant_scalar_tensor(t: Tensor | None) -> Tensor | None:
     return t
 
 
-def _extract_constant_scalar(t: Tensor | None) -> bool | int | float | None:
+def _extract_constant_scalar(
+    t: Tensor | None,
+) -> bool | int | float | complex | None:
     if (t := _constant_scalar_tensor(t)) is None:
         return None
 
     with no_dispatch():
         value = t.item()
-    if isinstance(value, (bool, int, float)):
+    if isinstance(value, (bool, int, float, complex)):
         return value
     return None
 
@@ -838,7 +842,8 @@ class FakeTensor(Tensor):
         if (
             (version is not None and version != self._version_counter())
             or (epoch is not None and epoch != self.fake_mode.epoch)
-            or storage_ref != self.fake_mode.fake_tensor_converter._constant_storage_ref(self)
+            or storage_ref
+            != self.fake_mode.fake_tensor_converter._constant_storage_ref(self)
             or storage_offset != self.storage_offset()
             or size != tuple(self.size())
             or stride != tuple(self.stride())
@@ -1212,6 +1217,21 @@ class FakeTensor(Tensor):
         else:
             return [elem.tolist() for elem in self]
 
+    def _raw_untyped_storage(self):
+        return super().untyped_storage()
+
+    def _typed_storage(self):
+        return torch.TypedStorage(
+            wrap_storage=self._raw_untyped_storage(),
+            dtype=self.dtype,
+            _internal=True,
+        )
+
+    def storage(self):
+        torch.storage._warn_typed_storage_removal(stacklevel=2)
+        self._invalidate_constant_on_storage_access()
+        return self._typed_storage()
+
     def _invalidate_constant_on_storage_access(self) -> None:
         # Storage inspection exposes aliasing, so later writes must stop
         # treating the touched constant storage as tensor-wide immutable.
@@ -1226,7 +1246,7 @@ class FakeTensor(Tensor):
 
     def untyped_storage(self):
         self._invalidate_constant_on_storage_access()
-        return super().untyped_storage()
+        return self._raw_untyped_storage()
 
     def item(self):
         if self.constant is not None:
@@ -1319,7 +1339,13 @@ def extract_tensor_metadata(t: Tensor) -> TensorMetadata:
         memory_format,
         storage_offset,
         # Only set storage_bytes for tensors that have storage (not sparse)
-        t.untyped_storage().nbytes() if not is_sparse_any(t) else None,
+        (
+            t._raw_untyped_storage().nbytes()
+            if isinstance(t, FakeTensor)
+            else t.untyped_storage().nbytes()
+        )
+        if not is_sparse_any(t)
+        else None,
         t.requires_grad,
         t.is_quantized,
         t.is_conj(),
@@ -2288,7 +2314,7 @@ class FakeTensorMode(TorchDispatchMode):
             view_arg = args[cast(int, entry.view_idx)]
             if not isinstance(view_arg, FakeTensor):
                 raise AssertionError("view_arg must be a FakeTensor")
-            storage = view_arg.untyped_storage()
+            storage = view_arg._raw_untyped_storage()
             with in_kernel_invocation_manager(self), maybe_suppress():
                 empty.set_(storage, storage_offset, shape, stride)
 
