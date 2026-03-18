@@ -400,6 +400,16 @@ class TestCustomBackendAPI(torch._dynamo.test_case.TestCase):
                 self.assertTrue(fw_metadata is not None)
                 self.assertTrue(params_flat is not None)
                 self.assertTrue(len(params_flat) == 2)
+                self.assertIsInstance(
+                    fw_metadata, torch._guards.TracingContextFwMetadata
+                )
+                self.assertFalse(hasattr(fw_metadata, "input_info"))
+                self.assertFalse(hasattr(fw_metadata, "output_info"))
+                self.assertEqual(fw_metadata.mutated_input_indices, [])
+                self.assertEqual(fw_metadata.output_base_indices, [])
+                self.assertEqual(fw_metadata.static_input_indices, [0, 1])
+                self.assertEqual(fw_metadata.num_mutated_inp_runtime_indices, 0)
+                self.assertIsNone(fw_metadata.bw_donated_idxs)
             backend_run = True
             return make_boxed_func(gm.forward)
 

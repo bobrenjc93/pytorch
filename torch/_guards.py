@@ -36,7 +36,6 @@ if TYPE_CHECKING:
 
     from torch._dynamo.backends.distributed import DDPOptimizerContext
     from torch._dynamo.codegen import PyCodegen
-    from torch._functorch._aot_autograd.schemas import ViewAndMutationMeta
     from torch._subclasses.fake_tensor import FakeTensorMode
 
 
@@ -917,6 +916,22 @@ class InlinedCodeCache:
     code_options: dict[str, Any]
 
 
+@dataclass(eq=False)
+class TracingContextFwMetadata:
+    """
+    Backend-facing subset of AOTAutograd's forward metadata.
+
+    This intentionally contains only the fields that backends currently
+    consume through TracingContext.
+    """
+
+    mutated_input_indices: list[int]
+    output_base_indices: list[int]
+    static_input_indices: list[int]
+    num_mutated_inp_runtime_indices: int
+    bw_donated_idxs: list[int] | None = None
+
+
 class TracingContext:
     """
     Provides the currently installed TracingContext, or None.
@@ -955,7 +970,7 @@ class TracingContext:
         # progress)
         self.loc_in_frame: tuple[str, int, str] | None = None
         # this is only set after aot_autograd
-        self.fw_metadata: ViewAndMutationMeta | None = None
+        self.fw_metadata: TracingContextFwMetadata | None = None
         # this is only set when the DDPOptimizer is used
         self.ddp_optimizer_ctx: DDPOptimizerContext | None = None
         # this is only set after aot_autograd

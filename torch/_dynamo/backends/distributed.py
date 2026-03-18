@@ -20,7 +20,7 @@ import logging
 import traceback
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, TYPE_CHECKING
+from typing import Any
 from unittest import mock
 
 import torch
@@ -30,10 +30,6 @@ from torch._dynamo.output_graph import GraphCompileReason
 from torch._dynamo.utils import deepcopy_to_fake_tensor, detect_fake_mode
 from torch._logging import trace_structured
 from torch.fx.node import Node
-
-
-if TYPE_CHECKING:
-    from torch._functorch._aot_autograd.schemas import ViewAndMutationMeta
 
 
 # Regular log messages should go through 'log'.
@@ -174,7 +170,7 @@ def propagate_dynamo_source(orig_gm: fx.GraphModule, split_gm: fx.GraphModule) -
 class DDPOptimizerContext:
     def __init__(self) -> None:
         self.curr_bucket: int = -1
-        self.metadata_per_bucket: list[ViewAndMutationMeta] = []
+        self.metadata_per_bucket: list[torch._guards.TracingContextFwMetadata] = []
 
 
 # compile each of the partitioned submodules using the user-provided compiler

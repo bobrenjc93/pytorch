@@ -40,7 +40,7 @@ from torch._dynamo.utils import (
     dynamo_timed,
     lazy_format_graph_code,
 )
-from torch._guards import CompileContext, TracingContext
+from torch._guards import CompileContext, TracingContext, TracingContextFwMetadata
 from torch._logging import getArtifactLogger, trace_structured
 from torch._subclasses import FakeTensor
 from torch._subclasses.meta_utils import is_sparse_any
@@ -328,6 +328,30 @@ def _get_inner_meta(
     """
     return (
         fw_metadata if maybe_subclass_meta is None else maybe_subclass_meta.fw_metadata
+    )
+
+
+def _get_tracing_context_fw_metadata(
+    fw_metadata: ViewAndMutationMeta,
+) -> TracingContextFwMetadata:
+    return TracingContextFwMetadata(
+        mutated_input_indices=[
+            i
+            for i, input_info in enumerate(fw_metadata.input_info)
+            if input_info.mutation_type is not MutationType.NOT_MUTATED
+        ],
+        output_base_indices=[
+            output_info.base_idx
+            for output_info in fw_metadata.output_info
+            if output_info.base_idx is not None
+        ],
+        static_input_indices=list(fw_metadata.static_input_indices),
+        num_mutated_inp_runtime_indices=fw_metadata.num_mutated_inp_runtime_indices,
+        bw_donated_idxs=(
+            list(fw_metadata.bw_donated_idxs)
+            if fw_metadata.bw_donated_idxs is not None
+            else None
+        ),
     )
 
 
@@ -2506,8 +2530,8 @@ def _aot_stage2b_compile_forward_or_inference(
 
         # Set tracing context
         if tracing_context := torch._guards.TracingContext.try_get():
-            tracing_context.fw_metadata = _get_inner_meta(
-                maybe_subclass_meta, fw_metadata
+            tracing_context.fw_metadata = _get_tracing_context_fw_metadata(
+                _get_inner_meta(maybe_subclass_meta, fw_metadata)
             )
 
         with TracingContext.report_output_strides() as fwd_output_strides:

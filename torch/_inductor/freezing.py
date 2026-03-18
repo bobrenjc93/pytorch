@@ -9,7 +9,6 @@ from typing import Any
 import torch
 import torch.utils._pytree as pytree
 from torch._dynamo.utils import dynamo_timed, lazy_format_graph_code
-from torch._functorch.aot_autograd import MutationType
 from torch._functorch.compile_utils import fx_graph_cse
 from torch._inductor.constant_folding import constant_fold, replace_node_with_constant
 from torch._inductor.freezing_utils import enter_freezing, record_has_frozen_params
@@ -28,7 +27,7 @@ log = logging.getLogger(__name__)
 def replace_params_with_constants(
     gm: torch.fx.GraphModule,
     flat_params: list[Any],
-    fw_metadata: torch._functorch.aot_autograd.ViewAndMutationMeta,
+    fw_metadata: torch._guards.TracingContextFwMetadata,
 ) -> list[int]:
     """
     Replaces the parameters of a PyTorch GraphModule with constants wherever possible.
@@ -37,20 +36,8 @@ def replace_params_with_constants(
     params = gm.graph.find_nodes(op="placeholder")
     fake_inp_nodes = params[: len(params)]
     preserved_arg_indices = []
-    aliased_input_args = [
-        out_info.base_idx
-        for out_info in fw_metadata.output_info
-        if out_info.base_idx is not None
-    ]
-
-    # TODO (tmanlaibaatar) figure out why this is different
-    # from mutated_inp_runtime_indices
-    mutated_inps = [
-        i
-        for i, m in enumerate(fw_metadata.input_info)
-        if m.mutation_type
-        in (MutationType.MUTATED_IN_GRAPH, MutationType.MUTATED_OUT_GRAPH)
-    ]
+    aliased_input_args = fw_metadata.output_base_indices
+    mutated_inps = fw_metadata.mutated_input_indices
 
     static_indices_new = []
     static_indices_offset = 0
