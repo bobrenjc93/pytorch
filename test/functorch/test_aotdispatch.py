@@ -4929,8 +4929,11 @@ def forward(self, arg0_1, arg1_1, arg2_1):
             def forward(self, x):
                 y = x + 2
                 y.add_(5)
+                z = out_dtype(
+                    torch.ops.aten.mm.default, torch.int32, y, self.weight
+                )
                 return (
-                    out_dtype(torch.ops.aten.mm.default, torch.int32, y, self.weight),
+                    z + 1,
                 )
 
         weight = torch.randint(-128, 127, (5, 5), dtype=torch.int8)
@@ -4939,7 +4942,9 @@ def forward(self, arg0_1, arg1_1, arg2_1):
 
         gm, _ = aot_export_module(mod, [inp], trace_joint=False, pre_dispatch=True)
         self.assertEqual(mod(inp), gm(inp))
-        FileCheck().check("torch.ops.higher_order.out_dtype").run(gm.code)
+        FileCheck().check("torch.ops.higher_order.out_dtype").check(
+            "torch.ops.aten.add.Tensor"
+        ).run(gm.code)
 
     def test_aot_export_predispatch_func_view(self):
         def fn(p, x):
@@ -7943,17 +7948,19 @@ Expected a .* tangent but got a plain Tensor.""",
                 self.weight = weight
 
             def forward(self, x):
-                return out_dtype(torch.ops.aten.mm.default, torch.int32, x, self.weight)
+                return out_dtype(
+                    torch.ops.aten.mm.default, torch.int32, x, self.weight
+                )
 
         weight = torch.randint(-128, 127, (5, 5), dtype=torch.int8)
         mod = M(weight)
         x = WrapperSubclass(torch.randint(-128, 127, (5, 5), dtype=torch.int8))
 
-        out_ref = mod(x.a)
-        out_test = torch.compile(mod, backend="aot_eager", fullgraph=True)(x)
-
-        self.assertIsInstance(out_test, WrapperSubclass)
-        self.assertEqual(out_ref, out_test.a)
+        with self.assertRaisesRegex(
+            torch._dynamo.exc.BackendCompilerFailed,
+            "There was no rule registered for HOP out_dtype and subclass",
+        ):
+            torch.compile(mod, backend="aot_eager", fullgraph=True)(x)
 
     @torch._inductor.config.patch({"freezing": True})
     def test_inductor_freezing_with_subclasses(self):

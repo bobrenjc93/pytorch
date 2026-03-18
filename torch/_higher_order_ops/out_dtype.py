@@ -8,13 +8,17 @@ from torch._C import DispatchKey
 from torch._higher_order_ops.utils import autograd_not_implemented
 from torch._ops import HigherOrderOperator
 from torch._prims_common import elementwise_dtypes, ELEMENTWISE_TYPE_PROMOTION_KIND
-from torch._subclasses.fake_tensor import FakeTensorMode, fake_tensor_tls
-from torch._subclasses.functional_tensor import FunctionalTensorMode
+from torch._subclasses.fake_tensor import fake_tensor_tls, FakeTensorMode
+from torch._subclasses.functional_tensor import FunctionalTensor, FunctionalTensorMode
 from torch.fx.experimental.proxy_tensor import (
     disable_proxy_modes_tracing,
     maybe_handle_decomp,
     ProxyTorchDispatchMode,
     track_tensor_tree,
+)
+from torch.utils._python_dispatch import (
+    is_traceable_wrapper_subclass,
+    transform_subclass,
 )
 
 
@@ -80,6 +84,25 @@ class OutDtypeOperator(HigherOrderOperator):
 out_dtype = OutDtypeOperator()
 
 
+def _unwrap_temporary_functional_result(out):
+    if isinstance(out, torch.Tensor) and is_traceable_wrapper_subclass(out):
+        unwrapped = transform_subclass(
+            out, lambda _, inner_t: _unwrap_temporary_functional_result(inner_t)
+        )
+        torch._mirror_autograd_meta_to(out, unwrapped)  # type: ignore[attr-defined]
+        return unwrapped
+
+    if not isinstance(out, FunctionalTensor):
+        if isinstance(out, torch.Tensor) and torch._is_functional_tensor(  # type: ignore[attr-defined]
+            out
+        ):
+            raise AssertionError("expected non-functional tensor")
+        return out
+
+    torch._sync(out)
+    return torch._from_functional_tensor(out.elem)
+
+
 def _dispatch_out_dtype_dense(
     op: torch._ops.OpOverload,
     output_dtype: torch.dtype,
@@ -89,6 +112,7 @@ def _dispatch_out_dtype_dense(
     functional_mode = torch.utils._python_dispatch._detect_infra_mode(
         torch._C._TorchDispatchModeKey.FUNCTIONAL
     )
+    owns_functional_mode = functional_mode is None
     functional_mode_ctx = (
         functional_mode if functional_mode is not None else FunctionalTensorMode()
     )
@@ -97,7 +121,10 @@ def _dispatch_out_dtype_dense(
     fake_tensor_tls.allow_non_fake_inputs_override = True
     try:
         with functional_mode_ctx, fake_mode_ctx:
-            return out_dtype_dense(op, output_dtype, *args)
+            out = out_dtype_dense(op, output_dtype, *args)
+            if owns_functional_mode:
+                return pytree.tree_map(_unwrap_temporary_functional_result, out)
+            return out
     finally:
         fake_tensor_tls.allow_non_fake_inputs_override = old_allow_non_fake_inputs
 
