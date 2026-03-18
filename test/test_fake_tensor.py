@@ -1850,6 +1850,25 @@ class FakeTensorOperatorInvariants(TestCase):
                     1,
                 )
 
+    @unittest.skipIf(not RUN_CUDA, "requires cuda")
+    def test_conv_transpose_device_mismatch_errors(self):
+        with FakeTensorMode():
+            inp = torch.randn(2, 3, 4, 4, device="cuda")
+            weight = torch.randn(3, 3, 1, 1, device="cpu")
+
+            with self.assertRaisesRegex(RuntimeError, "should be the same"):
+                torch.ops.aten.convolution(
+                    inp,
+                    weight,
+                    None,
+                    [1, 1],
+                    [0, 0],
+                    [1, 1],
+                    True,
+                    [0, 0],
+                    1,
+                )
+
     def test_no_dispatch_with_like_function(self):
         class CountingMode(TorchDispatchMode):
             def __init__(self) -> None:

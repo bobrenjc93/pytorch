@@ -2600,17 +2600,23 @@ def meta_conv(
     groups: int,
 ):
     if is_transposed:
+        def _device_or_fake_device(tensor: torch.Tensor) -> torch.device:
+            if isinstance(tensor, torch._subclasses.FakeTensor):
+                return tensor.fake_device
+            return tensor.device
+
         def _same_type_as_input(other: torch.Tensor) -> bool:
+            other_device = _device_or_fake_device(other)
             if (
                 input_tensor.dtype == other.dtype
-                and input_tensor.device == other.device
+                and _device_or_fake_device(input_tensor) == other_device
                 and input_tensor.is_mkldnn == other.is_mkldnn
             ):
                 return True
             return (
                 input_tensor.is_mkldnn
                 and not other.is_mkldnn
-                and other.device.type == "cpu"
+                and other_device.type == "cpu"
                 and other.dtype == torch.float
             )
 
