@@ -211,10 +211,23 @@ inline void checkAsStridedArgsUnchecked(
         "got strides: ",
         stride);
   }
-  TORCH_MAYBE_SYM_CHECK(
-      sym_ge(storage_offset, 0),
-      "Tensor: invalid storage offset ",
-      storage_offset);
+  if constexpr (std::is_same_v<T, c10::SymInt>) {
+    // Some unchecked view ops (for example FakeTensor select with an
+    // unbacked index) materialize a data-dependent symbolic storage offset
+    // that is resolved later, so only validate symbolic offsets once they
+    // have a concrete hint.
+    if (storage_offset.has_hint()) {
+      TORCH_MAYBE_SYM_CHECK(
+          sym_ge(storage_offset, 0),
+          "Tensor: invalid storage offset ",
+          storage_offset);
+    }
+  } else {
+    TORCH_CHECK(
+        storage_offset >= 0,
+        "Tensor: invalid storage offset ",
+        storage_offset);
+  }
 }
 
 template <typename T>
