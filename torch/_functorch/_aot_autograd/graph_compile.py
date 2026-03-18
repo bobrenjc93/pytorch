@@ -2356,13 +2356,12 @@ def _cache_autograd_info(
 
             def should_save_cache() -> bool:
                 if should_bundle_autograd_cache():
-                    return True
+                    return compiled_bw_func is not None
                 if compiled_bw_func is None:
                     return hasattr(compiled_fw_func, "_fx_graph_cache_key")
-                else:
-                    return hasattr(compiled_fw_func, "_fx_graph_cache_key") and hasattr(
-                        compiled_bw_func, "_fx_graph_cache_key"
-                    )
+                return hasattr(compiled_fw_func, "_fx_graph_cache_key") and hasattr(
+                    compiled_bw_func, "_fx_graph_cache_key"
+                )
 
             if cache_info is not None and should_save_cache():
                 if forward_time_taken_ns is None:
@@ -2426,20 +2425,18 @@ def _cache_autograd_info(
             try_save_cache_entry = None
         elif (
             bw_module is not None
-            and num_fw_outs_saved_for_bw == 0
             and num_symints_saved_for_bw == 0
         ):
-            # Save a partial cache entry for degenerate lazy backwards that have
-            # no forward-saved state. These graphs can be compiled lazily from
-            # the serialized backward module on cache hit without forcing an
-            # ahead-of-time backward compile on cache miss.
+            # Save a partial cache entry for lazy backwards that do not save
+            # symbolic ints. These graphs can still compile the backward lazily
+            # from the serialized backward module on cache hit without forcing
+            # an ahead-of-time backward compile on cache miss.
             entry = try_save_cache_entry(
                 None,
                 bw_module,
                 fw_metadata,
                 aot_config,  # type: ignore[arg-type]
             )
-            try_save_cache_entry = None
 
     return try_save_cache_entry, entry  # type: ignore[return-value]
 

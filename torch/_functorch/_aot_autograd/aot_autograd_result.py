@@ -363,6 +363,7 @@ class GenericAOTAutogradResult(Generic[TForward, TBackward]):
     # Used by AOTSubclassWrapper
     maybe_subclass_meta: SubclassMeta | None
     num_fw_outs_saved_for_bw: int | None
+    backward_state_indices: list[int] | None
 
     # Used by RuntimeWrapper
     indices_of_inps_to_detach: list[int]
@@ -468,10 +469,11 @@ class GenericAOTAutogradResult(Generic[TForward, TBackward]):
         with dynamo_timed("AOTAutogradCache.inductor_load"):
             compiled_fw_func = self.compiled_fw.load(args)
             compiled_bw_func = None
-            backward_state_indices = None
+            backward_state_indices = self.backward_state_indices
             if self.compiled_bw is not None:
                 compiled_bw_func = self.compiled_bw.load(args)
-                backward_state_indices = self.compiled_bw.backward_state_indices
+                if backward_state_indices is None:
+                    backward_state_indices = self.compiled_bw.backward_state_indices
                 needs_autograd = True
                 CompileEventLogger.try_add_pt2_compile(
                     "backend_compile", dispatch_mode="autograd"
@@ -539,6 +541,10 @@ class GenericAOTAutogradResult(Generic[TForward, TBackward]):
         disable_amp = torch._C._is_any_autocast_enabled()
 
         if needs_autograd:
+            if self.compiled_bw is None and aot_config.bw_compiler is None:
+                aot_config = copy(aot_config)
+                aot_config.bw_compiler = aot_config.fw_compiler
+
             num_symints_saved_for_bw = self.runtime_metadata.num_symints_saved_for_bw
             if num_symints_saved_for_bw is None:
                 raise AssertionError(
