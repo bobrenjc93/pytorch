@@ -8,7 +8,11 @@ from torch._C import DispatchKey
 from torch._higher_order_ops.utils import autograd_not_implemented
 from torch._ops import HigherOrderOperator
 from torch._prims_common import elementwise_dtypes, ELEMENTWISE_TYPE_PROMOTION_KIND
-from torch._subclasses.fake_tensor import fake_tensor_tls, FakeTensorMode
+from torch._subclasses.fake_tensor import (
+    fake_tensor_tls,
+    FakeTensorMode,
+    maybe_get_fake_mode,
+)
 from torch._subclasses.functional_tensor import FunctionalTensor, FunctionalTensorMode
 from torch.fx.experimental.proxy_tensor import (
     disable_proxy_modes_tracing,
@@ -158,10 +162,17 @@ def _dispatch_out_dtype_dense(
     output_dtype: torch.dtype,
     *args,
     fake_mode: FakeTensorMode | None = None,
+    unwrap_temporary_output: bool = False,
 ):
     functional_mode = torch.utils._python_dispatch._detect_infra_mode(
         torch._C._TorchDispatchModeKey.FUNCTIONAL
     )
+    if fake_mode is None:
+        for arg in pytree.arg_tree_leaves(*args):
+            fake_mode = maybe_get_fake_mode(arg)
+            if fake_mode is not None:
+                break
+    owns_functional_mode = functional_mode is None
     functional_mode_ctx = (
         functional_mode if functional_mode is not None else FunctionalTensorMode()
     )
@@ -170,9 +181,23 @@ def _dispatch_out_dtype_dense(
     fake_tensor_tls.allow_non_fake_inputs_override = True
     try:
         with functional_mode_ctx, fake_mode_ctx:
-            return out_dtype_dense(op, output_dtype, *args)
+            out = out_dtype_dense(op, output_dtype, *args)
+            if unwrap_temporary_output and owns_functional_mode:
+                out = pytree.tree_map(_unwrap_temporary_functional_result, out)
+            return out
     finally:
         fake_tensor_tls.allow_non_fake_inputs_override = old_allow_non_fake_inputs
+
+
+def traceable_out_dtype_dense(
+    op: torch._ops.OpOverload, output_dtype: torch.dtype, *args
+):
+    return _dispatch_out_dtype_dense(
+        op,
+        output_dtype,
+        *args,
+        unwrap_temporary_output=True,
+    )
 
 
 def trace_out_dtype(proxy_mode, func_overload, op, output_dtype, *args):
@@ -196,17 +221,14 @@ def trace_out_dtype(proxy_mode, func_overload, op, output_dtype, *args):
         return safe_out
 
     with disable_proxy_modes_tracing():
-        out = _dispatch_out_dtype_dense(op, output_dtype, *args)
+        out = traceable_out_dtype_dense(op, output_dtype, *args)
 
     node_args = (op, output_dtype, *args)
     proxy_args = pytree.tree_map(proxy_mode.tracer.unwrap_proxy, node_args)
     out_proxy = proxy_mode.tracer.create_proxy(
         "call_function", func_overload, proxy_args, {}, name="out_dtype"
     )
-    out = track_tensor_tree(out, out_proxy, constant=None, tracer=proxy_mode.tracer)
-    safe_out = pytree.tree_map(_unwrap_temporary_functional_result, out)
-    _copy_tracked_tensor_tree(out, safe_out, proxy_mode.tracer)
-    return safe_out
+    return track_tensor_tree(out, out_proxy, constant=None, tracer=proxy_mode.tracer)
 
 
 @out_dtype.py_impl(DispatchKey.CompositeExplicitAutograd)
@@ -262,7 +284,13 @@ def out_dtype_fake_tensor_mode(
     output_dtype: torch.dtype,
     *args,
 ):
-    return _dispatch_out_dtype_dense(op, output_dtype, *args, fake_mode=mode)
+    return _dispatch_out_dtype_dense(
+        op,
+        output_dtype,
+        *args,
+        fake_mode=mode,
+        unwrap_temporary_output=True,
+    )
 
 
 @out_dtype.py_functionalize_impl

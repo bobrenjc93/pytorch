@@ -3702,6 +3702,8 @@ class OutDtypeHigherOrderVariable(TorchHigherOrderOperatorVariable):
         kwargs: dict[str, VariableTracker],
     ) -> VariableTracker:
         from .builder import wrap_fx_proxy
+        from torch._higher_order_ops.out_dtype import traceable_out_dtype_dense
+        from torch.utils._python_dispatch import is_traceable_wrapper_subclass
 
         if len(kwargs) > 0:
             unimplemented(
@@ -3719,9 +3721,19 @@ class OutDtypeHigherOrderVariable(TorchHigherOrderOperatorVariable):
         fake_sub_args = pytree.tree_map_only(
             torch.fx.Proxy, lambda a: a.node.meta["example_value"], p_args[2:]
         )
-        # This is a simplified implementation of this operator just for tracing.
-        # Actual implementation may also first promote the arguments
-        example_value = op(*fake_sub_args).to(dtype=output_dtype)
+        example_value = traceable_out_dtype_dense(op, output_dtype, *fake_sub_args)
+
+        has_wrapper_subclass_arg = any(
+            is_traceable_wrapper_subclass(arg)
+            for arg in pytree.arg_tree_leaves(*fake_sub_args)
+            if isinstance(arg, torch.Tensor)
+        )
+        if has_wrapper_subclass_arg:
+            return tx.inline_user_function_return(
+                VariableTracker.build(tx, traceable_out_dtype_dense),
+                args,
+                kwargs,
+            )
 
         # Store the invocation as a call
         return wrap_fx_proxy(
