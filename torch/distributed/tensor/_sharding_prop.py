@@ -49,6 +49,14 @@ V = TypeVar("V")
 log = logging.getLogger(__name__)
 
 
+class _NoSchemaInfo:
+    pass
+
+
+_NO_SCHEMA_INFO = _NoSchemaInfo()
+SchemaInfoEntry = RuntimeSchemaInfo | _NoSchemaInfo
+
+
 def _length(obj) -> int:
     if obj is None:
         return 0
@@ -61,6 +69,31 @@ def _get_local_overrides(mapping: MutableMapping[K, V]) -> MutableMapping[K, V]:
     if isinstance(mapping, ChainMap):
         return cast(MutableMapping[K, V], mapping.maps[0])
     return mapping
+
+
+def _lookup_schema_info_entry(
+    mapping: MutableMapping[OpOverload, SchemaInfoEntry],
+    op_overload: OpOverload,
+) -> tuple[bool, RuntimeSchemaInfo | None]:
+    if op_overload not in mapping:
+        return False, None
+    schema_info = mapping[op_overload]
+    return True, None if schema_info is _NO_SCHEMA_INFO else schema_info
+
+
+def _set_schema_info_entry(
+    mapping: MutableMapping[OpOverload, SchemaInfoEntry],
+    op_overload: OpOverload,
+    schema_info: RuntimeSchemaInfo | None,
+) -> None:
+    local_overrides = _get_local_overrides(mapping)
+    local_overrides.pop(op_overload, None)
+    if schema_info is not None:
+        local_overrides[op_overload] = schema_info
+    elif isinstance(mapping, ChainMap) and any(
+        op_overload in base for base in mapping.maps[1:]
+    ):
+        local_overrides[op_overload] = _NO_SCHEMA_INFO
 
 
 def _get_expected_num_tensor_outputs(op: OpOverload) -> int:
@@ -347,9 +380,9 @@ class ShardingPropagator:
         ]
         # op map to save static argnum to decide to reuse sharding prop cache or
         # re-run sharding prop
-        self.op_to_schema_info: MutableMapping[OpOverload, RuntimeSchemaInfo]
+        self.op_to_schema_info: MutableMapping[OpOverload, SchemaInfoEntry]
         self.op_to_schema_info_for_single_dim_strategy: MutableMapping[
-            OpOverload, RuntimeSchemaInfo
+            OpOverload, SchemaInfoEntry
         ]
         self.propagate_op_sharding = LocalLRUCache(
             self.propagate_op_sharding_non_cached
@@ -412,8 +445,7 @@ class ShardingPropagator:
         Register a sharding propagation rule for an operator.
         """
         self.op_to_rules[op_overload] = rule_func
-        if schema_info is not None:
-            self.op_to_schema_info[op_overload] = schema_info
+        _set_schema_info_entry(self.op_to_schema_info, op_overload, schema_info)
 
     def register_single_dim_op_strategy(
         self,
@@ -425,8 +457,11 @@ class ShardingPropagator:
         Register a strategy over a single mesh-dim, relying on infra to automatically expand to the full mesh.
         """
         self.op_single_dim_strategy_funcs[op_overload] = strategy_info
-        if schema_info is not None:
-            self.op_to_schema_info_for_single_dim_strategy[op_overload] = schema_info
+        _set_schema_info_entry(
+            self.op_to_schema_info_for_single_dim_strategy,
+            op_overload,
+            schema_info,
+        )
 
     def register_op_strategy(
         self,
@@ -480,8 +515,18 @@ class ShardingPropagator:
         `RuntimeSchemaInfo(static_argnum=2)`.
         """
         self.op_strategy_funcs[op_overload] = strategy_func
-        if schema_info is not None:
-            self.op_to_schema_info[op_overload] = schema_info
+        _set_schema_info_entry(self.op_to_schema_info, op_overload, schema_info)
+
+    def get_schema_info(self, op_overload: OpOverload) -> RuntimeSchemaInfo | None:
+        found, schema_info = _lookup_schema_info_entry(
+            self.op_to_schema_info, op_overload
+        )
+        if found:
+            return schema_info
+        _, schema_info = _lookup_schema_info_entry(
+            self.op_to_schema_info_for_single_dim_strategy, op_overload
+        )
+        return schema_info
 
     def _propagate_tensor_meta_non_cached(
         self, op_schema: OpSchema

@@ -164,6 +164,37 @@ DEFAULT_CUSTOM_OP_HANDLERS = {
 }
 
 
+class _CustomOpHandlerMap(dict[torch._ops.OpOverload, object]):
+    _missing = object()
+
+    def __init__(self, *args, explicit_keys=None, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._explicit_keys: set[torch._ops.OpOverload] = (
+            set() if explicit_keys is None else set(explicit_keys)
+        )
+
+    def __setitem__(self, key: torch._ops.OpOverload, value: object) -> None:
+        self._explicit_keys.add(key)
+        super().__setitem__(key, value)
+
+    def pop(self, key, default=_missing):
+        self._explicit_keys.discard(key)
+        if default is self._missing:
+            return super().pop(key)
+        return super().pop(key, default)
+
+    def update(self, *args, **kwargs) -> None:
+        updates = dict(*args, **kwargs)
+        self._explicit_keys.update(updates)
+        super().update(updates)
+
+    def copy(self):
+        return type(self)(self, explicit_keys=self._explicit_keys)
+
+    def is_explicit(self, key: torch._ops.OpOverload) -> bool:
+        return key in self._explicit_keys
+
+
 class OpDispatcher:
     """
     Op dispatching class instance to handle args/kwargs pre-processing (un-wrapping), sharding
@@ -206,7 +237,7 @@ class OpDispatcher:
             aten.bernoulli.default,
             aten.bernoulli_.float,
         }
-        self._custom_op_handlers = dict(DEFAULT_CUSTOM_OP_HANDLERS)
+        self._custom_op_handlers = _CustomOpHandlerMap(DEFAULT_CUSTOM_OP_HANDLERS)
 
     def rebase_sharding_propagator(self, base_dispatcher: "OpDispatcher") -> None:
         if base_dispatcher is self:
@@ -243,8 +274,12 @@ class OpDispatcher:
     ):
         handler = self._custom_op_handlers.get(op_call)
         default_handler = DEFAULT_CUSTOM_OP_HANDLERS.get(op_call)
-        if handler is not None and handler is not default_handler:
-            return handler
+        if handler is not None:
+            if handler is not default_handler:
+                return handler
+            if isinstance(self._custom_op_handlers, _CustomOpHandlerMap):
+                if self._custom_op_handlers.is_explicit(op_call):
+                    return handler
 
         inherited_handler = None
         for base_type in dtensor_type.__mro__[1:]:
@@ -775,15 +810,7 @@ class OpDispatcher:
         create_schema: bool,
     ) -> OpInfo:
         # get runtime schema info to determine whether to use pytree to flatten inputs
-        runtime_schema_info = self.sharding_propagator.op_to_schema_info.get(
-            op_call, None
-        )
-        if runtime_schema_info is None:
-            runtime_schema_info = (
-                self.sharding_propagator.op_to_schema_info_for_single_dim_strategy.get(
-                    op_call, None
-                )
-            )
+        runtime_schema_info = self.sharding_propagator.get_schema_info(op_call)
 
         # Auto-detect needs_pytree if any arg is a list/tuple containing tensors
         def _contains_tensor(arg: object) -> bool:

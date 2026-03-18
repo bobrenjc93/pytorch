@@ -26,6 +26,7 @@ from torch.distributed.tensor._dtensor_spec import (
     ShardOrderEntry,
     TensorMeta,
 )
+from torch.distributed.tensor._op_schema import RuntimeSchemaInfo
 from torch.distributed.tensor._redistribute import redistribute_local_tensor
 from torch.distributed.tensor.debug import CommDebugMode
 from torch.distributed.tensor.experimental import implicit_replication
@@ -549,6 +550,99 @@ class DTensorTest(DTensorTestBase):
         self.assertEqual(parent_handler_calls, [ChildDTensor])
         self.assertEqual(type(result), ChildDTensor)
         self.assertEqual(result.to_local(), F.conv2d(local_input, local_weight))
+
+    @with_comms
+    def test_dtensor_nested_subclass_can_restore_default_custom_handler(self):
+        device_mesh = self.build_device_mesh()
+        local_input = torch.arange(
+            16, device=self.device_type, dtype=torch.float32
+        ).reshape(1, 1, 4, 4)
+        local_weight = torch.ones(
+            1, 1, 1, 1, device=self.device_type, dtype=torch.float32
+        )
+        input_dt = distribute_tensor(local_input, device_mesh, [Replicate()])
+        base_weight = distribute_tensor(local_weight, device_mesh, [Replicate()])
+
+        class ParentDTensor(DTensor):
+            _op_dispatcher = type(DTensor._op_dispatcher)()
+
+        op = torch.ops.aten.convolution.default
+        parent_dispatcher = ParentDTensor._op_dispatcher
+        default_conv_handler = parent_dispatcher._custom_op_handlers[op]
+        parent_handler_calls = []
+
+        def overriding_parent_conv_handler(
+            op_call, args, kwargs, *, dtensor_type=None
+        ):
+            parent_handler_calls.append(dtensor_type)
+            return default_conv_handler(
+                op_call,
+                args,
+                kwargs,
+                dtensor_type=dtensor_type,
+            )
+
+        parent_dispatcher._custom_op_handlers[op] = overriding_parent_conv_handler
+        try:
+            class ChildDTensor(ParentDTensor):
+                _op_dispatcher = type(DTensor._op_dispatcher)()
+
+            ChildDTensor._op_dispatcher._custom_op_handlers[op] = default_conv_handler
+            weight = ChildDTensor(
+                base_weight._local_tensor,
+                base_weight._spec,
+                requires_grad=base_weight.requires_grad,
+            )
+            result = F.conv2d(input_dt, weight)
+        finally:
+            parent_dispatcher._custom_op_handlers[op] = default_conv_handler
+
+        self.assertEqual(parent_handler_calls, [])
+        self.assertEqual(type(result), ChildDTensor)
+        self.assertEqual(result.to_local(), F.conv2d(local_input, local_weight))
+
+    @with_comms
+    def test_dtensor_subclass_sharding_override_can_clear_inherited_schema_info(self):
+        device_mesh = self.build_device_mesh()
+        lib = torch.library.Library("dtensor_subclass_schema_info_test", "FRAGMENT")
+        lib.define("schema_override(Tensor input, int dim) -> Tensor")
+        op = torch.ops.dtensor_subclass_schema_info_test.schema_override.default
+
+        class ParentDTensor(DTensor):
+            _op_dispatcher = type(DTensor._op_dispatcher)()
+
+        class ChildDTensor(ParentDTensor):
+            _op_dispatcher = type(DTensor._op_dispatcher)()
+
+        schema_info = RuntimeSchemaInfo(static_argnum=1)
+
+        def parent_rule(op_schema):
+            raise AssertionError(f"unexpected call: {op_schema}")
+
+        def child_rule(op_schema):
+            raise AssertionError(f"unexpected call: {op_schema}")
+
+        parent_prop = ParentDTensor._op_dispatcher.sharding_propagator
+        child_prop = ChildDTensor._op_dispatcher.sharding_propagator
+        parent_prop.register_sharding_prop_rule(op, parent_rule, schema_info=schema_info)
+        child_prop.register_sharding_prop_rule(op, child_rule)
+
+        base = distribute_tensor(
+            torch.arange(4, device=self.device_type, dtype=torch.float32),
+            device_mesh,
+            [Replicate()],
+        )
+        child_dt = ChildDTensor(
+            base._local_tensor,
+            base._spec,
+            requires_grad=base.requires_grad,
+        )
+        op_info = ChildDTensor._op_dispatcher.unwrap_to_op_info(op, (child_dt, 1), {})
+
+        self.assertIs(parent_prop.get_schema_info(op), schema_info)
+        self.assertIsNone(child_prop.get_schema_info(op))
+        self.assertIsNotNone(op_info.schema)
+        self.assertIsNone(op_info.schema.schema_info)
 
     @with_comms
     def test_from_local_backward(self):
