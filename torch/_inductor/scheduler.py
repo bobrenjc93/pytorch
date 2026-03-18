@@ -82,6 +82,7 @@ from .utils import (
     is_collective,
     is_cudagraph_unsafe_op,
     is_gpu,
+    is_symbolic_scalar,
     is_multi_outputs_template,
     is_output_of_multi_outputs_template,
     is_wait,
@@ -6788,6 +6789,34 @@ class Scheduler:
 
         return OrderedSet(sorted(res, key=operator.attrgetter("name")))
 
+    def get_graph_partition_scalar_inputs(
+        self, symbol_inputs: OrderedSet[sympy.Symbol]
+    ) -> tuple[
+        dict[str, sympy.Expr | sympy.logic.boolalg.Boolean],
+        OrderedSet[sympy.Symbol],
+    ]:
+        scalar_inputs: dict[str, sympy.Expr | sympy.logic.boolalg.Boolean] = {}
+        symbol_inputs = OrderedSet(symbol_inputs)
+        bound_scalar_symbols: OrderedSet[sympy.Symbol] = OrderedSet()
+
+        for name, value in V.graph.graph_inputs.items():
+            if not isinstance(value, sympy.Symbol):
+                continue
+            if value in symbol_inputs and name != value.name:
+                scalar_inputs[name] = value
+                symbol_inputs.discard(value)
+                bound_scalar_symbols.add(value)
+
+        available_symbols = symbol_inputs | bound_scalar_symbols
+        for name, value in V.graph.graph_inputs.items():
+            if not is_symbolic_scalar(value) or isinstance(value, sympy.Symbol):
+                continue
+            if isinstance(value, sympy.Basic) and not value.is_Atom:
+                if value.free_symbols <= available_symbols:
+                    scalar_inputs[name] = value
+
+        return scalar_inputs, symbol_inputs
+
     def get_graph_partition_signature(
         self, partitions: list[PartitionType], skip_cudagraphs: list[bool]
     ) -> list[GraphPartitionSignature]:
@@ -6911,10 +6940,14 @@ class Scheduler:
             symbol_inputs = self.get_graph_partition_symbol_inputs(
                 partition, input_nodes
             )
+            scalar_inputs, symbol_inputs = self.get_graph_partition_scalar_inputs(
+                symbol_inputs
+            )
 
             partition_signature = GraphPartitionSignature(
                 symbol_inputs,
                 input_nodes,
+                scalar_inputs,
                 output_nodes,
                 input_deallocation,
                 skip_cudagraph,
@@ -6941,6 +6974,11 @@ class Scheduler:
             for name, buffer in signature.input_nodes.items()
             if name not in V.graph.removed_buffers
         }
+        scalar_inputs = {
+            name: value
+            for name, value in signature.scalar_inputs.items()
+            if name not in V.graph.removed_buffers
+        }
         input_deallocation = {
             name: val
             for name, val in signature.input_deallocation.items()
@@ -6959,6 +6997,7 @@ class Scheduler:
         return GraphPartitionSignature(
             signature.symbol_inputs,
             input_nodes,
+            scalar_inputs,
             output_nodes,
             input_deallocation,
             signature.skip_cudagraph,

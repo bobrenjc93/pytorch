@@ -396,6 +396,7 @@ class GraphLowering(torch.fx.Interpreter):
 
         self.sizevars = SizeVarAllocator(shape_env)
         self.graph_input_names: list[str] = []
+        self.specialized_graph_input_values: dict[str, int] = {}
         self.graph_inputs: dict[
             str,
             TensorBox | TorchBindObject | sympy.Expr | SympyBoolean | ir.GeneratorState,
@@ -1219,6 +1220,7 @@ class GraphLowering(torch.fx.Interpreter):
             # Plain Python ints are generally compile-time metadata inputs
             # such as reduction axes. Keep them specialized to the traced
             # value so downstream lowerings continue to receive concrete ints.
+            self.specialized_graph_input_values[target] = example
             self.graph_input_names.append(target)
             return example
         elif isinstance(example, float):

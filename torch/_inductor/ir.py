@@ -218,10 +218,12 @@ class GraphPartitionSignature:
     # symbol inputs that are necessary for codegen
     symbol_inputs: OrderedSet[sympy.Symbol]
 
-    # mapping from partition input name to IRNode or symbolic scalar. Need the
-    # name str since
-    # we cannot get name from Expr.
+    # mapping from partition input name to a runtime argument carried directly
+    # by the partition call.
     input_nodes: dict[str, IRNode | sympy.Expr | SympyBoolean | TorchBindObject]
+    # explicit symbolic scalar graph inputs that need their original runtime
+    # placeholder name across graph-partition boundaries.
+    scalar_inputs: dict[str, sympy.Expr | SympyBoolean]
     output_nodes: list[IRNode]
 
     # mapping from partition input name to a boolean for whether deallocating it

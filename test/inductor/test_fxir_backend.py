@@ -1148,6 +1148,32 @@ def forward(self, arg0_1, arg1_1, arg2_1):
         self.assertEqual(len(gm.graph.find_nodes(op="placeholder")), 2)
         self.assertTrue(same(ep.module()(pred, x), gm(pred, x)))
 
+    def test_aoti_fx_symbool_placeholder_input_with_graph_partition(self):
+        from torch.fx.experimental.symbolic_shapes import ShapeEnv
+
+        class M(torch.nn.Module):
+            def forward(self, pred, x):
+                def true_fn(t):
+                    return t + 1
+
+                def false_fn(t):
+                    return t - 1
+
+                return torch.cond(pred, true_fn, false_fn, (x,))
+
+        shape_env = ShapeEnv()
+        pred = shape_env.create_unbacked_symbool()
+        x = torch.ones(4, device=self.device)
+
+        ep = torch.export.export(M(), (pred, x), strict=False)
+        gm = torch._inductor.aot_compile(
+            ep.module(),
+            (pred, x),
+            options={"fx_wrapper": True, "graph_partition": True, **test_config},
+        )
+
+        self.assertTrue(same(ep.module()(pred, x), gm(pred, x)))
+
     def test_aoti_specializes_python_int_metadata_input(self):
         class M(torch.nn.Module):
             def forward(self, x, dim: int):
@@ -1164,6 +1190,8 @@ def forward(self, arg0_1, arg1_1, arg2_1):
         )
 
         self.assertTrue(same(ep.module()(x, dim), gm(x, dim)))
+        with self.assertRaisesRegex(AssertionError, "specialized int input"):
+            gm(x, 0)
 
     @parametrize("dynamic", (False, True))
     @parametrize("input_", (1.5, 2, False))

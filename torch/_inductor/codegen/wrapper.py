@@ -1510,6 +1510,9 @@ class PythonWrapperCodegen(CodeGen):
     ) -> dict[str, ir.TensorBox | ir.TorchBindObject | sympy.Expr | SympyBoolean]:
         return V.graph.graph_inputs
 
+    def get_specialized_graph_input_values(self) -> dict[str, int]:
+        return V.graph.specialized_graph_input_values
+
     @cache_on_self
     def get_symbolic_scalar_graph_input_replacements(
         self,
@@ -1577,6 +1580,17 @@ class PythonWrapperCodegen(CodeGen):
             line = f"assert not {name}.isinf().any().item()"
             self.prefix.writeline(line)
 
+    def codegen_specialized_graph_input_asserts(self) -> None:
+        graph_input_names = set(self.get_graph_input_names())
+        for name, value in self.get_specialized_graph_input_values().items():
+            if name not in graph_input_names:
+                continue
+            msg = (
+                f"specialized int input {name!r} must match its traced value "
+                f"{value!r}"
+            )
+            self.prefix.writeline(f"assert {name} == {value!r}, {msg!r}")
+
     def write_async_compile_wait(self) -> None:
         self.prefix.splice(
             """
@@ -1640,6 +1654,7 @@ class PythonWrapperCodegen(CodeGen):
 
             if graph_input_names := self.get_graph_input_names():
                 self.write_args(graph_input_names)
+                self.codegen_specialized_graph_input_asserts()
 
             self.codegen_inputs()
 
@@ -3825,9 +3840,14 @@ class PythonWrapperCodegen(CodeGen):
         input_deallocation = partition_signatures.input_deallocation
         output_nodes = partition_signatures.output_nodes
 
-        input_names = list(input_deallocation.keys()) + [
-            symbol_input.name for symbol_input in partition_signatures.symbol_inputs
-        ]
+        input_names = (
+            list(input_deallocation.keys())
+            + list(partition_signatures.scalar_inputs.keys())
+            + [
+                symbol_input.name
+                for symbol_input in partition_signatures.symbol_inputs
+            ]
+        )
 
         inputs = ", ".join(input_names) + ("," if len(input_names) == 1 else "")
 
@@ -4207,18 +4227,22 @@ class SubgraphPythonWrapperCodegen(PythonWrapperCodegen):
         ir.TensorBox | ir.TorchBindObject | sympy.Expr | SympyBoolean | None,
     ]:
         if signature := self.partition_signatures:
-            inputs = signature.input_nodes | {
-                str(s): s for s in signature.symbol_inputs
-            }
+            inputs = (
+                signature.input_nodes
+                | signature.scalar_inputs
+                | {str(s): s for s in signature.symbol_inputs}
+            )
         else:
             inputs = V.graph.graph_inputs
         return inputs
 
     def get_graph_input_names(self) -> list[str]:
         if signature := self.partition_signatures:
-            names = list(signature.input_nodes.keys()) + [
-                symbol_input.name for symbol_input in signature.symbol_inputs
-            ]
+            names = (
+                list(signature.input_nodes.keys())
+                + list(signature.scalar_inputs.keys())
+                + [symbol_input.name for symbol_input in signature.symbol_inputs]
+            )
         else:
             names = V.graph.graph_input_names
         return names
