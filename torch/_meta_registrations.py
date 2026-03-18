@@ -2549,6 +2549,60 @@ def is_channels_last(ten):
     return torch._prims_common.suggest_memory_format(ten) == torch.channels_last
 
 
+def _conv_device_or_fake_device(tensor: torch.Tensor) -> torch.device:
+    if isinstance(tensor, torch._subclasses.FakeTensor):
+        return tensor.fake_device
+    return tensor.device
+
+
+def _has_same_type_as_conv_input(
+    input_tensor: torch.Tensor, other: torch.Tensor
+) -> bool:
+    other_device = _conv_device_or_fake_device(other)
+    if (
+        input_tensor.dtype == other.dtype
+        and _conv_device_or_fake_device(input_tensor) == other_device
+        and input_tensor.is_mkldnn == other.is_mkldnn
+    ):
+        return True
+    return (
+        input_tensor.is_mkldnn
+        and not other.is_mkldnn
+        and other_device.type == "cpu"
+        and other.dtype == torch.float
+    )
+
+
+def _conv_input_type_error_message(
+    input_tensor: torch.Tensor, other: torch.Tensor, other_name: str
+) -> str:
+    message = (
+        f"Input type ({input_tensor.type()}) and {other_name} type "
+        f"({other.type()}) should be the same"
+    )
+    if input_tensor.is_mkldnn:
+        message += (
+            f" or input should be a MKLDNN tensor and {other_name} is a dense tensor"
+        )
+    return message
+
+
+def _check_conv_input_same_type_as_parameters(
+    input_tensor: torch.Tensor,
+    weight: torch.Tensor,
+    bias: torch.Tensor | None = None,
+) -> None:
+    torch._check(
+        _has_same_type_as_conv_input(input_tensor, weight),
+        lambda: _conv_input_type_error_message(input_tensor, weight, "weight"),
+    )
+    if bias is not None:
+        torch._check(
+            _has_same_type_as_conv_input(input_tensor, bias),
+            lambda: _conv_input_type_error_message(input_tensor, bias, "bias"),
+        )
+
+
 @register_meta(aten.miopen_batch_norm.default)
 def meta_miopen_batch_norm(
     input_tensor: torch.Tensor,
@@ -2600,48 +2654,9 @@ def meta_conv(
     groups: int,
 ):
     if is_transposed:
-        def _device_or_fake_device(tensor: torch.Tensor) -> torch.device:
-            if isinstance(tensor, torch._subclasses.FakeTensor):
-                return tensor.fake_device
-            return tensor.device
-
-        def _same_type_as_input(other: torch.Tensor) -> bool:
-            other_device = _device_or_fake_device(other)
-            if (
-                input_tensor.dtype == other.dtype
-                and _device_or_fake_device(input_tensor) == other_device
-                and input_tensor.is_mkldnn == other.is_mkldnn
-            ):
-                return True
-            return (
-                input_tensor.is_mkldnn
-                and not other.is_mkldnn
-                and other_device.type == "cpu"
-                and other.dtype == torch.float
-            )
-
-        def _error_message(other: torch.Tensor, other_name: str) -> str:
-            message = (
-                f"Input type ({input_tensor.type()}) and {other_name} type "
-                f"({other.type()}) should be the same"
-            )
-            if input_tensor.is_mkldnn:
-                message += (
-                    f" or input should be a MKLDNN tensor and {other_name} is a dense tensor"
-                )
-            return message
-
         # Keep fake/meta validation aligned with eager so invalid ConvTranspose
         # inputs fail during tracing instead of compiling incorrect kernels.
-        torch._check(
-            _same_type_as_input(weight),
-            lambda: _error_message(weight, "weight"),
-        )
-        if bias is not None:
-            torch._check(
-                _same_type_as_input(bias),
-                lambda: _error_message(bias, "bias"),
-            )
+        _check_conv_input_same_type_as_parameters(input_tensor, weight, bias)
 
     shape_out = calc_conv_nd_return_shape(
         input_tensor,
@@ -3738,6 +3753,9 @@ def meta_convolution_backward(
         if fmt1 == torch.channels_last_3d or fmt2 == torch.channels_last_3d:
             return torch.channels_last_3d
         return torch.contiguous_format
+
+    if transposed:
+        _check_conv_input_same_type_as_parameters(input_, weight_)
 
     if output_mask[0]:
         memory_format = _conv_memory_format(grad_output_, weight_)

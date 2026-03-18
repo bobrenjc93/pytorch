@@ -1850,6 +1850,28 @@ class FakeTensorOperatorInvariants(TestCase):
                     1,
                 )
 
+    def test_conv_transpose_backward_dtype_mismatch_errors(self):
+        with FakeTensorMode():
+            grad_output = torch.randn(2, 3, 4, 4, dtype=torch.float16)
+            inp = torch.randn(2, 3, 4, 4, dtype=torch.float16)
+            weight = torch.randn(3, 3, 1, 1, dtype=torch.float32)
+            error_regex = "should be the same|expected scalar type"
+
+            with self.assertRaisesRegex(RuntimeError, error_regex):
+                torch.ops.aten.convolution_backward(
+                    grad_output,
+                    inp,
+                    weight,
+                    [3],
+                    [1, 1],
+                    [0, 0],
+                    [1, 1],
+                    True,
+                    [0, 0],
+                    1,
+                    [True, True, False],
+                )
+
     @unittest.skipIf(not RUN_CUDA, "requires cuda")
     def test_conv_transpose_device_mismatch_errors(self):
         with FakeTensorMode():
@@ -1867,6 +1889,28 @@ class FakeTensorOperatorInvariants(TestCase):
                     True,
                     [0, 0],
                     1,
+                )
+
+    @unittest.skipIf(not RUN_CUDA, "requires cuda")
+    def test_conv_transpose_backward_device_mismatch_errors(self):
+        with FakeTensorMode():
+            grad_output = torch.randn(2, 3, 4, 4, device="cuda")
+            inp = torch.randn(2, 3, 4, 4, device="cuda")
+            weight = torch.randn(3, 3, 1, 1, device="cpu")
+
+            with self.assertRaisesRegex(RuntimeError, "should be the same"):
+                torch.ops.aten.convolution_backward(
+                    grad_output,
+                    inp,
+                    weight,
+                    [3],
+                    [1, 1],
+                    [0, 0],
+                    [1, 1],
+                    True,
+                    [0, 0],
+                    1,
+                    [True, True, False],
                 )
 
     def test_no_dispatch_with_like_function(self):
