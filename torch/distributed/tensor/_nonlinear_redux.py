@@ -202,6 +202,8 @@ def argminmax_handler(
     op_call: torch._ops.OpOverload,
     args: tuple[object, ...],
     kwargs: dict[str, object],
+    *,
+    dtensor_type: "type[dtensor.DTensor] | None" = None,
 ) -> object:
     """
     Handler for aten.argmin.default and aten.argmax.default ops.
@@ -215,7 +217,11 @@ def argminmax_handler(
         str(op_call), args, kwargs
     )
     output_sharding = _get_output_sharding(op_call, args, kwargs)
-    dtensor_type = cast(dtensor.DTensor, args[0]).__class__
+    dtensor_type = (
+        cast(type[dtensor.DTensor], cast(dtensor.DTensor, args[0]).__class__)
+        if dtensor_type is None
+        else dtensor_type
+    )
 
     expected_shape = _get_expected_shape(local_tensor, dim, keepdim)
     shard_mesh_dims = _collect_shard_mesh_dims(
@@ -234,7 +240,9 @@ def argminmax_handler(
 
     if not shard_mesh_dims:
         return dtensor_type._op_dispatcher.wrap(
-            local_idx.reshape(expected_shape), output_sharding.output_spec
+            local_idx.reshape(expected_shape),
+            output_sharding.output_spec,
+            dtensor_type=dtensor_type,
         )
 
     gather_dim, gathered_idxs = _convert_to_global_idxs(
@@ -250,7 +258,9 @@ def argminmax_handler(
     final_idx = torch.gather(gather_idxs, dim=gather_dim, index=rank_winner)
 
     return dtensor_type._op_dispatcher.wrap(
-        final_idx.reshape(expected_shape), output_sharding.output_spec
+        final_idx.reshape(expected_shape),
+        output_sharding.output_spec,
+        dtensor_type=dtensor_type,
     )
 
 
@@ -258,6 +268,8 @@ def minmax_dim_handler(
     op_call: torch._ops.OpOverload,
     args: tuple[object, ...],
     kwargs: dict[str, object],
+    *,
+    dtensor_type: "type[dtensor.DTensor] | None" = None,
 ) -> object:
     """
     Handler for aten.min.dim and aten.max.dim ops.
@@ -268,7 +280,11 @@ def minmax_dim_handler(
         str(op_call), args, kwargs
     )
     output_sharding = _get_output_sharding(op_call, args, kwargs)
-    dtensor_type = cast(dtensor.DTensor, args[0]).__class__
+    dtensor_type = (
+        cast(type[dtensor.DTensor], cast(dtensor.DTensor, args[0]).__class__)
+        if dtensor_type is None
+        else dtensor_type
+    )
 
     expected_shape = _get_expected_shape(local_tensor, dim, keepdim)
     shard_mesh_dims = _collect_shard_mesh_dims(
@@ -287,6 +303,7 @@ def minmax_dim_handler(
                 local_idx.reshape(expected_shape),
             ),
             output_sharding.output_spec,
+            dtensor_type=dtensor_type,
         )
 
     gather_dim, gathered_idxs = _convert_to_global_idxs(
@@ -306,4 +323,5 @@ def minmax_dim_handler(
             final_idx.reshape(expected_shape),
         ),
         output_sharding.output_spec,
+        dtensor_type=dtensor_type,
     )

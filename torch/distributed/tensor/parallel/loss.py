@@ -161,9 +161,13 @@ def _log_softmax_handler(
     op_call: torch._ops.OpOverload,
     args: tuple[object, ...],
     kwargs: dict[str, object],
+    *,
+    dtensor_type: type[DTensor] | None = None,
 ) -> object:
     x = cast(DTensor, args[0])
-    dtensor_type = x.__class__
+    dtensor_type = (
+        cast(type[DTensor], x.__class__) if dtensor_type is None else dtensor_type
+    )
     dim = cast(int, args[1])
     half_to_float = cast(bool, args[2])
 
@@ -197,6 +201,8 @@ def _log_softmax_backward_handler(
     op_call: torch._ops.OpOverload,
     args: tuple[object, ...],
     kwargs: dict[str, object],
+    *,
+    dtensor_type: type[DTensor] | None = None,
 ) -> object:
     grad_output = cast(DTensor, args[0])
     input_dtype = cast(torch.dtype, args[3])
@@ -284,9 +290,13 @@ def _nll_loss_forward_handler(
     op_call: torch._ops.OpOverload,
     args: tuple[object, ...],
     kwargs: dict[str, object],
+    *,
+    dtensor_type: type[DTensor] | None = None,
 ) -> object:
     x = cast(DTensor, args[0])
-    dtensor_type = x.__class__
+    dtensor_type = (
+        cast(type[DTensor], x.__class__) if dtensor_type is None else dtensor_type
+    )
     target = args[1]
     weight = args[2]
     reduction = cast(int, args[3])
@@ -436,10 +446,14 @@ def _nll_loss_backward_handler(
     op_call: torch._ops.OpOverload,
     args: tuple[object, ...],
     kwargs: dict[str, object],
+    *,
+    dtensor_type: type[DTensor] | None = None,
 ) -> object:
     grad_output = cast(DTensor, args[0])
     x = cast(DTensor, args[1])
-    dtensor_type = x.__class__
+    dtensor_type = (
+        cast(type[DTensor], x.__class__) if dtensor_type is None else dtensor_type
+    )
     target = args[2]
     weight = args[3]
     reduction = cast(int, args[4])

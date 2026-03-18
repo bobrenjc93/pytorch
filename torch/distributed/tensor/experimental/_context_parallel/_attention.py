@@ -898,8 +898,14 @@ def _sdpa_handler(
     op_call: torch._ops.OpOverload,
     args: tuple[object, ...],
     kwargs: dict[str, object],
+    *,
+    dtensor_type: type[DTensor] | None = None,
 ) -> object:
-    dtensor_type = cast(DTensor, args[0]).__class__
+    dtensor_type = (
+        cast(type[DTensor], cast(DTensor, args[0]).__class__)
+        if dtensor_type is None
+        else dtensor_type
+    )
     dispatcher = dtensor_type._op_dispatcher
     # extract local tensor and sharding infos to a OpInfo
     op_info = dispatcher.unwrap_to_op_info(op_call, args, kwargs)

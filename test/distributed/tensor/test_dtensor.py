@@ -305,6 +305,102 @@ class DTensorTest(DTensorTestBase):
         self.assertEqual(result.to_local(), expected)
 
     @with_comms
+    def test_dtensor_subclass_custom_handler_uses_selected_type(self):
+        device_mesh = self.build_device_mesh()
+        local_input = torch.arange(
+            16, device=self.device_type, dtype=torch.float32
+        ).reshape(1, 1, 4, 4)
+        local_weight = torch.ones(
+            1, 1, 1, 1, device=self.device_type, dtype=torch.float32
+        )
+        input_dt = distribute_tensor(local_input, device_mesh, [Replicate()])
+        base_weight = distribute_tensor(local_weight, device_mesh, [Replicate()])
+
+        class MyDTensor(DTensor):
+            _op_dispatcher = type(DTensor._op_dispatcher)()
+
+        weight = MyDTensor(
+            base_weight._local_tensor,
+            base_weight._spec,
+            requires_grad=base_weight.requires_grad,
+        )
+        result = F.conv2d(input_dt, weight)
+
+        self.assertEqual(type(result), MyDTensor)
+        self.assertEqual(result.to_local(), F.conv2d(local_input, local_weight))
+
+    def test_dtensor_subclass_sharding_propagator_inherits_base_without_aliasing(self):
+        lib = torch.library.Library("dtensor_subclass_dispatch_test", "FRAGMENT")
+        lib.define("base_rule(Tensor input) -> Tensor")
+        lib.define("base_strategy(Tensor input) -> Tensor")
+        lib.define("subclass_rule(Tensor input) -> Tensor")
+        lib.define("subclass_strategy(Tensor input) -> Tensor")
+
+        base_rule_op = torch.ops.dtensor_subclass_dispatch_test.base_rule.default
+        base_strategy_op = (
+            torch.ops.dtensor_subclass_dispatch_test.base_strategy.default
+        )
+        subclass_rule_op = (
+            torch.ops.dtensor_subclass_dispatch_test.subclass_rule.default
+        )
+        subclass_strategy_op = (
+            torch.ops.dtensor_subclass_dispatch_test.subclass_strategy.default
+        )
+
+        class MyDTensor(DTensor):
+            _op_dispatcher = type(DTensor._op_dispatcher)()
+
+        base_prop = DTensor._op_dispatcher.sharding_propagator
+        subclass_prop = MyDTensor._op_dispatcher.sharding_propagator
+
+        def base_rule(op_schema):
+            raise AssertionError(f"unexpected call: {op_schema}")
+
+        def base_strategy(op_schema):
+            raise AssertionError(f"unexpected call: {op_schema}")
+
+        def subclass_rule(op_schema):
+            raise AssertionError(f"unexpected call: {op_schema}")
+
+        def subclass_strategy(op_schema):
+            raise AssertionError(f"unexpected call: {op_schema}")
+
+        self.assertIsNot(base_prop, subclass_prop)
+        base_rule_backup = base_prop.op_to_rules.get(base_rule_op)
+        base_strategy_backup = base_prop.op_strategy_funcs.get(base_strategy_op)
+        try:
+            base_prop.register_sharding_prop_rule(base_rule_op, base_rule)
+            base_prop.register_op_strategy(base_strategy_op, base_strategy)
+            self.assertIs(subclass_prop.op_to_rules.get(base_rule_op), base_rule)
+            self.assertIs(
+                subclass_prop.op_strategy_funcs.get(base_strategy_op),
+                base_strategy,
+            )
+
+            subclass_prop.register_sharding_prop_rule(subclass_rule_op, subclass_rule)
+            subclass_prop.register_op_strategy(
+                subclass_strategy_op, subclass_strategy
+            )
+            self.assertIs(
+                subclass_prop.op_to_rules.get(subclass_rule_op), subclass_rule
+            )
+            self.assertIs(
+                subclass_prop.op_strategy_funcs.get(subclass_strategy_op),
+                subclass_strategy,
+            )
+            self.assertIsNone(base_prop.op_to_rules.get(subclass_rule_op))
+            self.assertIsNone(base_prop.op_strategy_funcs.get(subclass_strategy_op))
+        finally:
+            if base_rule_backup is None:
+                base_prop.op_to_rules.pop(base_rule_op, None)
+            else:
+                base_prop.op_to_rules[base_rule_op] = base_rule_backup
+            if base_strategy_backup is None:
+                base_prop.op_strategy_funcs.pop(base_strategy_op, None)
+            else:
+                base_prop.op_strategy_funcs[base_strategy_op] = base_strategy_backup
+
+    @with_comms
     def test_from_local_backward(self):
         """Test that from_local backward gives the correct gradient placements.
 

@@ -250,8 +250,14 @@ def convolution_handler(
     op_call: torch._ops.OpOverload,
     args: tuple[object, ...],
     kwargs: dict[str, object],
+    *,
+    dtensor_type: "type[dtensor.DTensor] | None" = None,
 ) -> object:
-    dtensor_type = cast(dtensor.DTensor, args[0]).__class__
+    dtensor_type = (
+        cast(type[dtensor.DTensor], cast(dtensor.DTensor, args[0]).__class__)
+        if dtensor_type is None
+        else dtensor_type
+    )
     # extract local tensor and sharding infos to a OpInfo
     op_info = dtensor_type._op_dispatcher.unwrap_to_op_info(op_call, args, kwargs)
 
@@ -272,13 +278,17 @@ def convolution_handler(
         output_spec.dim_map,
     )
 
-    return dtensor_type._op_dispatcher.wrap(local_results, output_spec)
+    return dtensor_type._op_dispatcher.wrap(
+        local_results, output_spec, dtensor_type=dtensor_type
+    )
 
 
 def convolution_backward_handler(
     op_call: torch._ops.OpOverload,
     args: tuple[object, ...],
     kwargs: dict[str, object],
+    *,
+    dtensor_type: "type[dtensor.DTensor] | None" = None,
 ) -> object:
     # Redistribute grad_output tensor to the same placement as input tensor
     # pyrefly: ignore [bad-assignment]
@@ -290,7 +300,11 @@ def convolution_backward_handler(
     # pyrefly: ignore [unsupported-operation]
     args[0] = args[0].redistribute(args[1].device_mesh, args[1].placements)
     args = tuple(args)
-    dtensor_type = cast(dtensor.DTensor, args[0]).__class__
+    dtensor_type = (
+        cast(type[dtensor.DTensor], cast(dtensor.DTensor, args[0]).__class__)
+        if dtensor_type is None
+        else dtensor_type
+    )
 
     # extract local tensor and sharding infos to a OpInfo
     op_info = dtensor_type._op_dispatcher.unwrap_to_op_info(op_call, args, kwargs)
@@ -311,4 +325,8 @@ def convolution_backward_handler(
         op_info.flat_args_schema[0].dim_map,
     )
 
-    return dtensor_type._op_dispatcher.wrap(local_results, output_sharding.output_spec)
+    return dtensor_type._op_dispatcher.wrap(
+        local_results,
+        output_sharding.output_spec,
+        dtensor_type=dtensor_type,
+    )

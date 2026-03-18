@@ -65,6 +65,8 @@ def as_strided_handler(
     op_call: torch._ops.OpOverload,
     args: tuple[object, ...],
     kwargs: dict[str, object],
+    *,
+    dtensor_type: "type[dtensor.DTensor] | None" = None,
 ):
     args, kwargs = fill_defaults(op_call._schema, args, kwargs)
     if kwargs:
@@ -83,6 +85,8 @@ def is_same_size_handler(
     op_call: torch._ops.OpOverload,
     args: tuple[object, ...],
     kwargs: dict[str, object],
+    *,
+    dtensor_type: "type[dtensor.DTensor] | None" = None,
 ) -> bool:
     lhs = cast(torch.Tensor, args[0])
     rhs = cast(torch.Tensor, args[1])
@@ -93,6 +97,8 @@ def is_pinned_handler(
     op_call: torch._ops.OpOverload,
     args: tuple[object, ...],
     kwargs: dict[str, object],
+    *,
+    dtensor_type: "type[dtensor.DTensor] | None" = None,
 ) -> bool:
     tensor = cast(dtensor.DTensor, args[0])
     return tensor._local_tensor.is_pinned()
@@ -102,6 +108,8 @@ def found_inf_reduce_handler(
     op_call: torch._ops.OpOverload,
     args: tuple[object, ...],
     kwargs: dict[str, object],
+    *,
+    dtensor_type: "type[dtensor.DTensor] | None" = None,
 ) -> None:
     grad_dtensor = cast(list[dtensor.DTensor], args[0])[0]
     op_info = grad_dtensor.__class__._op_dispatcher.unwrap_to_op_info(
@@ -159,17 +167,17 @@ class OpDispatcher:
     """
 
     def __init__(self) -> None:
-        # DTensor op strategies and propagation rules are registered on the
-        # base DTensor dispatcher. Fresh subclass dispatchers should reuse
-        # that propagator so they inherit the same global registrations and
-        # any runtime extensions (for example CP sharding rules).
+        # DTensor subclasses should inherit the base dispatcher registrations,
+        # including runtime installs, without aliasing mutable propagator state.
         base_dispatcher = getattr(
             getattr(dtensor, "DTensor", None), "_op_dispatcher", None
         )
-        if isinstance(base_dispatcher, OpDispatcher):
-            self.sharding_propagator = base_dispatcher.sharding_propagator
-        else:
-            self.sharding_propagator = ShardingPropagator()
+        base_propagator = (
+            base_dispatcher.sharding_propagator
+            if isinstance(base_dispatcher, OpDispatcher)
+            else None
+        )
+        self.sharding_propagator = ShardingPropagator(base_propagator)
         # NOTE: must stay in sync with is_random_op in
         # torch/csrc/autograd/python_variable.cpp
         self._random_ops = {
@@ -256,7 +264,12 @@ class OpDispatcher:
         dtensor_type = dtensor.DTensor if dtensor_type is None else dtensor_type
         handler = self._get_custom_op_handler(op_call, dtensor_type)
         if handler is not None:
-            return handler(op_call, args, kwargs)  # type: ignore[operator]
+            return handler(  # type: ignore[operator]
+                op_call,
+                args,
+                kwargs,
+                dtensor_type=dtensor_type,
+            )
 
         op_info = self.unwrap_to_op_info(op_call, args, kwargs)
 

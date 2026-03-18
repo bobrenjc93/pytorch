@@ -1,7 +1,8 @@
 # mypy: allow-untyped-defs
 import logging
 import threading
-from collections.abc import Callable, Sequence
+from collections import ChainMap
+from collections.abc import Callable, MutableMapping, Sequence
 from contextlib import nullcontext
 from functools import lru_cache
 from itertools import chain
@@ -307,22 +308,40 @@ class ShardingPropagator:
     # when multiple threads enter different FakeTensorMode contexts.
     _fake_mode_lock = nullcontext()
 
-    def __init__(self) -> None:
-        self.op_to_rules: dict[OpOverload, Callable[[OpSchema], OutputSharding]] = {}
-        self.op_strategy_funcs: dict[
+    def __init__(self, base_propagator: "ShardingPropagator | None" = None) -> None:
+        if base_propagator is None:
+            self.op_to_rules = {}
+            self.op_strategy_funcs = {}
+            self.op_single_dim_strategy_funcs = {}
+            self.op_to_schema_info = {}
+            self.op_to_schema_info_for_single_dim_strategy = {}
+        else:
+            self.op_to_rules = ChainMap({}, base_propagator.op_to_rules)
+            self.op_strategy_funcs = ChainMap({}, base_propagator.op_strategy_funcs)
+            self.op_single_dim_strategy_funcs = ChainMap(
+                {}, base_propagator.op_single_dim_strategy_funcs
+            )
+            self.op_to_schema_info = ChainMap({}, base_propagator.op_to_schema_info)
+            self.op_to_schema_info_for_single_dim_strategy = ChainMap(
+                {}, base_propagator.op_to_schema_info_for_single_dim_strategy
+            )
+        self.op_to_rules: MutableMapping[
+            OpOverload, Callable[[OpSchema], OutputSharding]
+        ]
+        self.op_strategy_funcs: MutableMapping[
             OpOverload,
             Callable[[OpSchema], StrategyType],
-        ] = {}
-        self.op_single_dim_strategy_funcs: dict[
+        ]
+        self.op_single_dim_strategy_funcs: MutableMapping[
             OpOverload,
             _SingleDimStrategyInfo,
-        ] = {}
+        ]
         # op map to save static argnum to decide to reuse sharding prop cache or
         # re-run sharding prop
-        self.op_to_schema_info: dict[OpOverload, RuntimeSchemaInfo] = {}
-        self.op_to_schema_info_for_single_dim_strategy: dict[
+        self.op_to_schema_info: MutableMapping[OpOverload, RuntimeSchemaInfo]
+        self.op_to_schema_info_for_single_dim_strategy: MutableMapping[
             OpOverload, RuntimeSchemaInfo
-        ] = {}
+        ]
         self.propagate_op_sharding = LocalLRUCache(
             self.propagate_op_sharding_non_cached
         )
