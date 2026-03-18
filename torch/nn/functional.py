@@ -1416,9 +1416,50 @@ def adaptive_avg_pool3d(input: Tensor, output_size: BroadcastingList3[int]) -> T
 
 
 # Activation functions
+def _dropout_with_tensor_probability(
+    input: Tensor,
+    p: Tensor,
+    training: bool,
+) -> Tensor:
+    from torch._subclasses.fake_tensor import is_fake
+    from torch.fx.experimental.proxy_tensor import get_proxy_mode
+
+    if p.ndim != 0:
+        raise ValueError(
+            "dropout probability tensor has to be 0-dimensional, "
+            f"but got {p.ndim} dimensions"
+        )
+
+    # Outside tracing, reuse the eager float path so tensor probabilities keep
+    # the same validation and kernel behavior as the existing API.
+    if get_proxy_mode() is None and not is_fake(p):
+        return dropout(input, float(p.item()), training=training)
+
+    if not training:
+        return input
+
+    if not input.is_floating_point() and not input.is_complex():
+        raise RuntimeError(
+            "dropout with a tensor probability only supports floating-point "
+            "and complex inputs"
+        )
+
+    # Under proxy tracing, keep p in tensor space so tracing does not need a
+    # data-dependent scalar extraction to materialize the probability.
+    prob_dtype = torch.float64 if input.dtype == torch.float64 else torch.float32
+    p = p.to(device=input.device, dtype=prob_dtype)
+    keep_prob = torch.ones_like(p, dtype=prob_dtype) - p
+    scale = torch.where(
+        keep_prob == 0, torch.zeros_like(keep_prob), torch.reciprocal(keep_prob)
+    )
+    dropout_mask = torch.rand_like(input, dtype=prob_dtype) < keep_prob
+    scale = scale.to(dtype=input.dtype)
+    return input * dropout_mask.to(dtype=input.dtype) * scale
+
+
 def dropout(
     input: Tensor,
-    p: float = 0.5,
+    p: float | Tensor = 0.5,
     training: bool = True,
     inplace: bool = False,
 ) -> Tensor:
@@ -1433,15 +1474,25 @@ def dropout(
         training: apply dropout if is ``True``. Default: ``True``
         inplace: If set to ``True``, will do this operation in-place. Default: ``False``
     """
-    if has_torch_function_unary(input):
+    if has_torch_function_variadic(input, p):
         return handle_torch_function(
-            dropout, (input,), input, p=p, training=training, inplace=inplace
+            dropout, (input, p), input, p=p, training=training, inplace=inplace
         )
+    if isinstance(p, Tensor):
+        if inplace:
+            raise NotImplementedError(
+                "inplace dropout is not supported when the probability is a tensor"
+            )
+        return _dropout_with_tensor_probability(input, p, training)
     if p < 0.0 or p > 1.0:
         raise ValueError(f"dropout probability has to be between 0 and 1, but got {p}")
-    return (
-        _VF.dropout_(input, p, training) if inplace else _VF.dropout(input, p, training)
-    )
+    if inplace or not training or p == 0.0:
+        return (
+            _VF.dropout_(input, p, training)
+            if inplace
+            else _VF.dropout(input, p, training)
+        )
+    return torch.ops.aten.native_dropout.default(input, p, training)[0]
 
 
 def alpha_dropout(

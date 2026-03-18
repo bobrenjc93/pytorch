@@ -275,6 +275,39 @@ class TestPythonKey(AOTTestCase):
         new_inp = torch.randn(3)
         self.assertEqual(fx_f(new_inp), f(new_inp))
 
+    def test_make_fx_dropout_tensor_probability(self, device):
+        def f(x, p):
+            return F.dropout(x, p)
+
+        gm = make_fx(f, decomposition_table={}, tracing_mode="fake")(
+            torch.randn(10, device=device), torch.tensor(0.5, device=device)
+        )
+
+        placeholders = [node for node in gm.graph.nodes if node.op == "placeholder"]
+        p_node = placeholders[1]
+        self.assertGreater(len(p_node.users), 0)
+
+        call_targets = {
+            node.target for node in gm.graph.nodes if node.op == "call_function"
+        }
+        self.assertNotIn(torch.ops.aten._local_scalar_dense.default, call_targets)
+
+    def test_make_fx_dropout_uses_native_dropout_on_cpu(self, device):
+        if device != "cpu":
+            self.skipTest("CPU-only regression")
+
+        gm = make_fx(
+            lambda x, p: F.dropout(x, p),
+            decomposition_table={},
+            tracing_mode="real",
+        )(torch.randn(10), 0.5)
+
+        call_targets = [
+            node.target for node in gm.graph.nodes if node.op == "call_function"
+        ]
+        self.assertIn(torch.ops.aten.native_dropout.default, call_targets)
+        self.assertNotIn(torch.ops.aten.bernoulli_.float, call_targets)
+
     def test_make_fx_vjp(self, device):
         def f(x):
             return torch.sin(x).sum()
