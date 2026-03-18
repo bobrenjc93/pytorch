@@ -1,8 +1,10 @@
 # Copyright (c) Meta Platforms, Inc. and affiliates
 import contextlib
+import inspect
 import logging
 import warnings
 from collections.abc import Sequence
+from functools import lru_cache
 from typing import cast
 
 import torch
@@ -207,6 +209,33 @@ def _is_explicit_default_handler(
     )
 
 
+def _handler_accepts_dtensor_type_kwarg(handler: object) -> bool:
+    try:
+        return _handler_accepts_dtensor_type_kwarg_cached(handler)
+    except TypeError:
+        return _handler_accepts_dtensor_type_kwarg_uncached(handler)
+
+
+@lru_cache(maxsize=None)
+def _handler_accepts_dtensor_type_kwarg_cached(handler: object) -> bool:
+    return _handler_accepts_dtensor_type_kwarg_uncached(handler)
+
+
+def _handler_accepts_dtensor_type_kwarg_uncached(handler: object) -> bool:
+    try:
+        signature = inspect.signature(handler)
+    except (TypeError, ValueError):
+        return False
+
+    if "dtensor_type" in signature.parameters:
+        return True
+
+    return any(
+        parameter.kind is inspect.Parameter.VAR_KEYWORD
+        for parameter in signature.parameters.values()
+    )
+
+
 class OpDispatcher:
     """
     Op dispatching class instance to handle args/kwargs pre-processing (un-wrapping), sharding
@@ -335,12 +364,14 @@ class OpDispatcher:
         dtensor_type = dtensor.DTensor if dtensor_type is None else dtensor_type
         handler = self._get_custom_op_handler(op_call, dtensor_type)
         if handler is not None:
-            return handler(  # type: ignore[operator]
-                op_call,
-                args,
-                kwargs,
-                dtensor_type=dtensor_type,
-            )
+            if _handler_accepts_dtensor_type_kwarg(handler):
+                return handler(  # type: ignore[operator]
+                    op_call,
+                    args,
+                    kwargs,
+                    dtensor_type=dtensor_type,
+                )
+            return handler(op_call, args, kwargs)  # type: ignore[operator]
 
         op_info = self.unwrap_to_op_info(op_call, args, kwargs)
 

@@ -352,16 +352,25 @@ class DTensor(torch.Tensor):
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
 
-        dispatcher = cls.__dict__.get("_op_dispatcher")
-        if not isinstance(dispatcher, op_dispatch.OpDispatcher):
+        base_dispatcher = None
+        for base_type in cls.__mro__[1:]:
+            candidate = getattr(base_type, "_op_dispatcher", None)
+            if isinstance(candidate, op_dispatch.OpDispatcher):
+                base_dispatcher = candidate
+                break
+
+        if base_dispatcher is None:
             return
 
-        for base_type in cls.__mro__[1:]:
-            base_dispatcher = getattr(base_type, "_op_dispatcher", None)
-            if isinstance(base_dispatcher, op_dispatch.OpDispatcher):
-                if dispatcher is not base_dispatcher:
-                    dispatcher.rebase_sharding_propagator(base_dispatcher)
-                return
+        dispatcher = cls.__dict__.get("_op_dispatcher")
+        if dispatcher is None:
+            dispatcher = type(base_dispatcher)()
+            cls._op_dispatcher = dispatcher
+        elif not isinstance(dispatcher, op_dispatch.OpDispatcher):
+            return
+
+        if dispatcher is not base_dispatcher:
+            dispatcher.rebase_sharding_propagator(base_dispatcher)
 
     # pyre-fixme[14]: `__repr__` overrides method defined in `DTensor` inconsistently.
     # pyre-fixme[3]: Return type must be annotated.

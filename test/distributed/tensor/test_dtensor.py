@@ -393,6 +393,78 @@ class DTensorTest(DTensorTestBase):
         self.assertEqual(type(result), MyDTensor)
         self.assertEqual(result.to_local(), F.conv2d(local_input, local_weight))
 
+    @with_comms
+    def test_dtensor_subclass_legacy_custom_handler_signature(self):
+        device_mesh = self.build_device_mesh()
+        local_input = torch.arange(
+            16, device=self.device_type, dtype=torch.float32
+        ).reshape(1, 1, 4, 4)
+        local_weight = torch.ones(
+            1, 1, 1, 1, device=self.device_type, dtype=torch.float32
+        )
+        input_dt = distribute_tensor(local_input, device_mesh, [Replicate()])
+        base_weight = distribute_tensor(local_weight, device_mesh, [Replicate()])
+
+        class MyDTensor(DTensor):
+            _op_dispatcher = type(DTensor._op_dispatcher)()
+
+        op = torch.ops.aten.convolution.default
+        dispatcher = MyDTensor._op_dispatcher
+        default_conv_handler = dispatcher._custom_op_handlers[op]
+        legacy_handler_calls = []
+
+        def legacy_conv_handler(op_call, args, kwargs):
+            legacy_handler_calls.append(op_call)
+            return default_conv_handler(
+                op_call,
+                args,
+                kwargs,
+                dtensor_type=MyDTensor,
+            )
+
+        dispatcher._custom_op_handlers[op] = legacy_conv_handler
+
+        weight = MyDTensor(
+            base_weight._local_tensor,
+            base_weight._spec,
+            requires_grad=base_weight.requires_grad,
+        )
+        result = F.conv2d(input_dt, weight)
+
+        self.assertEqual(legacy_handler_calls, [op])
+        self.assertEqual(type(result), MyDTensor)
+        self.assertEqual(result.to_local(), F.conv2d(local_input, local_weight))
+
+    def test_dtensor_subclass_inherited_dispatcher_is_cloned(self):
+        class ParentDTensor(DTensor):
+            pass
+
+        class ChildDTensor(ParentDTensor):
+            pass
+
+        op = torch.ops.aten.convolution.default
+        base_dispatcher = DTensor._op_dispatcher
+        parent_dispatcher = ParentDTensor._op_dispatcher
+        child_dispatcher = ChildDTensor._op_dispatcher
+        default_conv_handler = base_dispatcher._custom_op_handlers[op]
+        marker = object()
+
+        self.assertIsNot(parent_dispatcher, base_dispatcher)
+        self.assertIsNot(child_dispatcher, parent_dispatcher)
+        self.assertIsNot(
+            parent_dispatcher.sharding_propagator,
+            base_dispatcher.sharding_propagator,
+        )
+        self.assertIsNot(
+            child_dispatcher.sharding_propagator,
+            parent_dispatcher.sharding_propagator,
+        )
+
+        parent_dispatcher._custom_op_handlers[op] = marker
+
+        self.assertIs(base_dispatcher._custom_op_handlers[op], default_conv_handler)
+        self.assertIs(child_dispatcher._get_custom_op_handler(op, ChildDTensor), marker)
+
     def test_dtensor_subclass_sharding_propagator_inherits_base_without_aliasing(self):
         lib = torch.library.Library("dtensor_subclass_dispatch_test", "FRAGMENT")
         lib.define("base_rule(Tensor input) -> Tensor")
