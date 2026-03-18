@@ -815,20 +815,16 @@ class TensorVariable(VariableTracker):
             pass
         elif name in ("div_", "divide_"):
             rounding_mode = kwargs.get("rounding_mode")
-            if not (
-                rounding_mode is None
-                or not rounding_mode.is_python_constant()
-                or rounding_mode.as_python_constant() is None
-            ):
+            if rounding_mode is None:
+                pass
+            elif not rounding_mode.is_python_constant():
+                return False
+            elif rounding_mode.as_python_constant() is not None:
                 return False
         else:
             return False
 
-        if (
-            self.dtype is None
-            or self.dtype.is_floating_point
-            or self.dtype.is_complex
-        ):
+        if self.dtype is None or self.dtype.is_floating_point or self.dtype.is_complex:
             return False
 
         return self._has_source_or_source_alias(tx)
@@ -941,8 +937,7 @@ class TensorVariable(VariableTracker):
             self.dtype, str(self.dtype).removeprefix("torch.")
         )
         return (
-            "result type Float can't be cast to the desired output type "
-            f"{output_type}"
+            f"result type Float can't be cast to the desired output type {output_type}"
         )
 
     def _raise_integral_inplace_true_division_error(

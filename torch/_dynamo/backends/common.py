@@ -42,6 +42,8 @@ R = TypeVar("R")
 
 
 class AotAutograd:
+    _torchdynamo_uses_aot_autograd = True
+
     def __init__(self, **kwargs: Any) -> None:
         self.__name__ = "compiler_fn"
         self._torchdynamo_uses_aot_autograd = True
@@ -133,6 +135,9 @@ class AotAutograd:
 
 def aot_autograd(**kwargs: Any) -> AotAutograd:
     return AotAutograd(**kwargs)
+
+
+aot_autograd._torchdynamo_uses_aot_autograd = True  # type: ignore[attr-defined]
 
 
 def mem_efficient_fusion_kwargs(use_decomps: bool) -> dict[str, Any]:

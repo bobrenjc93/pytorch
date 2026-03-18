@@ -1134,6 +1134,34 @@ class TorchInGraphFunctionVariable(BaseTorchVariable):
                 return self.call_method(tx, "stride", [dim], {})
             return None
 
+        @register(
+            torch.ops.aten.div_.Tensor,
+            torch.ops.aten.div_.Scalar,
+            torch.ops.aten.div_.Tensor_mode,
+            torch.ops.aten.div_.Scalar_mode,
+            torch.ops.aten.divide_.Tensor,
+            torch.ops.aten.divide_.Scalar,
+            torch.ops.aten.divide_.Tensor_mode,
+            torch.ops.aten.divide_.Scalar_mode,
+            torch.ops.aten.true_divide_.Tensor,
+            torch.ops.aten.true_divide_.Scalar,
+        )
+        def handle_integral_inplace_true_division_overloads(
+            self,
+            tx: "InstructionTranslator",
+            *args: VariableTracker,
+            **kwargs: VariableTracker,
+        ) -> VariableTracker | None:
+            if not args or not isinstance(args[0], TensorVariable):
+                return None
+
+            assert isinstance(self.value, torch._ops.OpOverload)
+            op_name = self.value._schema.name.rsplit("::", maxsplit=1)[-1]
+            args[0]._handle_integral_inplace_true_division(
+                tx, op_name, args[1:], kwargs
+            )
+            return None
+
         @register(torch.addcdiv)
         def handle_addcdiv(
             self,

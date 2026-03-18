@@ -42,7 +42,8 @@ import torch.distributed as dist
 import torch.library
 import torch.utils._pytree as pytree
 from torch import nn
-from torch._dynamo.backends.debugging import ExplainWithBackend, aot_eager
+from torch._dynamo.backends.common import aot_autograd
+from torch._dynamo.backends.debugging import aot_eager, ExplainWithBackend
 from torch._dynamo.debug_utils import same_two_models
 from torch._dynamo.testing import (
     AotEagerAndRecordGraphs,
@@ -4616,17 +4617,13 @@ class ReproTests(torch._dynamo.test_case.TestCase):
         self.assertEqual(x1.data, x2.data)
         self.assertEqual(y1, y2)
 
-    def _assert_integral_inplace_true_division_raises(
-        self, func, backend_factory=None
-    ):
+    def _assert_integral_inplace_true_division_raises(self, func, backend_factory=None):
         for fullgraph in (False, True):
             x = torch.tensor([1], dtype=torch.int64)
             y = torch.tensor([0], dtype=torch.int64)
             compiled = torch.compile(
                 func,
-                backend="aot_eager"
-                if backend_factory is None
-                else backend_factory(),
+                backend="aot_eager" if backend_factory is None else backend_factory(),
                 fullgraph=fullgraph,
             )
 
@@ -4670,6 +4667,21 @@ class ReproTests(torch._dynamo.test_case.TestCase):
             func, backend_factory=lambda: backend
         )
 
+    def test_source_tensor_integral_div_inplace_dynamic_aot_backend_raises(self):
+        def func(x, y):
+            x.div_(y)
+            return x
+
+        def backend(gm, example_inputs):
+            return aot_autograd(
+                fw_compiler=lambda gm, example_inputs: gm.forward,
+                keep_inference_input_mutations=True,
+            )(gm, example_inputs)
+
+        self._assert_integral_inplace_true_division_raises(
+            func, backend_factory=lambda: backend
+        )
+
     def test_source_tensor_integral_div_inplace_aot_backend_object_raises(self):
         def func(x, y):
             x.div_(y)
@@ -4678,6 +4690,30 @@ class ReproTests(torch._dynamo.test_case.TestCase):
         self._assert_integral_inplace_true_division_raises(
             func, backend_factory=AotEagerAndRecordGraphs
         )
+
+    def test_source_tensor_integral_aten_div_inplace_overloads_raise(self):
+        overloads = {
+            "div_.Tensor": lambda x, y: torch.ops.aten.div_.Tensor(x, y),
+            "divide_.Tensor": lambda x, y: torch.ops.aten.divide_.Tensor(x, y),
+            "div_.Tensor_mode": lambda x, y: torch.ops.aten.div_.Tensor_mode(
+                x, y, rounding_mode=None
+            ),
+            "divide_.Tensor_mode": lambda x, y: torch.ops.aten.divide_.Tensor_mode(
+                x, y, rounding_mode=None
+            ),
+            "true_divide_.Tensor": lambda x, y: torch.ops.aten.true_divide_.Tensor(
+                x, y
+            ),
+        }
+
+        for overload_name, op in overloads.items():
+            with self.subTest(overload=overload_name):
+
+                def func(x, y, op=op):
+                    op(x, y)
+                    return x
+
+                self._assert_integral_inplace_true_division_raises(func)
 
     def test_source_tensor_integral_div_inplace_preserves_prior_side_effects(self):
         def func(x, y, values):
