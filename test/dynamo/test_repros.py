@@ -42,9 +42,10 @@ import torch.distributed as dist
 import torch.library
 import torch.utils._pytree as pytree
 from torch import nn
-from torch._dynamo.backends.debugging import ExplainWithBackend
+from torch._dynamo.backends.debugging import ExplainWithBackend, aot_eager
 from torch._dynamo.debug_utils import same_two_models
 from torch._dynamo.testing import (
+    AotEagerAndRecordGraphs,
     CompileCounter,
     CompileCounterWithBackend,
     EagerAndRecordGraphs,
@@ -4615,11 +4616,19 @@ class ReproTests(torch._dynamo.test_case.TestCase):
         self.assertEqual(x1.data, x2.data)
         self.assertEqual(y1, y2)
 
-    def _assert_integral_inplace_true_division_raises(self, func):
+    def _assert_integral_inplace_true_division_raises(
+        self, func, backend_factory=None
+    ):
         for fullgraph in (False, True):
             x = torch.tensor([1], dtype=torch.int64)
             y = torch.tensor([0], dtype=torch.int64)
-            compiled = torch.compile(func, backend="aot_eager", fullgraph=fullgraph)
+            compiled = torch.compile(
+                func,
+                backend="aot_eager"
+                if backend_factory is None
+                else backend_factory(),
+                fullgraph=fullgraph,
+            )
 
             with self.subTest(fullgraph=fullgraph, func=func.__name__):
                 with self.assertRaisesRegex(
@@ -4648,6 +4657,27 @@ class ReproTests(torch._dynamo.test_case.TestCase):
             return z
 
         self._assert_integral_inplace_true_division_raises(func)
+
+    def test_source_tensor_integral_div_inplace_wrapped_aot_backend_raises(self):
+        def func(x, y):
+            x.div_(y)
+            return x
+
+        def backend(gm, example_inputs):
+            return aot_eager(gm, example_inputs)
+
+        self._assert_integral_inplace_true_division_raises(
+            func, backend_factory=lambda: backend
+        )
+
+    def test_source_tensor_integral_div_inplace_aot_backend_object_raises(self):
+        def func(x, y):
+            x.div_(y)
+            return x
+
+        self._assert_integral_inplace_true_division_raises(
+            func, backend_factory=AotEagerAndRecordGraphs
+        )
 
     def test_source_tensor_integral_div_inplace_preserves_prior_side_effects(self):
         def func(x, y, values):

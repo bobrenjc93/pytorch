@@ -864,21 +864,57 @@ class TensorVariable(VariableTracker):
             ):
                 return True
 
-            for attr in (
-                "compiler_fn",
-                "_torchdynamo_orig_backend",
-                "backend",
-                "compiler_name",
-            ):
-                try:
-                    nested = inspect.getattr_static(candidate, attr)
-                except AttributeError:
-                    continue
-
-                if nested is not candidate:
-                    pending.append(nested)
+            pending.extend(self._iter_aot_autograd_backend_candidates(candidate))
 
         return False
+
+    def _iter_aot_autograd_backend_candidates(self, candidate: Any) -> Iterable[Any]:
+        for attr in (
+            "compiler_fn",
+            "_torchdynamo_orig_backend",
+            "backend",
+            "compiler_name",
+            "func",
+            "__wrapped__",
+        ):
+            try:
+                nested = inspect.getattr_static(candidate, attr)
+            except AttributeError:
+                continue
+
+            if nested is not candidate:
+                yield nested
+
+        if isinstance(candidate, functools.partial):
+            for arg in candidate.args:
+                if callable(arg) or isinstance(arg, str):
+                    yield arg
+            if candidate.keywords is not None:
+                for value in candidate.keywords.values():
+                    if callable(value) or isinstance(value, str):
+                        yield value
+
+        closure_target = candidate if inspect.isroutine(candidate) else None
+        if closure_target is None and callable(candidate):
+            try:
+                closure_target = inspect.getattr_static(candidate, "__call__")
+            except AttributeError:
+                closure_target = None
+
+        if closure_target is None:
+            return
+
+        try:
+            closure_vars = inspect.getclosurevars(closure_target)
+        except (TypeError, ValueError):
+            return
+
+        for value in chain(
+            closure_vars.nonlocals.values(),
+            closure_vars.globals.values(),
+        ):
+            if callable(value) or isinstance(value, str):
+                yield value
 
     def _example_value_for_true_division_arg(
         self, arg: VariableTracker
