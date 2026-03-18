@@ -31,7 +31,6 @@ from torch._dynamo.utils import (
     CompileEventLogger,
     dynamo_timed,
     get_metrics_context,
-    to_fake_tensor,
 )
 from torch._guards import (
     compile_context,
@@ -1866,7 +1865,7 @@ def merge_view_inputs(
 @dataclass
 class AutogradLazyBackwardCompileInfo:
     bw_module: Callable[..., Any]
-    placeholder_list: list[Any] | None
+    placeholder_list: list[Any]
     saved_context: TracingContext | None
     saved_compile_context: CompileContext | None
 
@@ -2965,18 +2964,6 @@ Your tensor subclass must implement __coerce_same_metadata_as_tangent__."""
 
                     bw_module = lazy_backward_info.bw_module
                     placeholder_list = lazy_backward_info.placeholder_list
-                    if placeholder_list is None:
-                        if (
-                            saved_context := lazy_backward_info.saved_context
-                        ) is not None and saved_context.fake_mode is not None:
-                            placeholder_list = [
-                                to_fake_tensor(arg, saved_context.fake_mode)
-                                if isinstance(arg, torch.Tensor)
-                                else arg
-                                for arg in all_args
-                            ]
-                        else:
-                            placeholder_list = all_args
                     saved_context = lazy_backward_info.saved_context
                     saved_compile_context = lazy_backward_info.saved_compile_context
 
