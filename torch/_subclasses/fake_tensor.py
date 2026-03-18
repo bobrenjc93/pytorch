@@ -1540,6 +1540,13 @@ class FakeTensorMode(TorchDispatchMode):
             self._stack = "".join(traceback.format_list(self._stack_trace))
         return self._stack
 
+    def _has_constant_tracking(self, fake_tensor: FakeTensor) -> bool:
+        return (
+            fake_tensor.constant is not None
+            or fake_tensor.constant_scalar is not None
+            or self.fake_tensor_converter.has_constant_alias(fake_tensor)
+        )
+
     @count
     # pyrefly: ignore [bad-override]
     def __torch_dispatch__(
@@ -1884,7 +1891,9 @@ class FakeTensorMode(TorchDispatchMode):
             if isinstance(arg, FakeTensor):
                 if not self.is_our_fake(arg):
                     raise _BypassDispatchCache("not our fake")
-                if arg.constant is not None:
+                # Constant tracking carries side effects that the cache does not
+                # replay, so mutable ops must re-enter normal dispatch.
+                if self._has_constant_tracking(arg):
                     raise _BypassDispatchCache("constant attribute")
                 if is_sparse_any(arg):
                     raise _BypassDispatchCache(f"{arg.layout} tensor")
@@ -1950,7 +1959,7 @@ class FakeTensorMode(TorchDispatchMode):
 
         # Avoid caching FakeTensors with constants attached since those
         # can be invalidated.
-        if output.constant is not None:
+        if self._has_constant_tracking(output):
             raise _BypassDispatchCache("constant attribute")
 
         # TODO: support caching sparse outputs?
@@ -3234,6 +3243,8 @@ class FakeTensorMode(TorchDispatchMode):
 
         source = kwargs.get("source")
         if source is None:
+            return False
+        if not isinstance(source, (torch.TypedStorage, torch.UntypedStorage)):
             return False
 
         try:
