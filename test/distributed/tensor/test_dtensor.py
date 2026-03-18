@@ -27,6 +27,8 @@ from torch.distributed.tensor._dtensor_spec import (
     TensorMeta,
 )
 from torch.distributed.tensor._op_schema import RuntimeSchemaInfo
+from torch.distributed.tensor._op_schema import OutputSharding
+from torch.distributed.tensor._ops.single_dim_strategy import _SingleDimStrategyInfo
 from torch.distributed.tensor._redistribute import redistribute_local_tensor
 from torch.distributed.tensor.debug import CommDebugMode
 from torch.distributed.tensor.experimental import implicit_replication
@@ -626,6 +628,109 @@ class DTensorTest(DTensorTestBase):
         child_prop = ChildDTensor._op_dispatcher.sharding_propagator
         parent_prop.register_sharding_prop_rule(op, parent_rule, schema_info=schema_info)
         child_prop.register_sharding_prop_rule(op, child_rule)
+
+        base = distribute_tensor(
+            torch.arange(4, device=self.device_type, dtype=torch.float32),
+            device_mesh,
+            [Replicate()],
+        )
+        child_dt = ChildDTensor(
+            base._local_tensor,
+            base._spec,
+            requires_grad=base.requires_grad,
+        )
+        op_info = ChildDTensor._op_dispatcher.unwrap_to_op_info(op, (child_dt, 1), {})
+
+        self.assertIs(parent_prop.get_schema_info(op), schema_info)
+        self.assertIsNone(child_prop.get_schema_info(op))
+        self.assertIsNotNone(op_info.schema)
+        self.assertIsNone(op_info.schema.schema_info)
+
+    @with_comms
+    def test_dtensor_subclass_rule_shadows_inherited_strategy_registration(self):
+        device_mesh = self.build_device_mesh()
+        lib = torch.library.Library(
+            "dtensor_subclass_registry_shadow_test", "FRAGMENT"
+        )
+        lib.define("rule_overrides_strategy(Tensor input) -> Tensor")
+        lib.impl("rule_overrides_strategy", lambda input: input.clone(), "Meta")
+        op = (
+            torch.ops.dtensor_subclass_registry_shadow_test.rule_overrides_strategy.default
+        )
+
+        class ParentDTensor(DTensor):
+            _op_dispatcher = type(DTensor._op_dispatcher)()
+
+        class ChildDTensor(ParentDTensor):
+            _op_dispatcher = type(DTensor._op_dispatcher)()
+
+        def parent_strategy(op_schema):
+            raise AssertionError(f"unexpected inherited strategy: {op_schema}")
+
+        child_rule_calls = []
+
+        def child_rule(op_schema):
+            child_rule_calls.append(op_schema.op)
+            input_spec = op_schema.args_schema[0]
+            if not isinstance(input_spec, DTensorSpec):
+                raise AssertionError
+            return OutputSharding(input_spec)
+
+        parent_prop = ParentDTensor._op_dispatcher.sharding_propagator
+        child_prop = ChildDTensor._op_dispatcher.sharding_propagator
+        parent_prop.register_op_strategy(op, parent_strategy)
+        child_prop.register_sharding_prop_rule(op, child_rule)
+
+        base = distribute_tensor(
+            torch.arange(4, device=self.device_type, dtype=torch.float32),
+            device_mesh,
+            [Replicate()],
+        )
+        child_dt = ChildDTensor(
+            base._local_tensor,
+            base._spec,
+            requires_grad=base.requires_grad,
+        )
+        op_info = ChildDTensor._op_dispatcher.unwrap_to_op_info(op, (child_dt,), {})
+
+        self.assertIsNotNone(op_info.schema)
+        output_sharding = child_prop.propagate_op_sharding_non_cached(op_info.schema)
+        self.assertEqual(child_rule_calls, [op])
+        self.assertIsInstance(output_sharding.output_spec, DTensorSpec)
+        self.assertEqual(output_sharding.output_spec.placements, child_dt.placements)
+
+    @with_comms
+    def test_dtensor_subclass_cross_registry_override_masks_parent_schema_info(self):
+        device_mesh = self.build_device_mesh()
+        lib = torch.library.Library(
+            "dtensor_subclass_cross_registry_schema_info_test", "FRAGMENT"
+        )
+        lib.define("cross_registry_schema_override(Tensor input, int dim) -> Tensor")
+        op = (
+            torch.ops.dtensor_subclass_cross_registry_schema_info_test.cross_registry_schema_override.default
+        )
+
+        class ParentDTensor(DTensor):
+            _op_dispatcher = type(DTensor._op_dispatcher)()
+
+        class ChildDTensor(ParentDTensor):
+            _op_dispatcher = type(DTensor._op_dispatcher)()
+
+        schema_info = RuntimeSchemaInfo(static_argnum=1)
+
+        def parent_strategy(op_schema):
+            raise AssertionError(f"unexpected call: {op_schema}")
+
+        child_single_dim_strategy = _SingleDimStrategyInfo(
+            lambda op_overload, args, kwargs: [[Replicate(), Replicate()]]
+        )
+
+        parent_prop = ParentDTensor._op_dispatcher.sharding_propagator
+        child_prop = ChildDTensor._op_dispatcher.sharding_propagator
+        parent_prop.register_op_strategy(
+            op, parent_strategy, schema_info=schema_info
+        )
+        child_prop.register_single_dim_op_strategy(op, child_single_dim_strategy)
 
         base = distribute_tensor(
             torch.arange(4, device=self.device_type, dtype=torch.float32),

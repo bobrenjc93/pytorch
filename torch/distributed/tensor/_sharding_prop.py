@@ -81,6 +81,71 @@ def _lookup_schema_info_entry(
     return True, None if schema_info is _NO_SCHEMA_INFO else schema_info
 
 
+_SHARDING_RULE_REGISTRATION = "rule"
+_OP_STRATEGY_REGISTRATION = "strategy"
+_SINGLE_DIM_STRATEGY_REGISTRATION = "single_dim_strategy"
+
+
+def _get_base_mapping(mapping: MutableMapping[K, V]) -> MutableMapping[K, V] | None:
+    if not isinstance(mapping, ChainMap) or len(mapping.maps) == 1:
+        return None
+    if len(mapping.maps) == 2:
+        return cast(MutableMapping[K, V], mapping.maps[1])
+    return cast(MutableMapping[K, V], ChainMap(*mapping.maps[1:]))
+
+
+def _resolve_op_registration(
+    op_overload: OpOverload,
+    rule_mapping: MutableMapping[
+        OpOverload, Callable[[OpSchema], OutputSharding]
+    ],
+    strategy_mapping: MutableMapping[
+        OpOverload, Callable[[OpSchema], StrategyType]
+    ],
+    single_dim_strategy_mapping: MutableMapping[
+        OpOverload,
+        _SingleDimStrategyInfo,
+    ],
+) -> tuple[str, object] | None:
+    # Resolve registrations one inheritance level at a time so a child class can
+    # shadow an inherited registration even when it switches registry type.
+    local_single_dim_strategy_mapping = _get_local_overrides(single_dim_strategy_mapping)
+    if op_overload in local_single_dim_strategy_mapping:
+        return (
+            _SINGLE_DIM_STRATEGY_REGISTRATION,
+            local_single_dim_strategy_mapping[op_overload],
+        )
+
+    local_strategy_mapping = _get_local_overrides(strategy_mapping)
+    if op_overload in local_strategy_mapping:
+        return (_OP_STRATEGY_REGISTRATION, local_strategy_mapping[op_overload])
+
+    local_rule_mapping = _get_local_overrides(rule_mapping)
+    if op_overload in local_rule_mapping:
+        return (_SHARDING_RULE_REGISTRATION, local_rule_mapping[op_overload])
+
+    base_rule_mapping = _get_base_mapping(rule_mapping)
+    base_strategy_mapping = _get_base_mapping(strategy_mapping)
+    base_single_dim_strategy_mapping = _get_base_mapping(single_dim_strategy_mapping)
+    if (
+        base_rule_mapping is None
+        and base_strategy_mapping is None
+        and base_single_dim_strategy_mapping is None
+    ):
+        return None
+
+    return _resolve_op_registration(
+        op_overload,
+        {} if base_rule_mapping is None else base_rule_mapping,
+        {} if base_strategy_mapping is None else base_strategy_mapping,
+        (
+            {}
+            if base_single_dim_strategy_mapping is None
+            else base_single_dim_strategy_mapping
+        ),
+    )
+
+
 def _set_schema_info_entry(
     mapping: MutableMapping[OpOverload, SchemaInfoEntry],
     op_overload: OpOverload,
@@ -518,14 +583,30 @@ class ShardingPropagator:
         _set_schema_info_entry(self.op_to_schema_info, op_overload, schema_info)
 
     def get_schema_info(self, op_overload: OpOverload) -> RuntimeSchemaInfo | None:
-        found, schema_info = _lookup_schema_info_entry(
-            self.op_to_schema_info, op_overload
+        registration = _resolve_op_registration(
+            op_overload,
+            self.op_to_rules,
+            self.op_strategy_funcs,
+            self.op_single_dim_strategy_funcs,
         )
-        if found:
+        if registration is None:
+            found, schema_info = _lookup_schema_info_entry(
+                self.op_to_schema_info, op_overload
+            )
+            if found:
+                return schema_info
+            _, schema_info = _lookup_schema_info_entry(
+                self.op_to_schema_info_for_single_dim_strategy, op_overload
+            )
             return schema_info
-        _, schema_info = _lookup_schema_info_entry(
-            self.op_to_schema_info_for_single_dim_strategy, op_overload
+
+        registration_type, _ = registration
+        schema_mapping = (
+            self.op_to_schema_info_for_single_dim_strategy
+            if registration_type == _SINGLE_DIM_STRATEGY_REGISTRATION
+            else self.op_to_schema_info
         )
+        _, schema_info = _lookup_schema_info_entry(schema_mapping, op_overload)
         return schema_info
 
     def _propagate_tensor_meta_non_cached(
@@ -753,8 +834,29 @@ class ShardingPropagator:
 
         out_tensor_meta = self._propagate_tensor_meta_non_cached(op_schema)
 
-        single_dim_strategy_info = self.op_single_dim_strategy_funcs.get(op_schema.op)
-        op_strategy_func = self.op_strategy_funcs.get(op_schema.op)
+        registration = _resolve_op_registration(
+            op_schema.op,
+            self.op_to_rules,
+            self.op_strategy_funcs,
+            self.op_single_dim_strategy_funcs,
+        )
+        single_dim_strategy_info = None
+        op_strategy_func = None
+        sharding_prop_func = None
+        if registration is not None:
+            registration_type, registration_impl = registration
+            if registration_type == _SINGLE_DIM_STRATEGY_REGISTRATION:
+                single_dim_strategy_info = cast(
+                    _SingleDimStrategyInfo, registration_impl
+                )
+            elif registration_type == _OP_STRATEGY_REGISTRATION:
+                op_strategy_func = cast(
+                    Callable[[OpSchema], StrategyType], registration_impl
+                )
+            else:
+                sharding_prop_func = cast(
+                    Callable[[OpSchema], OutputSharding], registration_impl
+                )
         decomp_exception = None
         if single_dim_strategy_info is not None or op_strategy_func is not None:
             # Validate that tensor_meta count matches expected outputs from op schema.
@@ -974,10 +1076,8 @@ class ShardingPropagator:
             )
             output_sharding.output_spec = new_output_spec
             return output_sharding
-        elif op_schema.op in self.op_to_rules:
+        elif sharding_prop_func is not None:
             # propagate the sharding with rule
-            sharding_prop_func = self.op_to_rules[op_schema.op]
-
             # step 1. there's sharding propagation rule, run
             # sharding propagation to get the output sharding
             try:
