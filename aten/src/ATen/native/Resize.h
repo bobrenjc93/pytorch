@@ -181,7 +181,7 @@ inline void checkSetStorage(Tensor& result, Storage storage, T storage_offset,
  * (size, stride, storage_offset) must be in bounds for self's storage.
  */
 template <typename T>
-inline void checkAsStridedArgs(
+void checkAsStridedArgs(
     ArrayRef<T> size,
     ArrayRef<T> stride,
     T storage_offset) {
@@ -198,15 +198,15 @@ inline void checkAsStridedArgs(
 }
 
 template <typename T>
-inline void checkAsStridedArgsUnchecked(
+void checkAsStridedArgsAllowUnbackedSymInts(
     ArrayRef<T> size,
     ArrayRef<T> stride,
     T storage_offset) {
   TORCH_CHECK(
       size.size() == stride.size(), "mismatch in length of strides and shape");
   if constexpr (std::is_same_v<T, c10::SymInt>) {
-    // Unchecked FakeTensor/Meta view replay can pass ephemeral symbolic
-    // metadata here, so only validate values once they are fully concrete.
+    // FakeTensor/Meta view replay can pass ephemeral symbolic metadata here,
+    // so only validate values once the SymInts become concrete.
     for (const auto& val : stride) {
       if (auto maybe_val = val.maybe_as_int()) {
         TORCH_CHECK(
