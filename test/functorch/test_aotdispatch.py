@@ -4929,12 +4929,8 @@ def forward(self, arg0_1, arg1_1, arg2_1):
             def forward(self, x):
                 y = x + 2
                 y.add_(5)
-                z = out_dtype(
-                    torch.ops.aten.mm.default, torch.int32, y, self.weight
-                )
-                return (
-                    z + 1,
-                )
+                z = out_dtype(torch.ops.aten.mm.default, torch.int32, y, self.weight)
+                return (z + 1,)
 
         weight = torch.randint(-128, 127, (5, 5), dtype=torch.int8)
         mod = M(weight)
@@ -7948,19 +7944,18 @@ Expected a .* tangent but got a plain Tensor.""",
                 self.weight = weight
 
             def forward(self, x):
-                return out_dtype(
-                    torch.ops.aten.mm.default, torch.int32, x, self.weight
-                )
+                y = out_dtype(torch.ops.aten.mm.default, torch.int32, x, self.weight)
+                return y + 1
 
         weight = torch.randint(-128, 127, (5, 5), dtype=torch.int8)
         mod = M(weight)
         x = WrapperSubclass(torch.randint(-128, 127, (5, 5), dtype=torch.int8))
 
-        with self.assertRaisesRegex(
-            torch._dynamo.exc.BackendCompilerFailed,
-            "There was no rule registered for HOP out_dtype and subclass",
-        ):
-            torch.compile(mod, backend="aot_eager", fullgraph=True)(x)
+        out_ref = mod(x.a)
+        out_test = torch.compile(mod, backend="aot_eager", fullgraph=True)(x)
+
+        self.assertIsInstance(out_test, WrapperSubclass)
+        self.assertEqual(out_ref, out_test.a)
 
     @torch._inductor.config.patch({"freezing": True})
     def test_inductor_freezing_with_subclasses(self):
