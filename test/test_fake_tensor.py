@@ -1308,6 +1308,7 @@ class FakeTensorConstHandling(TestCase):
             mask = torch.tensor(1, dtype=torch.int64)
             mask.untyped_storage()
             self.assertTrue(bool(mask))
+            self.assertEqual(mask.item(), 1)
             torch.ops.aten.set_data.default(mask, torch.tensor(0, dtype=torch.int64))
             self.assertIsNone(mask.constant_scalar)
             with self.assertRaises(

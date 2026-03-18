@@ -1169,6 +1169,14 @@ class FakeTensor(Tensor):
         self._invalidate_constant_on_storage_access()
         return super().untyped_storage()
 
+    def item(self):
+        if self.constant is not None:
+            with no_dispatch():
+                return self.constant.item()
+        if (scalar := _extract_constant_scalar(self.constant_scalar)) is not None:
+            return scalar
+        return super().item()
+
     def __bool__(self):
         if self.constant is not None:
             with no_dispatch():
@@ -3251,6 +3259,33 @@ class FakeTensorMode(TorchDispatchMode):
             == tuple(real_constant.stride())
         )
 
+    def _invalidate_fake_tensor_constant(
+        self,
+        fake_tensor: FakeTensor,
+        *,
+        real_constant: Tensor | None = None,
+        clear_constant_scalar: bool = True,
+    ) -> None:
+        if real_constant is None:
+            real_constant = (
+                fake_tensor.constant
+                if fake_tensor.constant is not None
+                else fake_tensor.constant_scalar
+            )
+
+        fake_tensor.constant = None
+        if clear_constant_scalar:
+            fake_tensor.constant_scalar = None
+
+        if real_constant is not None:
+            self.fake_tensor_converter.invalidate_constant_aliases(
+                real_constant, clear_constant_scalar=clear_constant_scalar
+            )
+        elif self.fake_tensor_converter.has_constant_alias(fake_tensor):
+            self.fake_tensor_converter.invalidate_constant_aliases_of_fake(
+                fake_tensor, clear_constant_scalar=clear_constant_scalar
+            )
+
     _unbacked_special_fake_handling_ops = ordered_set(
         aten.view.default,
         aten._unsafe_view.default,
@@ -3279,6 +3314,24 @@ class FakeTensorMode(TorchDispatchMode):
         args: Sequence[object],
         kwargs: Mapping[str, object],
     ) -> None:
+        if func is aten.set_data.default:
+            fake_self = None
+            if len(args) > 0 and self.is_our_fake(args[0]):
+                fake_self = cast(FakeTensor, args[0])
+            else:
+                maybe_self = kwargs.get("self", kwargs.get("input"))
+                if self.is_our_fake(maybe_self):
+                    fake_self = cast(FakeTensor, maybe_self)
+
+            if fake_self is not None:
+                if (
+                    fake_self.constant is not None
+                    or fake_self.constant_scalar is not None
+                    or self.fake_tensor_converter.has_constant_alias(fake_self)
+                ):
+                    self._invalidate_fake_tensor_constant(fake_self)
+                return
+
         any_constant = any(
             e.constant is not None
             or e.constant_scalar is not None
@@ -3308,18 +3361,11 @@ class FakeTensorMode(TorchDispatchMode):
 
                     # Clear the mutated tensor first, then invalidate any
                     # tracked aliases that still point at the same storage.
-                    v.constant = None
-                    if clear_constant_scalar:
-                        v.constant_scalar = None
-
-                    if real_constant is not None:
-                        self.fake_tensor_converter.invalidate_constant_aliases(
-                            real_constant, clear_constant_scalar=clear_constant_scalar
-                        )
-                    elif self.fake_tensor_converter.has_constant_alias(v):
-                        self.fake_tensor_converter.invalidate_constant_aliases_of_fake(
-                            v, clear_constant_scalar=clear_constant_scalar
-                        )
+                    self._invalidate_fake_tensor_constant(
+                        v,
+                        real_constant=real_constant,
+                        clear_constant_scalar=clear_constant_scalar,
+                    )
 
     def from_tensor(
         self,
