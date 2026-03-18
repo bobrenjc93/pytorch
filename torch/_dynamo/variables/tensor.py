@@ -16,6 +16,7 @@ These classes work together to track tensor operations and properties during Dyn
 """
 
 import functools
+import inspect
 import logging
 import operator
 import textwrap
@@ -832,6 +833,53 @@ class TensorVariable(VariableTracker):
 
         return self._has_source_or_source_alias(tx)
 
+    def _backend_uses_aot_autograd(self, tx: "InstructionTranslator") -> bool:
+        from ..backends.registry import lookup_backend
+
+        pending: list[Any] = [tx.output.compiler_fn]
+        seen: set[int | str] = set()
+
+        while pending:
+            candidate = pending.pop()
+            if candidate is None:
+                continue
+
+            if isinstance(candidate, str):
+                if candidate in seen:
+                    continue
+                seen.add(candidate)
+                try:
+                    pending.append(lookup_backend(candidate))
+                except Exception:
+                    continue
+                continue
+
+            candidate_id = id(candidate)
+            if candidate_id in seen:
+                continue
+            seen.add(candidate_id)
+
+            if inspect.getattr_static(
+                candidate, "_torchdynamo_uses_aot_autograd", False
+            ):
+                return True
+
+            for attr in (
+                "compiler_fn",
+                "_torchdynamo_orig_backend",
+                "backend",
+                "compiler_name",
+            ):
+                try:
+                    nested = inspect.getattr_static(candidate, attr)
+                except AttributeError:
+                    continue
+
+                if nested is not candidate:
+                    pending.append(nested)
+
+        return False
+
     def _example_value_for_true_division_arg(
         self, arg: VariableTracker
     ) -> object | None:
@@ -903,6 +951,9 @@ class TensorVariable(VariableTracker):
         kwargs: "dict[str, VariableTracker]",
     ) -> None:
         if not self._is_integral_inplace_true_division(tx, name, kwargs):
+            return
+
+        if not self._backend_uses_aot_autograd(tx):
             return
 
         if tx.one_graph or tx.error_on_graph_break:

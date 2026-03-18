@@ -4667,6 +4667,29 @@ class ReproTests(torch._dynamo.test_case.TestCase):
 
         self.assertEqual(values, ["before div_"])
 
+    def test_source_tensor_integral_div_inplace_non_aot_backend_stays_in_graph(self):
+        def func(x, y):
+            x.div_(y)
+            return x
+
+        backend = EagerAndRecordGraphs()
+        x = torch.tensor([1], dtype=torch.int64)
+        y = torch.tensor([0], dtype=torch.int64)
+        compiled = torch.compile(func, backend=backend)
+
+        with self.assertRaisesRegex(
+            RuntimeError, "can't be cast to the desired output type"
+        ):
+            compiled(x, y)
+
+        self.assertEqual(len(backend.graphs), 1)
+        self.assertTrue(
+            any(
+                node.op == "call_method" and node.target == "div_"
+                for node in backend.graphs[0].graph.nodes
+            )
+        )
+
     def test_user_ctor_ctx_manager(self):
         class UserCtxManager:
             def __enter__(self):

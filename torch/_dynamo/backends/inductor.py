@@ -29,3 +29,6 @@ def inductor(*args: Any, **kwargs: Any) -> Any:
         from torch._inductor.compile_fx import compile_fx
 
     return compile_fx(*args, **kwargs)
+
+
+inductor._torchdynamo_uses_aot_autograd = True  # type: ignore[attr-defined]

@@ -364,6 +364,7 @@ def aot_eager(
     )(gm, fake_tensor_inputs, **kwargs)
 
 
+aot_eager._torchdynamo_uses_aot_autograd = True  # type: ignore[attr-defined]
 register_backend(name="aot_eager", compiler_fn=aot_eager)
 
 aot_eager_default_partitioner = aot_autograd(
@@ -409,6 +410,7 @@ def aot_eager_decomp_partition(
         )(gm, fake_tensor_inputs)
 
 
+aot_eager_decomp_partition._torchdynamo_uses_aot_autograd = True  # type: ignore[attr-defined]
 register_backend(
     name="aot_eager_decomp_partition", compiler_fn=aot_eager_decomp_partition
 )
@@ -436,6 +438,7 @@ def aot_eager_decomp_partition_with_mode(
     )(gm, fake_tensor_inputs)
 
 
+aot_eager_decomp_partition_with_mode._torchdynamo_uses_aot_autograd = True  # type: ignore[attr-defined]
 register_backend(
     name="aot_eager_decomp_partition_with_mode",
     compiler_fn=aot_eager_decomp_partition_with_mode,  # type: ignore[arg-type]
@@ -457,6 +460,7 @@ def aot_eager_decomp_partition_crossref(
         return aot_eager_decomp_partition(gm, fake_tensor_inputs, **kwargs)
 
 
+aot_eager_decomp_partition_crossref._torchdynamo_uses_aot_autograd = True  # type: ignore[attr-defined]
 register_backend(
     name="aot_eager_decomp_partition_crossref",
     compiler_fn=aot_eager_decomp_partition_crossref,

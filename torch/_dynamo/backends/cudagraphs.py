@@ -238,6 +238,7 @@ def cudagraphs(dynamo_model: torch.fx.GraphModule, dynamo_inputs: Sequence[Any])
 
 class CudagraphsBackend:
     compiler_name = "cudagraphs"
+    _torchdynamo_uses_aot_autograd = True
 
     @staticmethod
     def reset() -> None:

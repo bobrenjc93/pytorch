@@ -44,6 +44,7 @@ R = TypeVar("R")
 class AotAutograd:
     def __init__(self, **kwargs: Any) -> None:
         self.__name__ = "compiler_fn"
+        self._torchdynamo_uses_aot_autograd = True
         self.kwargs = kwargs
 
     def __call__(
