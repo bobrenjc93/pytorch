@@ -60,6 +60,7 @@ from ..external_utils import _ApplyBackwardHook, call_hook_from_backward_state
 from ..guards import GuardBuilder, install_guard
 from ..source import AttrSource
 from ..utils import (
+    extract_fake_example_value,
     fqn,
     get_custom_getattr,
     get_fake_value,
@@ -98,6 +99,18 @@ if TYPE_CHECKING:
 
 
 log = logging.getLogger(__name__)
+
+_INPLACE_TRUE_DIVISION_OUTPUT_TYPE_NAMES = {
+    torch.bool: "Bool",
+    torch.uint8: "Byte",
+    torch.uint16: "UInt16",
+    torch.uint32: "UInt32",
+    torch.uint64: "UInt64",
+    torch.int8: "Char",
+    torch.int16: "Short",
+    torch.int32: "Int",
+    torch.int64: "Long",
+}
 
 # Ops that allow tensor <op> tensor
 supported_tensor_comparison_ops = {
@@ -764,13 +777,40 @@ class TensorVariable(VariableTracker):
             torch._dynamo.config._autograd_backward_strict_mode_conditional_banned_ops
         )
 
+    def _has_source_or_source_alias(self, tx: "InstructionTranslator") -> bool:
+        if self.source is not None:
+            return True
+
+        example_value = extract_fake_example_value(self.proxy.node, required=False)
+        if not isinstance(example_value, torch.Tensor):
+            return False
+
+        from .higher_order_ops import get_tensor_storages
+
+        try:
+            storages = get_tensor_storages(example_value)
+        except NotImplementedError:
+            return False
+
+        for tracked_fake in tx.output.tracked_fakes:
+            if not isinstance(tracked_fake.fake, torch.Tensor):
+                continue
+            try:
+                if storages & get_tensor_storages(tracked_fake.fake):
+                    return True
+            except NotImplementedError:
+                continue
+
+        return False
+
     def _is_integral_inplace_true_division(
         self,
+        tx: "InstructionTranslator",
         name: str,
         kwargs: "dict[str, VariableTracker]",
     ) -> bool:
         if (
-            self.source is None
+            not self._has_source_or_source_alias(tx)
             or self.dtype is None
             or self.dtype.is_floating_point
             or self.dtype.is_complex
@@ -790,28 +830,72 @@ class TensorVariable(VariableTracker):
             or rounding_mode.as_python_constant() is None
         )
 
-    def _graph_break_on_integral_inplace_true_division(
+    def _example_value_for_true_division_arg(
+        self, arg: VariableTracker
+    ) -> object | None:
+        if arg.is_python_constant():
+            return arg.as_python_constant()
+
+        if not hasattr(arg, "as_proxy"):
+            return None
+
+        try:
+            proxy = arg.as_proxy()
+        except NotImplementedError:
+            return None
+
+        node = getattr(proxy, "node", None)
+        if not isinstance(node, torch.fx.Node):
+            return None
+        return node.meta.get("example_value")
+
+    def _integral_inplace_true_division_error_message(self) -> str:
+        assert self.dtype is not None
+        output_type = _INPLACE_TRUE_DIVISION_OUTPUT_TYPE_NAMES.get(
+            self.dtype, str(self.dtype).removeprefix("torch.")
+        )
+        return (
+            "result type Float can't be cast to the desired output type "
+            f"{output_type}"
+        )
+
+    def _raise_on_integral_inplace_true_division(
         self,
+        tx: "InstructionTranslator",
         name: str,
         args: Sequence[VariableTracker],
         kwargs: "dict[str, VariableTracker]",
     ) -> None:
-        if not self._is_integral_inplace_true_division(name, kwargs):
+        if not self._is_integral_inplace_true_division(tx, name, kwargs):
             return
 
-        unimplemented(
-            gb_type="Integral in-place true division on a source tensor",
-            context=f"Tensor.{name}({args=}, {kwargs=})",
-            explanation=(
-                "AOTAutograd replays source-tensor mutations through copy_(), "
-                "which does not preserve eager error semantics for integral true division."
-            ),
-            hints=[
-                "Move this mutation outside `torch.compile`, or use an out-of-place divide.",
-                "If you need in-place division on integral tensors, pass `rounding_mode='trunc'` or `rounding_mode='floor'`.",
-                *graph_break_hints.SUPPORTABLE,
-            ],
-        )
+        example_self = extract_fake_example_value(self.proxy.node, required=False)
+        if isinstance(example_self, torch.Tensor):
+            example_args = []
+            example_kwargs = {}
+
+            for arg in args:
+                example_arg = self._example_value_for_true_division_arg(arg)
+                if example_arg is None:
+                    break
+                example_args.append(example_arg)
+            else:
+                for key, value in kwargs.items():
+                    example_value = self._example_value_for_true_division_arg(value)
+                    if example_value is None:
+                        break
+                    example_kwargs[key] = example_value
+                else:
+                    try:
+                        getattr(example_self.clone(), name)(
+                            *example_args, **example_kwargs
+                        )
+                    except RuntimeError as e:
+                        raise TorchRuntimeError(
+                            str(e), getattr(e, "real_stack", None)
+                        ) from None
+
+        raise TorchRuntimeError(self._integral_inplace_true_division_error_message())
 
     def call_method(
         self,
@@ -904,7 +988,7 @@ class TensorVariable(VariableTracker):
                 ],
             )
 
-        self._graph_break_on_integral_inplace_true_division(name, args, kwargs)
+        self._raise_on_integral_inplace_true_division(tx, name, args, kwargs)
 
         try:
             handler_method = getattr(self, f"method_{name}")

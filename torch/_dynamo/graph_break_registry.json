@@ -4428,18 +4428,6 @@
       "Hints": []
     }
   ],
-  "GB9251": [
-    {
-      "Gb_type": "Integral in-place true division on a source tensor",
-      "Context": "Tensor.{name}(args={args}, kwargs={kwargs})",
-      "Explanation": "AOTAutograd replays source-tensor mutations through copy_(), which does not preserve eager error semantics for integral true division.",
-      "Hints": [
-        "Move this mutation outside `torch.compile`, or use an out-of-place divide.",
-        "If you need in-place division on integral tensors, pass `rounding_mode='trunc'` or `rounding_mode='floor'`.",
-        "It may be possible to write Dynamo tracing rules for this code. Please report an issue to PyTorch if you encounter this graph break often and it is causing performance issues."
-      ]
-    }
-  ],
   "GB0361": [
     {
       "Gb_type": "triton kernel unsupported feature",

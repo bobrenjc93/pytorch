@@ -4615,33 +4615,39 @@ class ReproTests(torch._dynamo.test_case.TestCase):
         self.assertEqual(x1.data, x2.data)
         self.assertEqual(y1, y2)
 
-    def test_source_tensor_integral_div_inplace_graph_break(self):
+    def _assert_integral_inplace_true_division_raises(self, func):
+        for fullgraph in (False, True):
+            x = torch.tensor([1], dtype=torch.int64)
+            y = torch.tensor([0], dtype=torch.int64)
+            compiled = torch.compile(func, backend="aot_eager", fullgraph=fullgraph)
+
+            with self.subTest(fullgraph=fullgraph, func=func.__name__):
+                with self.assertRaisesRegex(
+                    RuntimeError, "can't be cast to the desired output type"
+                ):
+                    compiled(x, y)
+
+    def test_source_tensor_integral_div_inplace_raises(self):
         def func(x, y):
             x.div_(y)
             return x
 
-        x = torch.tensor([1], dtype=torch.int64)
-        y = torch.tensor([0], dtype=torch.int64)
-        compiled = torch.compile(func, backend="aot_eager")
+        self._assert_integral_inplace_true_division_raises(func)
 
-        with self.assertRaisesRegex(
-            RuntimeError, "can't be cast to the desired output type"
-        ):
-            compiled(x, y)
-
-    def test_source_tensor_integral_itruediv_graph_break(self):
+    def test_source_tensor_integral_itruediv_raises(self):
         def func(x, y):
             x /= y
             return x
 
-        x = torch.tensor([1], dtype=torch.int64)
-        y = torch.tensor([0], dtype=torch.int64)
-        compiled = torch.compile(func, backend="aot_eager")
+        self._assert_integral_inplace_true_division_raises(func)
 
-        with self.assertRaisesRegex(
-            RuntimeError, "can't be cast to the desired output type"
-        ):
-            compiled(x, y)
+    def test_source_tensor_view_integral_div_inplace_raises(self):
+        def func(x, y):
+            z = x.view(-1)
+            z.div_(y)
+            return z
+
+        self._assert_integral_inplace_true_division_raises(func)
 
     def test_user_ctor_ctx_manager(self):
         class UserCtxManager:
