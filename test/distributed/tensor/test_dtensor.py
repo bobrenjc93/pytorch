@@ -31,6 +31,7 @@ from torch.distributed.tensor.debug import CommDebugMode
 from torch.distributed.tensor.experimental import implicit_replication
 from torch.distributed.tensor.parallel import (
     ColwiseParallel,
+    loss_parallel,
     parallelize_module,
     RowwiseParallel,
 )
@@ -270,6 +271,38 @@ class DTensorTest(DTensorTestBase):
         self.assertEqual(dispatcher_calls, [(torch.ops.aten.add.Tensor, MyDTensor)])
         self.assertEqual(type(result), MyDTensor)
         self.assertEqual(result.to_local(), local_tensor + local_tensor)
+
+    @with_comms
+    def test_dtensor_subclass_loss_parallel_custom_handlers(self):
+        device_mesh = self.build_device_mesh()
+        comm_mode = CommDebugMode()
+        local_tensor = torch.rand(
+            8, 16, device=self.device_type, dtype=torch.float32, requires_grad=True
+        )
+        target = torch.randint(16, (8,), device=self.device_type)
+        base = distribute_tensor(local_tensor, device_mesh, [Shard(1)])
+        dist_target = distribute_tensor(target, device_mesh, [Replicate()])
+
+        class MyDTensor(DTensor):
+            _op_dispatcher = type(DTensor._op_dispatcher)()
+
+        my_dt = MyDTensor(
+            base._local_tensor,
+            base._spec,
+            requires_grad=base.requires_grad,
+        )
+        expected = F.cross_entropy(local_tensor, target)
+        with loss_parallel():
+            with comm_mode:
+                result = F.cross_entropy(my_dt, dist_target)
+
+        self.assertEqual(comm_mode.get_total_counts(), 3)
+        self.assertEqual(
+            comm_mode.get_comm_counts()[c10d_functional.all_reduce],
+            3,
+        )
+        self.assertEqual(type(result), MyDTensor)
+        self.assertEqual(result.to_local(), expected)
 
     @with_comms
     def test_from_local_backward(self):

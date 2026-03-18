@@ -163,6 +163,7 @@ def _log_softmax_handler(
     kwargs: dict[str, object],
 ) -> object:
     x = cast(DTensor, args[0])
+    dtensor_type = x.__class__
     dim = cast(int, args[1])
     half_to_float = cast(bool, args[2])
 
@@ -181,7 +182,7 @@ def _log_softmax_handler(
     )
 
     # pyrefly: ignore [bad-argument-type]
-    return DTensor(
+    return dtensor_type(
         # pyrefly: ignore [bad-argument-count]
         res,
         res_spec,
@@ -285,6 +286,7 @@ def _nll_loss_forward_handler(
     kwargs: dict[str, object],
 ) -> object:
     x = cast(DTensor, args[0])
+    dtensor_type = x.__class__
     target = args[1]
     weight = args[2]
     reduction = cast(int, args[3])
@@ -342,7 +344,7 @@ def _nll_loss_forward_handler(
 
     return (
         # pyrefly: ignore [bad-argument-type]
-        DTensor(
+        dtensor_type(
             # pyrefly: ignore [bad-argument-count]
             result,
             out_spec,
@@ -437,6 +439,7 @@ def _nll_loss_backward_handler(
 ) -> object:
     grad_output = cast(DTensor, args[0])
     x = cast(DTensor, args[1])
+    dtensor_type = x.__class__
     target = args[2]
     weight = args[3]
     reduction = cast(int, args[4])
@@ -486,7 +489,7 @@ def _nll_loss_backward_handler(
     )
 
     # pyrefly: ignore [bad-argument-type]
-    return DTensor(
+    return dtensor_type(
         # pyrefly: ignore [bad-argument-count]
         result,
         out_spec,

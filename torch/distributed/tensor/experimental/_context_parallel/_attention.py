@@ -899,15 +899,17 @@ def _sdpa_handler(
     args: tuple[object, ...],
     kwargs: dict[str, object],
 ) -> object:
+    dtensor_type = cast(DTensor, args[0]).__class__
+    dispatcher = dtensor_type._op_dispatcher
     # extract local tensor and sharding infos to a OpInfo
-    op_info = DTensor._op_dispatcher.unwrap_to_op_info(op_call, args, kwargs)
+    op_info = dispatcher.unwrap_to_op_info(op_call, args, kwargs)
     logger.debug("Dispatching op_call: %s", op_info.schema or op_call)
 
     # sharding propagation
     # TODO: remove the context parallel strategy from the default propagation
     # rule. Either figure out how to dynamically enable it or just don't call
     # propagate.
-    DTensor._op_dispatcher.sharding_propagator.propagate(op_info)
+    dispatcher.sharding_propagator.propagate(op_info)
     output_sharding = op_info.output_sharding
     if output_sharding is None:
         raise AssertionError("output sharding should not be None")
@@ -933,7 +935,9 @@ def _sdpa_handler(
             "CP only supports flash attention and memory efficient attention now."
         )
 
-    return DTensor._op_dispatcher.wrap(local_results, output_sharding.output_spec)
+    return dispatcher.wrap(
+        local_results, output_sharding.output_spec, dtensor_type=dtensor_type
+    )
 
 
 custom_ops = {

@@ -210,13 +210,31 @@ class OpDispatcher:
     def _allow_implicit_replication(self, value: bool) -> None:
         return torch._C._set_dtensor_allow_implicit_replication(value)
 
+    def _get_custom_op_handler(
+        self,
+        op_call: torch._ops.OpOverload,
+        dtensor_type: "type[dtensor.DTensor]",
+    ):
+        handler = self._custom_op_handlers.get(op_call)
+        if handler is not None:
+            return handler
+
+        for base_type in dtensor_type.__mro__[1:]:
+            dispatcher = getattr(base_type, "_op_dispatcher", None)
+            if not isinstance(dispatcher, OpDispatcher) or dispatcher is self:
+                continue
+            handler = dispatcher._custom_op_handlers.get(op_call)
+            if handler is not None:
+                return handler
+        return None
+
     def dispatch(
         self,
         op_call: torch._ops.OpOverload,
         args: tuple[object, ...],
         kwargs: dict[str, object],
         *,
-        dtensor_type: type[dtensor.DTensor] = dtensor.DTensor,
+        dtensor_type: "type[dtensor.DTensor] | None" = None,
     ) -> object:
         """
         Python DTensor dispatch entrypoint used by DTensor subclasses.
@@ -225,8 +243,10 @@ class OpDispatcher:
         subclasses still rely on Python __torch_dispatch__ so they can
         customize dispatch and delegate back to the base implementation.
         """
-        if op_call in self._custom_op_handlers:
-            return self._custom_op_handlers[op_call](op_call, args, kwargs)  # type: ignore[operator]
+        dtensor_type = dtensor.DTensor if dtensor_type is None else dtensor_type
+        handler = self._get_custom_op_handler(op_call, dtensor_type)
+        if handler is not None:
+            return handler(op_call, args, kwargs)  # type: ignore[operator]
 
         op_info = self.unwrap_to_op_info(op_call, args, kwargs)
 
@@ -824,8 +844,9 @@ class OpDispatcher:
     def wrap(
         res: object,
         spec: OutputSpecType,
-        dtensor_type: type[dtensor.DTensor] = dtensor.DTensor,
+        dtensor_type: "type[dtensor.DTensor] | None" = None,
     ) -> object:
+        dtensor_type = dtensor.DTensor if dtensor_type is None else dtensor_type
         if isinstance(res, torch.Tensor):
             if spec is not None:
                 if not isinstance(spec, DTensorSpec):
