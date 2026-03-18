@@ -76,8 +76,10 @@ inline void check_legacy_fn_attr_access(
 
 std::vector<uint32_t> get_backward_next_edges_order(
     PyObject* cls,
+    const std::vector<bool>& is_variable_input,
     size_t num_next_edges) {
-  THPObjectPtr order_attr(PyObject_GetAttrString(cls, "_backward_next_edges_order"));
+  THPObjectPtr order_attr(
+      PyObject_GetAttrString(cls, "_backward_next_edges_order"));
   if (!order_attr) {
     if (PyErr_ExceptionMatches(PyExc_AttributeError)) {
       PyErr_Clear();
@@ -98,16 +100,27 @@ std::vector<uint32_t> get_backward_next_edges_order(
 
   const auto order_len =
       static_cast<size_t>(PySequence_Fast_GET_SIZE(order_seq.get()));
+  const auto num_forward_inputs =
+      static_cast<size_t>(is_variable_input.size());
   TORCH_CHECK(
-      order_len == num_next_edges,
+      order_len == num_forward_inputs,
       "autograd.Function._backward_next_edges_order must have length ",
-      num_next_edges,
+      num_forward_inputs,
       ", got ",
       order_len);
 
-  std::vector<bool> seen(num_next_edges, false);
+  std::vector<uint32_t> next_edge_idx_for_input(num_forward_inputs);
+  size_t next_edge_idx = 0;
+  for (const auto i : c10::irange(num_forward_inputs)) {
+    if (is_variable_input[i]) {
+      next_edge_idx_for_input[i] = next_edge_idx++;
+    }
+  }
+  TORCH_INTERNAL_ASSERT(next_edge_idx == num_next_edges);
+
+  std::vector<bool> seen(num_forward_inputs, false);
   std::vector<uint32_t> order;
-  order.reserve(order_len);
+  order.reserve(num_next_edges);
   bool is_identity = true;
 
   for (const auto i : c10::irange(order_len)) {
@@ -117,19 +130,24 @@ std::vector<uint32_t> get_backward_next_edges_order(
       throw python_error();
     }
     TORCH_CHECK(
-        idx >= 0 && static_cast<size_t>(idx) < num_next_edges,
+        idx >= 0 && static_cast<size_t>(idx) < num_forward_inputs,
         "autograd.Function._backward_next_edges_order must contain values in [0, ",
-        num_next_edges,
+        num_forward_inputs,
         "), got ",
         idx);
     TORCH_CHECK(
         !seen[idx],
         "autograd.Function._backward_next_edges_order must be a permutation");
     seen[idx] = true;
-    is_identity &= static_cast<size_t>(idx) == i;
-    order.push_back(static_cast<uint32_t>(idx));
+    if (!is_variable_input[idx]) {
+      continue;
+    }
+    const auto compressed_idx = next_edge_idx_for_input[idx];
+    is_identity &= static_cast<size_t>(compressed_idx) == order.size();
+    order.push_back(compressed_idx);
   }
 
+  TORCH_INTERNAL_ASSERT(order.size() == num_next_edges);
   if (is_identity) {
     order.clear();
   }
@@ -1435,7 +1453,8 @@ PyObject* THPFunction_apply(PyObject* cls, PyObject* inputs) {
   // Initialize backward function (and ctx)
   bool is_executable = input_info.is_executable;
   auto next_edges_order = is_executable
-      ? get_backward_next_edges_order(cls, input_info.next_edges.size())
+      ? get_backward_next_edges_order(
+            cls, input_info.is_variable_input, input_info.next_edges.size())
       : std::vector<uint32_t>{};
   cdata->set_next_edges(std::move(input_info.next_edges));
   cdata->set_next_edges_order(std::move(next_edges_order));

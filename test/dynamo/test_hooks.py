@@ -1000,7 +1000,7 @@ def forward(self, L_x_ : torch.Tensor):
     def test_post_acc_grad_hook_tiebreaker_order_matches_eager(self):
         x = torch.randn(10, 10)
 
-        def get_order(module_factory, backend=None):
+        def get_order(module_factory, backend=None, args=()):
             module = module_factory()
             hook_order = []
 
@@ -1015,7 +1015,7 @@ def forward(self, L_x_ : torch.Tensor):
             fn = module
             if backend is not None:
                 fn = torch.compile(module, backend=backend, fullgraph=True)
-            fn(x).sum().backward()
+            fn(x, *args).sum().backward()
             return hook_order
 
         def reordered_layers():
@@ -1037,9 +1037,31 @@ def forward(self, L_x_ : torch.Tensor):
         def linear_with_bias():
             return torch.nn.Linear(10, 10, bias=True)
 
-        for module_factory in (reordered_layers, linear_with_bias):
-            eager_order = get_order(module_factory)
-            self.assertEqual(get_order(module_factory, "aot_eager"), eager_order)
+        def reordered_layers_with_scale():
+            class ReorderedLayersWithScale(torch.nn.Module):
+                def __init__(self):
+                    super().__init__()
+                    self.layer0 = torch.nn.Linear(10, 10, bias=False)
+                    self.layer1 = torch.nn.Linear(10, 10, bias=False)
+                    self.layer2 = torch.nn.Linear(10, 10, bias=False)
+
+                def forward(self, x, scale):
+                    x = self.layer1(x)
+                    x = scale * self.layer0(x)
+                    x = self.layer2(x)
+                    return x
+
+            return ReorderedLayersWithScale()
+
+        for module_factory, args in (
+            (reordered_layers, ()),
+            (linear_with_bias, ()),
+            (reordered_layers_with_scale, (2.0,)),
+        ):
+            eager_order = get_order(module_factory, args=args)
+            self.assertEqual(
+                get_order(module_factory, "aot_eager", args=args), eager_order
+            )
 
     def test_recompile(self):
         def hook(param):
