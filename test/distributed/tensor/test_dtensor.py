@@ -291,15 +291,44 @@ class DTensorTest(DTensorTestBase):
             base._spec,
             requires_grad=base.requires_grad,
         )
+        base_prop = DTensor._op_dispatcher.sharding_propagator
+        subclass_prop = MyDTensor._op_dispatcher.sharding_propagator
+        base_meta_calls = []
+        subclass_meta_calls = []
+        base_propagate_tensor_meta = base_prop._propagate_tensor_meta
+        subclass_propagate_tensor_meta = subclass_prop._propagate_tensor_meta
+
+        def record_base_tensor_meta(op_schema):
+            base_meta_calls.append(op_schema.op)
+            return base_propagate_tensor_meta(op_schema)
+
+        def record_subclass_tensor_meta(op_schema):
+            subclass_meta_calls.append(op_schema.op)
+            return subclass_propagate_tensor_meta(op_schema)
+
+        base_prop._propagate_tensor_meta = record_base_tensor_meta
+        subclass_prop._propagate_tensor_meta = record_subclass_tensor_meta
         expected = F.cross_entropy(local_tensor, target)
-        with loss_parallel():
-            with comm_mode:
-                result = F.cross_entropy(my_dt, dist_target)
+        try:
+            with loss_parallel():
+                with comm_mode:
+                    result = F.cross_entropy(my_dt, dist_target)
+        finally:
+            base_prop._propagate_tensor_meta = base_propagate_tensor_meta
+            subclass_prop._propagate_tensor_meta = subclass_propagate_tensor_meta
 
         self.assertEqual(comm_mode.get_total_counts(), 3)
         self.assertEqual(
             comm_mode.get_comm_counts()[c10d_functional.all_reduce],
             3,
+        )
+        self.assertEqual(base_meta_calls, [])
+        self.assertEqual(
+            subclass_meta_calls,
+            [
+                torch.ops.aten._log_softmax.default,
+                torch.ops.aten.nll_loss_forward.default,
+            ],
         )
         self.assertEqual(type(result), MyDTensor)
         self.assertEqual(result.to_local(), expected)
@@ -335,6 +364,8 @@ class DTensorTest(DTensorTestBase):
         lib.define("base_strategy(Tensor input) -> Tensor")
         lib.define("subclass_rule(Tensor input) -> Tensor")
         lib.define("subclass_strategy(Tensor input) -> Tensor")
+        lib.define("child_rule(Tensor input) -> Tensor")
+        lib.define("child_strategy(Tensor input) -> Tensor")
 
         base_rule_op = torch.ops.dtensor_subclass_dispatch_test.base_rule.default
         base_strategy_op = (
@@ -346,12 +377,20 @@ class DTensorTest(DTensorTestBase):
         subclass_strategy_op = (
             torch.ops.dtensor_subclass_dispatch_test.subclass_strategy.default
         )
+        child_rule_op = torch.ops.dtensor_subclass_dispatch_test.child_rule.default
+        child_strategy_op = (
+            torch.ops.dtensor_subclass_dispatch_test.child_strategy.default
+        )
 
         class MyDTensor(DTensor):
             _op_dispatcher = type(DTensor._op_dispatcher)()
 
+        class ChildDTensor(MyDTensor):
+            _op_dispatcher = type(DTensor._op_dispatcher)()
+
         base_prop = DTensor._op_dispatcher.sharding_propagator
         subclass_prop = MyDTensor._op_dispatcher.sharding_propagator
+        child_prop = ChildDTensor._op_dispatcher.sharding_propagator
 
         def base_rule(op_schema):
             raise AssertionError(f"unexpected call: {op_schema}")
@@ -365,7 +404,14 @@ class DTensorTest(DTensorTestBase):
         def subclass_strategy(op_schema):
             raise AssertionError(f"unexpected call: {op_schema}")
 
+        def child_rule(op_schema):
+            raise AssertionError(f"unexpected call: {op_schema}")
+
+        def child_strategy(op_schema):
+            raise AssertionError(f"unexpected call: {op_schema}")
+
         self.assertIsNot(base_prop, subclass_prop)
+        self.assertIsNot(subclass_prop, child_prop)
         base_rule_backup = base_prop.op_to_rules.get(base_rule_op)
         base_strategy_backup = base_prop.op_strategy_funcs.get(base_strategy_op)
         try:
@@ -374,6 +420,11 @@ class DTensorTest(DTensorTestBase):
             self.assertIs(subclass_prop.op_to_rules.get(base_rule_op), base_rule)
             self.assertIs(
                 subclass_prop.op_strategy_funcs.get(base_strategy_op),
+                base_strategy,
+            )
+            self.assertIs(child_prop.op_to_rules.get(base_rule_op), base_rule)
+            self.assertIs(
+                child_prop.op_strategy_funcs.get(base_strategy_op),
                 base_strategy,
             )
 
@@ -388,8 +439,25 @@ class DTensorTest(DTensorTestBase):
                 subclass_prop.op_strategy_funcs.get(subclass_strategy_op),
                 subclass_strategy,
             )
+            self.assertIs(child_prop.op_to_rules.get(subclass_rule_op), subclass_rule)
+            self.assertIs(
+                child_prop.op_strategy_funcs.get(subclass_strategy_op),
+                subclass_strategy,
+            )
             self.assertIsNone(base_prop.op_to_rules.get(subclass_rule_op))
             self.assertIsNone(base_prop.op_strategy_funcs.get(subclass_strategy_op))
+
+            child_prop.register_sharding_prop_rule(child_rule_op, child_rule)
+            child_prop.register_op_strategy(child_strategy_op, child_strategy)
+            self.assertIs(child_prop.op_to_rules.get(child_rule_op), child_rule)
+            self.assertIs(
+                child_prop.op_strategy_funcs.get(child_strategy_op),
+                child_strategy,
+            )
+            self.assertIsNone(subclass_prop.op_to_rules.get(child_rule_op))
+            self.assertIsNone(subclass_prop.op_strategy_funcs.get(child_strategy_op))
+            self.assertIsNone(base_prop.op_to_rules.get(child_rule_op))
+            self.assertIsNone(base_prop.op_strategy_funcs.get(child_strategy_op))
         finally:
             if base_rule_backup is None:
                 base_prop.op_to_rules.pop(base_rule_op, None)

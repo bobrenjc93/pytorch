@@ -110,15 +110,21 @@ def _propagate_tensor_meta(
     op_call: torch._ops.OpOverload,
     args: tuple[object, ...],
     kwargs: dict[str, object],
+    *,
+    dtensor_type: type[DTensor] | None = None,
 ) -> TensorMeta:
-    op_info = DTensor._op_dispatcher.unwrap_to_op_info(op_call, args, kwargs)
+    dtensor_type = (
+        cast(type[DTensor], cast(DTensor, args[0]).__class__)
+        if dtensor_type is None
+        else dtensor_type
+    )
+    dispatcher = dtensor_type._op_dispatcher
+    op_info = dispatcher.unwrap_to_op_info(op_call, args, kwargs)
     if op_info.schema is None:
         raise AssertionError(
             "op_info.schema should not be None after unwrap_to_op_info"
         )
-    tensor_meta = DTensor._op_dispatcher.sharding_propagator._propagate_tensor_meta(
-        op_info.schema
-    )
+    tensor_meta = dispatcher.sharding_propagator._propagate_tensor_meta(op_info.schema)
     if isinstance(tensor_meta, TensorMeta):
         return tensor_meta
     elif isinstance(tensor_meta, tuple):
@@ -175,7 +181,9 @@ def _log_softmax_handler(
     dim = normalize_dim(dim, x.dim())
     mesh_dim = _find_all_reduce_mesh_dim(spec.placements, dim)
 
-    output_tensor_meta = _propagate_tensor_meta(op_call, args, kwargs)
+    output_tensor_meta = _propagate_tensor_meta(
+        op_call, args, kwargs, dtensor_type=dtensor_type
+    )
 
     res = _log_softmax(x._local_tensor, dim, half_to_float, spec.mesh, mesh_dim)
 
@@ -336,7 +344,9 @@ def _nll_loss_forward_handler(
     args = list(args)
     # pyrefly: ignore [unsupported-operation]
     args[1], args[2] = target, weight
-    output_tensor_meta = _propagate_tensor_meta(op_call, tuple(args), kwargs)
+    output_tensor_meta = _propagate_tensor_meta(
+        op_call, tuple(args), kwargs, dtensor_type=dtensor_type
+    )
 
     result, total_weight = _nll_loss_forward(
         x._local_tensor,
@@ -480,7 +490,9 @@ def _nll_loss_backward_handler(
     args[2], args[3] = target, weight
     # pyrefly: ignore [unsupported-operation]
     args[6] = _cast_to_dtensor(total_weight, all_replicate_placements, spec.mesh)
-    output_tensor_meta = _propagate_tensor_meta(op_call, tuple(args), kwargs)
+    output_tensor_meta = _propagate_tensor_meta(
+        op_call, tuple(args), kwargs, dtensor_type=dtensor_type
+    )
 
     result = _nll_loss_and_log_softmax_backward(
         grad_output._local_tensor,

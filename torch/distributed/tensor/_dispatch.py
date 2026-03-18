@@ -167,8 +167,8 @@ class OpDispatcher:
     """
 
     def __init__(self) -> None:
-        # DTensor subclasses should inherit the base dispatcher registrations,
-        # including runtime installs, without aliasing mutable propagator state.
+        # DTensor subclasses seed from the base dispatcher here and then rebase
+        # onto their nearest DTensor ancestor after class creation.
         base_dispatcher = getattr(
             getattr(dtensor, "DTensor", None), "_op_dispatcher", None
         )
@@ -204,6 +204,11 @@ class OpDispatcher:
             aten.argmin.default: argminmax_handler,
             aten.argmax.default: argminmax_handler,
         }
+
+    def rebase_sharding_propagator(self, base_dispatcher: "OpDispatcher") -> None:
+        if base_dispatcher is self:
+            return
+        self.sharding_propagator.rebase(base_dispatcher.sharding_propagator)
 
     # ********************************************************************************************
     # def dispatch(...)

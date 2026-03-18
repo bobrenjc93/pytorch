@@ -6,7 +6,7 @@ from collections.abc import Callable, MutableMapping, Sequence
 from contextlib import nullcontext
 from functools import lru_cache
 from itertools import chain
-from typing import cast
+from typing import cast, TypeVar
 
 import torch
 from torch._guards import detect_fake_mode
@@ -43,6 +43,9 @@ from torch.utils._pytree import tree_map
 
 aten = torch.ops.aten
 
+K = TypeVar("K")
+V = TypeVar("V")
+
 log = logging.getLogger(__name__)
 
 
@@ -52,6 +55,12 @@ def _length(obj) -> int:
     if not isinstance(obj, Sequence):
         return 1
     return len(obj)
+
+
+def _get_local_overrides(mapping: MutableMapping[K, V]) -> MutableMapping[K, V]:
+    if isinstance(mapping, ChainMap):
+        return cast(MutableMapping[K, V], mapping.maps[0])
+    return mapping
 
 
 def _get_expected_num_tensor_outputs(op: OpOverload) -> int:
@@ -365,6 +374,33 @@ class ShardingPropagator:
             aten.select_backward.default: 1,
             aten.slice_backward.default: 1,
         }
+
+    def rebase(self, base_propagator: "ShardingPropagator | None") -> None:
+        if base_propagator is None:
+            return
+
+        self.op_to_rules = ChainMap(
+            _get_local_overrides(self.op_to_rules),
+            base_propagator.op_to_rules,
+        )
+        self.op_strategy_funcs = ChainMap(
+            _get_local_overrides(self.op_strategy_funcs),
+            base_propagator.op_strategy_funcs,
+        )
+        self.op_single_dim_strategy_funcs = ChainMap(
+            _get_local_overrides(self.op_single_dim_strategy_funcs),
+            base_propagator.op_single_dim_strategy_funcs,
+        )
+        self.op_to_schema_info = ChainMap(
+            _get_local_overrides(self.op_to_schema_info),
+            base_propagator.op_to_schema_info,
+        )
+        self.op_to_schema_info_for_single_dim_strategy = ChainMap(
+            _get_local_overrides(self.op_to_schema_info_for_single_dim_strategy),
+            base_propagator.op_to_schema_info_for_single_dim_strategy,
+        )
+        self.propagate_op_sharding.cache_clear()
+        self._propagate_tensor_meta_cached.cache_clear()
 
     def register_sharding_prop_rule(
         self,
