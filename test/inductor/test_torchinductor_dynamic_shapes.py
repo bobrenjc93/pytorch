@@ -151,14 +151,14 @@ if HAS_CPU:
             self.assertIs(may_get_constant_buffer_dtype(symint), torch.int64)
             self.assertIs(may_get_constant_buffer_dtype(symbool), torch.bool)
 
-        def _make_graph_with_symbool_input(self):
+        def _make_graph_with_symbool_input(self, device="cpu"):
             from torch.fx.experimental.symbolic_shapes import ShapeEnv
 
             shape_env = ShapeEnv()
             pred_input = shape_env.create_unbacked_symbool()
             self.assertIsInstance(pred_input.node.expr, sympy.Equality)
 
-            x_input = torch.randn(2, 3)
+            x_input = torch.randn(2, 3, device=device)
             fake_mode = torch._subclasses.FakeTensorMode(shape_env=shape_env)
             with fake_mode:
                 fake_x = fake_mode.from_tensor(x_input)
@@ -236,24 +236,29 @@ if HAS_CPU:
             from torch._inductor.debug import DebugContext
             from torch._inductor.graph import may_get_constant_buffer_dtype
 
-            gm, shape_env, fake_mode, x_input, pred_input = (
-                self._make_graph_with_symbool_input()
-            )
-            graph_lowering = self._make_graph_lowering(
-                gm, shape_env, x_input, pred_input
-            )
-            with (
-                V.set_fake_mode(fake_mode),
-                V.set_graph_handler(graph_lowering),
-                V.set_debug_handler(DebugContext()),
-            ):
-                graph_lowering.run(x_input, pred_input)
-                pred_expr = graph_lowering.graph_inputs["pred"]
-                self.assertIsInstance(pred_expr, sympy.Equality)
-                self.assertIs(may_get_constant_buffer_dtype(pred_expr), torch.bool)
+            devices = ["cpu"]
+            if HAS_GPU:
+                devices.append(GPU_TYPE)
 
-                wrapper_code, _ = graph_lowering.codegen()
-                self.assertIn(", pred, )", wrapper_code.value)
+            for device in devices:
+                gm, shape_env, fake_mode, x_input, pred_input = (
+                    self._make_graph_with_symbool_input(device=device)
+                )
+                graph_lowering = self._make_graph_lowering(
+                    gm, shape_env, x_input, pred_input
+                )
+                with (
+                    V.set_fake_mode(fake_mode),
+                    V.set_graph_handler(graph_lowering),
+                    V.set_debug_handler(DebugContext()),
+                ):
+                    graph_lowering.run(x_input, pred_input)
+                    pred_expr = graph_lowering.graph_inputs["pred"]
+                    self.assertIsInstance(pred_expr, sympy.Equality)
+                    self.assertIs(may_get_constant_buffer_dtype(pred_expr), torch.bool)
+
+                    wrapper_code, _ = graph_lowering.codegen()
+                    self.assertIn(", pred, )", wrapper_code.value)
 
         def test_graph_lowering_aot_cpp_wrapper_accepts_unbacked_symbool_graph_input(
             self,
@@ -282,7 +287,7 @@ if HAS_CPU:
                     "aoti_torch_item_bool(inputs[1], &pred)", wrapper_code.value
                 )
 
-        def test_graph_lowering_avoids_int_placeholder_name_collisions(self):
+        def test_graph_lowering_specializes_python_int_metadata_inputs(self):
             from torch._inductor.debug import DebugContext
             from torch._inductor.graph import GraphLowering
             from torch.fx.experimental.symbolic_shapes import ShapeEnv
@@ -292,17 +297,20 @@ if HAS_CPU:
             fake_mode = torch._subclasses.FakeTensorMode(shape_env=shape_env)
             with fake_mode:
                 fake_x = fake_mode.from_tensor(x_input)
-                fake_y = torch.ops.aten.neg.default(fake_x)
+                fake_y = torch.ops.aten.sum.dim_IntList(fake_x, [1], False)
 
             graph = torch.fx.Graph()
-            scalar = graph.placeholder("x")
-            tensor = graph.placeholder("x_symint")
-            y = graph.call_function(torch.ops.aten.neg.default, (tensor,))
+            x = graph.placeholder("x")
+            axis = graph.placeholder("axis")
+            y = graph.call_function(
+                torch.ops.aten.sum.dim_IntList,
+                (x, [axis], False),
+            )
             graph.output((y,))
 
             gm = torch.fx.GraphModule({}, graph)
-            scalar.meta["val"] = 4
-            tensor.meta["val"] = fake_x
+            x.meta["val"] = fake_x
+            axis.meta["val"] = 1
             y.meta["val"] = fake_y
             gm.graph.lint()
             gm.recompile()
@@ -313,11 +321,9 @@ if HAS_CPU:
                 V.set_graph_handler(graph_lowering),
                 V.set_debug_handler(DebugContext()),
             ):
-                graph_lowering.run(4, x_input)
-                scalar_expr = graph_lowering.graph_inputs["x"]
-                self.assertIsInstance(scalar_expr, sympy.Symbol)
-                self.assertNotEqual(str(scalar_expr), "x_symint")
-                self.assertIn("x_symint", graph_lowering.graph_inputs)
+                graph_lowering.run(x_input, 1)
+                self.assertNotIn("axis", graph_lowering.graph_inputs)
+                graph_lowering.codegen()
 
 
 class TestInductorDynamic(TestCase):

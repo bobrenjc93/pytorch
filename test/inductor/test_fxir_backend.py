@@ -1124,8 +1124,8 @@ def forward(self, arg0_1, arg1_1, arg2_1):
 
                 return torch.cond(pred, true_fn, false_fn, (x,))
 
-        # AOT partition boundaries can present symbolic compares such as
-        # `EP > 1` to the FX wrapper as explicit SymBool placeholders.
+        # AOT partition boundaries can lift symbolic compares such as `EP > 1`
+        # into the partition signature as explicit SymBool placeholders.
         shape_env = ShapeEnv()
         pred = shape_env.create_unbacked_symbool()
         x = torch.ones(4, device=self.device)
@@ -1147,6 +1147,23 @@ def forward(self, arg0_1, arg1_1, arg2_1):
         )
         self.assertEqual(len(gm.graph.find_nodes(op="placeholder")), 2)
         self.assertTrue(same(ep.module()(pred, x), gm(pred, x)))
+
+    def test_aoti_specializes_python_int_metadata_input(self):
+        class M(torch.nn.Module):
+            def forward(self, x, dim: int):
+                return torch.sum(x, dim)
+
+        x = torch.randn(4, 5, device=self.device)
+        dim = 1
+
+        ep = torch.export.export(M(), (x, dim), strict=False)
+        gm = torch._inductor.aot_compile(
+            ep.module(),
+            (x, dim),
+            options={"fx_wrapper": True, **test_config},
+        )
+
+        self.assertTrue(same(ep.module()(x, dim), gm(x, dim)))
 
     @parametrize("dynamic", (False, True))
     @parametrize("input_", (1.5, 2, False))

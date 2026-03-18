@@ -1189,31 +1189,6 @@ class GraphLowering(torch.fx.Interpreter):
 
             return non_dup_const_name
 
-    @functools.cached_property
-    def _reserved_int_placeholder_names(self) -> OrderedSet[str]:
-        reserved_names = OrderedSet(
-            self.qualify_name(node.target)
-            for node in self.module.graph.nodes  # type: ignore[union-attr]
-            if node.op == "placeholder"
-        )
-        reserved_names.update(
-            str(value)
-            for value in self.graph_inputs.values()
-            if isinstance(value, sympy.Symbol)
-        )
-        return reserved_names
-
-    def _allocate_int_placeholder_symbol(self, target: str) -> sympy.Symbol:
-        base_name = f"{target}_symint"
-        symbol_name = base_name
-        counter = 0
-        while symbol_name in self._reserved_int_placeholder_names:
-            counter += 1
-            symbol_name = f"{base_name}_{counter}"
-
-        self._reserved_int_placeholder_names.add(symbol_name)
-        return sympy.Symbol(symbol_name, integer=True)
-
     # pyrefly: ignore [bad-override]
     def placeholder(
         self,
@@ -1241,14 +1216,11 @@ class GraphLowering(torch.fx.Interpreter):
             self.graph_input_names.append(target)
             return expr
         elif isinstance(example, int):
-            # Keep runtime scalar integer inputs symbolic instead of specializing
-            # them to the example value seen during tracing. Use a distinct
-            # internal symbol so wrapper codegen can bind the symbolic value to
-            # the extracted runtime scalar without colliding on the same name.
-            expr = self._allocate_int_placeholder_symbol(target)
-            self.graph_inputs[target] = expr
+            # Plain Python ints are generally compile-time metadata inputs
+            # such as reduction axes. Keep them specialized to the traced
+            # value so downstream lowerings continue to receive concrete ints.
             self.graph_input_names.append(target)
-            return expr
+            return example
         elif isinstance(example, float):
             expr = sympy.sympify(example)
             self.graph_inputs[target] = expr
