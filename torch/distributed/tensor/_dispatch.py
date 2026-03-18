@@ -1,5 +1,6 @@
 # Copyright (c) Meta Platforms, Inc. and affiliates
 import contextlib
+import copy
 import inspect
 import logging
 import warnings
@@ -236,6 +237,25 @@ def _handler_accepts_dtensor_type_kwarg_uncached(handler: object) -> bool:
     )
 
 
+def _call_with_optional_dtensor_type_kwarg(
+    callable_obj: object,
+    op_call: torch._ops.OpOverload,
+    args: tuple[object, ...],
+    kwargs: dict[str, object],
+    *,
+    dtensor_type: "type[dtensor.DTensor]",
+) -> object:
+    signature_target = getattr(callable_obj, "__func__", callable_obj)
+    if _handler_accepts_dtensor_type_kwarg(signature_target):
+        return callable_obj(  # type: ignore[operator]
+            op_call,
+            args,
+            kwargs,
+            dtensor_type=dtensor_type,
+        )
+    return callable_obj(op_call, args, kwargs)  # type: ignore[operator]
+
+
 class OpDispatcher:
     """
     Op dispatching class instance to handle args/kwargs pre-processing (un-wrapping), sharding
@@ -279,6 +299,13 @@ class OpDispatcher:
             aten.bernoulli_.float,
         }
         self._custom_op_handlers = _CustomOpHandlerMap(DEFAULT_CUSTOM_OP_HANDLERS)
+
+    def clone(self) -> "OpDispatcher":
+        cloned = copy.copy(self)
+        cloned._random_ops = set(self._random_ops)
+        cloned._custom_op_handlers = self._custom_op_handlers.copy()
+        cloned.sharding_propagator = ShardingPropagator(self.sharding_propagator)
+        return cloned
 
     def rebase_sharding_propagator(self, base_dispatcher: "OpDispatcher") -> None:
         if base_dispatcher is self:
@@ -364,14 +391,13 @@ class OpDispatcher:
         dtensor_type = dtensor.DTensor if dtensor_type is None else dtensor_type
         handler = self._get_custom_op_handler(op_call, dtensor_type)
         if handler is not None:
-            if _handler_accepts_dtensor_type_kwarg(handler):
-                return handler(  # type: ignore[operator]
-                    op_call,
-                    args,
-                    kwargs,
-                    dtensor_type=dtensor_type,
-                )
-            return handler(op_call, args, kwargs)  # type: ignore[operator]
+            return _call_with_optional_dtensor_type_kwarg(
+                handler,
+                op_call,
+                args,
+                kwargs,
+                dtensor_type=dtensor_type,
+            )
 
         op_info = self.unwrap_to_op_info(op_call, args, kwargs)
 

@@ -280,6 +280,40 @@ class DTensorTest(DTensorTestBase):
         self.assertEqual(result.to_local(), local_tensor + local_tensor)
 
     @with_comms
+    def test_dtensor_subclass_legacy_dispatcher_signature(self):
+        device_mesh = self.build_device_mesh()
+        local_tensor = torch.arange(
+            16, device=self.device_type, dtype=torch.float32
+        ).reshape(4, 4)
+        base = DTensor.from_local(local_tensor, device_mesh, [Replicate()])
+
+        dispatcher_calls = []
+
+        class LegacyDispatcher(type(DTensor._op_dispatcher)):
+            def dispatch(self, op_call, args, kwargs):
+                dispatcher_calls.append(op_call)
+                return super().dispatch(
+                    op_call,
+                    args,
+                    kwargs,
+                    dtensor_type=MyDTensor,
+                )
+
+        class MyDTensor(DTensor):
+            _op_dispatcher = LegacyDispatcher()
+
+        my_dt = MyDTensor(
+            base._local_tensor,
+            base._spec,
+            requires_grad=base.requires_grad,
+        )
+        result = my_dt + my_dt
+
+        self.assertEqual(dispatcher_calls, [torch.ops.aten.add.Tensor])
+        self.assertEqual(type(result), MyDTensor)
+        self.assertEqual(result.to_local(), local_tensor + local_tensor)
+
+    @with_comms
     def test_dtensor_subclass_tensor_unflatten_preserves_type(self):
         device_mesh = self.build_device_mesh()
         local_tensor = torch.arange(
@@ -436,8 +470,13 @@ class DTensorTest(DTensorTestBase):
         self.assertEqual(result.to_local(), F.conv2d(local_input, local_weight))
 
     def test_dtensor_subclass_inherited_dispatcher_is_cloned(self):
+        class ConfigurableDispatcher(type(DTensor._op_dispatcher)):
+            def __init__(self, label):
+                super().__init__()
+                self.label = label
+
         class ParentDTensor(DTensor):
-            pass
+            _op_dispatcher = ConfigurableDispatcher("parent")
 
         class ChildDTensor(ParentDTensor):
             pass
@@ -451,6 +490,8 @@ class DTensorTest(DTensorTestBase):
 
         self.assertIsNot(parent_dispatcher, base_dispatcher)
         self.assertIsNot(child_dispatcher, parent_dispatcher)
+        self.assertEqual(parent_dispatcher.label, "parent")
+        self.assertEqual(child_dispatcher.label, "parent")
         self.assertIsNot(
             parent_dispatcher.sharding_propagator,
             base_dispatcher.sharding_propagator,
@@ -460,8 +501,11 @@ class DTensorTest(DTensorTestBase):
             parent_dispatcher.sharding_propagator,
         )
 
+        child_dispatcher.label = "child"
         parent_dispatcher._custom_op_handlers[op] = marker
 
+        self.assertEqual(parent_dispatcher.label, "parent")
+        self.assertEqual(child_dispatcher.label, "child")
         self.assertIs(base_dispatcher._custom_op_handlers[op], default_conv_handler)
         self.assertIs(child_dispatcher._get_custom_op_handler(op, ChildDTensor), marker)
 

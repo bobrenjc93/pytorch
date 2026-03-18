@@ -364,7 +364,7 @@ class DTensor(torch.Tensor):
 
         dispatcher = cls.__dict__.get("_op_dispatcher")
         if dispatcher is None:
-            dispatcher = type(base_dispatcher)()
+            dispatcher = base_dispatcher.clone()
             cls._op_dispatcher = dispatcher
         elif not isinstance(dispatcher, op_dispatch.OpDispatcher):
             return
@@ -438,7 +438,8 @@ class DTensor(torch.Tensor):
         # Exact DTensor instances use the C++ fast path. DTensor subclasses
         # still need the Python entrypoint so they can override
         # __torch_dispatch__ or _op_dispatcher and delegate back here.
-        return cls._op_dispatcher.dispatch(
+        return op_dispatch._call_with_optional_dtensor_type_kwarg(
+            cls._op_dispatcher.dispatch,
             func,
             args,
             kwargs or {},
