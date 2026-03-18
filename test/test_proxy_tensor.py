@@ -1429,10 +1429,13 @@ def forward(self, crop_camera_1, mask_1):
             x = x[m]
             return x[slice(None, None, None), slice(None, None, None), slice(None, 2, None)]
 
-        make_fx(f, tracing_mode="symbolic")(
+        gm = make_fx(f, tracing_mode="symbolic")(
             torch.randn((12, 3, 3)),
             torch.randint(0, 2, (12,), dtype=torch.bool)
         )
+        guards = show_guards(gm)
+        self.assertIn("2 <= L['x'].size()[2]", guards)
+        self.assertNotIn("L['x'].size()[2] != 2", guards)
 
     @unittest.skipIf(not USE_TORCHVISION, "test requires torchvision")
     def test_unbacked_batch_resnet(self):

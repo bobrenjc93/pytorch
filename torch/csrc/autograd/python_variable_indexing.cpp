@@ -25,6 +25,7 @@
 #include <ATen/TracerMode.h>
 #include <ATen/core/LegacyTypeDispatch.h>
 #include <c10/core/TensorOptions.h>
+#include <c10/core/impl/TorchDispatchModeTLS.h>
 #include <c10/util/Exception.h>
 #include <c10/util/irange.h>
 
@@ -210,11 +211,18 @@ static void recordSelectTrace(const Tensor& index_tensor) {
       std::string("index"), 1, index_tensor, torch::jit::IntType::get());
 }
 
+static bool isProxyTracingModeActive() {
+  return c10::impl::TorchDispatchModeTLS::get_mode(
+             c10::impl::TorchDispatchModeKey::PROXY)
+      .has_value();
+}
+
 static Variable applySlicing(
     const Variable& self,
     PyObject* index,
     variable_list& outIndices,
     bool is_tracing,
+    bool disable_slice_optimization,
     const at::Device& self_device,
     const std::optional<int64_t>& self_ndim,
     int64_t specified_dims) {
@@ -293,7 +301,7 @@ static Variable applySlicing(
         /*outIndices=*/outIndices,
         // See NOTE [ Setting `disable_slice_optimization` when calling C++
         // tensor indexing functions from Python ]
-        /*disable_slice_optimization=*/is_tracing,
+        /*disable_slice_optimization=*/disable_slice_optimization,
         /*original_tensor_device=*/self_device,
         /*prev_dim_result_sizes=*/result_sizes);
   }
@@ -405,6 +413,8 @@ PyObject* THPVariable_getitem(PyObject* self, PyObject* index) {
   }
 
   bool is_tracing = torch::jit::tracer::isTracing();
+  bool disable_slice_optimization =
+      is_tracing || isProxyTracingModeActive();
 
   // handle simple types: integers, slices, bool
   if (THPUtils_checkLong(index)) {
@@ -443,6 +453,7 @@ PyObject* THPVariable_getitem(PyObject* self, PyObject* index) {
       holder.get(),
       variableIndices,
       /*is_tracing=*/is_tracing,
+      /*disable_slice_optimization=*/disable_slice_optimization,
       self_.device(),
       self_.ndimension(),
       specified_dims);
@@ -531,6 +542,8 @@ int THPVariable_setitem(PyObject* self, PyObject* index, PyObject* py_value) {
   }
 
   bool is_tracing = torch::jit::tracer::isTracing();
+  bool disable_slice_optimization =
+      is_tracing || isProxyTracingModeActive();
 
   // handle simple types: integers, slices
   if (THPUtils_checkLong(index) || torch::is_symint(index)) {
@@ -553,7 +566,7 @@ int THPVariable_setitem(PyObject* self, PyObject* index, PyObject* py_value) {
         {at::indexing::TensorIndex(
             at::indexing::Slice(val.start, val.stop, val.step))},
         value,
-        /*disable_slice_optimization=*/is_tracing);
+        /*disable_slice_optimization=*/disable_slice_optimization);
     return 0;
   }
 
@@ -572,6 +585,7 @@ int THPVariable_setitem(PyObject* self, PyObject* index, PyObject* py_value) {
       holder.get(),
       variableIndices,
       /*is_tracing=*/is_tracing,
+      /*disable_slice_optimization=*/disable_slice_optimization,
       self_device,
       self_.ndimension(),
       specified_dims);

@@ -625,9 +625,9 @@ inline Tensor dispatch_index_put_(
 //      return sliced;
 //    }
 //    ```)
-// 2. When we are doing JIT tracing.
-//    Reason: JIT tracing needs the `self.slice(...)` call to properly trace the
-//    slice operation.
+// 2. When we are doing JIT tracing or ProxyTensor tracing.
+//    Reason: tracing needs the `self.slice(...)` call to properly trace the
+//    slice operation instead of optimizing it away.
 
 // This mirrors `THPVariable_getitem` in
 // torch/csrc/autograd/python_variable_indexing.cpp See NOTE [ Setting
