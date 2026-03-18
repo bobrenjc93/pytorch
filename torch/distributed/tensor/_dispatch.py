@@ -195,6 +195,18 @@ class _CustomOpHandlerMap(dict[torch._ops.OpOverload, object]):
         return key in self._explicit_keys
 
 
+def _is_explicit_default_handler(
+    handlers: dict[torch._ops.OpOverload, object],
+    op_call: torch._ops.OpOverload,
+    handler: object,
+) -> bool:
+    return (
+        handler is DEFAULT_CUSTOM_OP_HANDLERS.get(op_call)
+        and isinstance(handlers, _CustomOpHandlerMap)
+        and handlers.is_explicit(op_call)
+    )
+
+
 class OpDispatcher:
     """
     Op dispatching class instance to handle args/kwargs pre-processing (un-wrapping), sharding
@@ -277,9 +289,12 @@ class OpDispatcher:
         if handler is not None:
             if handler is not default_handler:
                 return handler
-            if isinstance(self._custom_op_handlers, _CustomOpHandlerMap):
-                if self._custom_op_handlers.is_explicit(op_call):
-                    return handler
+            if _is_explicit_default_handler(
+                self._custom_op_handlers,
+                op_call,
+                handler,
+            ):
+                return handler
 
         inherited_handler = None
         for base_type in dtensor_type.__mro__[1:]:
@@ -291,7 +306,13 @@ class OpDispatcher:
                 continue
             if inherited_handler is None:
                 inherited_handler = base_handler
-            if base_handler is not DEFAULT_CUSTOM_OP_HANDLERS.get(op_call):
+            if base_handler is not DEFAULT_CUSTOM_OP_HANDLERS.get(op_call) or (
+                _is_explicit_default_handler(
+                    dispatcher._custom_op_handlers,
+                    op_call,
+                    base_handler,
+                )
+            ):
                 return base_handler
 
         return handler if handler is not None else inherited_handler

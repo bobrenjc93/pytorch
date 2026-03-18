@@ -645,6 +645,62 @@ class DTensorTest(DTensorTestBase):
         self.assertIsNone(op_info.schema.schema_info)
 
     @with_comms
+    def test_dtensor_nested_subclass_inherits_ancestor_default_reset(self):
+        device_mesh = self.build_device_mesh()
+        local_input = torch.arange(
+            16, device=self.device_type, dtype=torch.float32
+        ).reshape(1, 1, 4, 4)
+        local_weight = torch.ones(
+            1, 1, 1, 1, device=self.device_type, dtype=torch.float32
+        )
+        input_dt = distribute_tensor(local_input, device_mesh, [Replicate()])
+        base_weight = distribute_tensor(local_weight, device_mesh, [Replicate()])
+
+        class GrandParentDTensor(DTensor):
+            _op_dispatcher = type(DTensor._op_dispatcher)()
+
+        op = torch.ops.aten.convolution.default
+        grandparent_dispatcher = GrandParentDTensor._op_dispatcher
+        default_conv_handler = grandparent_dispatcher._custom_op_handlers[op]
+        grandparent_handler_calls = []
+
+        def overriding_grandparent_conv_handler(
+            op_call, args, kwargs, *, dtensor_type=None
+        ):
+            grandparent_handler_calls.append(dtensor_type)
+            return default_conv_handler(
+                op_call,
+                args,
+                kwargs,
+                dtensor_type=dtensor_type,
+            )
+
+        grandparent_dispatcher._custom_op_handlers[op] = (
+            overriding_grandparent_conv_handler
+        )
+        try:
+            class ParentDTensor(GrandParentDTensor):
+                _op_dispatcher = type(DTensor._op_dispatcher)()
+
+            ParentDTensor._op_dispatcher._custom_op_handlers[op] = default_conv_handler
+
+            class ChildDTensor(ParentDTensor):
+                _op_dispatcher = type(DTensor._op_dispatcher)()
+
+            weight = ChildDTensor(
+                base_weight._local_tensor,
+                base_weight._spec,
+                requires_grad=base_weight.requires_grad,
+            )
+            result = F.conv2d(input_dt, weight)
+        finally:
+            grandparent_dispatcher._custom_op_handlers[op] = default_conv_handler
+
+        self.assertEqual(grandparent_handler_calls, [])
+        self.assertEqual(type(result), ChildDTensor)
+        self.assertEqual(result.to_local(), F.conv2d(local_input, local_weight))
+
+    @with_comms
     def test_from_local_backward(self):
         """Test that from_local backward gives the correct gradient placements.
 
