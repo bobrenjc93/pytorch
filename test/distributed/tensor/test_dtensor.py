@@ -231,6 +231,47 @@ class DTensorTest(DTensorTestBase):
             DTensor.from_local(dtensor, device_mesh, shard_spec)
 
     @with_comms
+    def test_dtensor_subclass_torch_dispatch(self):
+        device_mesh = self.build_device_mesh()
+        local_tensor = torch.arange(
+            16, device=self.device_type, dtype=torch.float32
+        ).reshape(4, 4)
+        base = DTensor.from_local(local_tensor, device_mesh, [Replicate()])
+
+        torch_dispatch_calls = []
+        dispatcher_calls = []
+
+        class LoggingDispatcher(type(DTensor._op_dispatcher)):
+            def dispatch(self, op_call, args, kwargs, *, dtensor_type=DTensor):
+                dispatcher_calls.append((op_call, dtensor_type))
+                return super().dispatch(
+                    op_call,
+                    args,
+                    kwargs,
+                    dtensor_type=dtensor_type,
+                )
+
+        class MyDTensor(DTensor):
+            _op_dispatcher = LoggingDispatcher()
+
+            @classmethod
+            def __torch_dispatch__(cls, func, types, args=(), kwargs=None):
+                torch_dispatch_calls.append((cls, func))
+                return super().__torch_dispatch__(func, types, args, kwargs)
+
+        my_dt = MyDTensor(
+            base._local_tensor,
+            base._spec,
+            requires_grad=base.requires_grad,
+        )
+        result = my_dt + my_dt
+
+        self.assertEqual(torch_dispatch_calls, [(MyDTensor, torch.ops.aten.add.Tensor)])
+        self.assertEqual(dispatcher_calls, [(torch.ops.aten.add.Tensor, MyDTensor)])
+        self.assertEqual(type(result), MyDTensor)
+        self.assertEqual(result.to_local(), local_tensor + local_tensor)
+
+    @with_comms
     def test_from_local_backward(self):
         """Test that from_local backward gives the correct gradient placements.
 

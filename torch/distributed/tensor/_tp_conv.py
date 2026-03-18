@@ -251,11 +251,12 @@ def convolution_handler(
     args: tuple[object, ...],
     kwargs: dict[str, object],
 ) -> object:
+    dtensor_type = cast(dtensor.DTensor, args[0]).__class__
     # extract local tensor and sharding infos to a OpInfo
-    op_info = dtensor.DTensor._op_dispatcher.unwrap_to_op_info(op_call, args, kwargs)
+    op_info = dtensor_type._op_dispatcher.unwrap_to_op_info(op_call, args, kwargs)
 
     # sharding propagation
-    dtensor.DTensor._op_dispatcher.sharding_propagator.propagate(op_info)
+    dtensor_type._op_dispatcher.sharding_propagator.propagate(op_info)
     output_sharding = op_info.output_sharding
     if output_sharding is None:
         raise AssertionError("output sharding should not be None")
@@ -271,7 +272,7 @@ def convolution_handler(
         output_spec.dim_map,
     )
 
-    return dtensor.DTensor._op_dispatcher.wrap(local_results, output_spec)
+    return dtensor_type._op_dispatcher.wrap(local_results, output_spec)
 
 
 def convolution_backward_handler(
@@ -289,12 +290,13 @@ def convolution_backward_handler(
     # pyrefly: ignore [unsupported-operation]
     args[0] = args[0].redistribute(args[1].device_mesh, args[1].placements)
     args = tuple(args)
+    dtensor_type = cast(dtensor.DTensor, args[0]).__class__
 
     # extract local tensor and sharding infos to a OpInfo
-    op_info = dtensor.DTensor._op_dispatcher.unwrap_to_op_info(op_call, args, kwargs)
+    op_info = dtensor_type._op_dispatcher.unwrap_to_op_info(op_call, args, kwargs)
 
     # sharding propagation
-    dtensor.DTensor._op_dispatcher.sharding_propagator.propagate(op_info)
+    dtensor_type._op_dispatcher.sharding_propagator.propagate(op_info)
     output_sharding = op_info.output_sharding
     if output_sharding is None:
         raise AssertionError("output sharding should not be None")
@@ -309,6 +311,4 @@ def convolution_backward_handler(
         op_info.flat_args_schema[0].dim_map,
     )
 
-    return dtensor.DTensor._op_dispatcher.wrap(
-        local_results, output_sharding.output_spec
-    )
+    return dtensor_type._op_dispatcher.wrap(local_results, output_sharding.output_spec)

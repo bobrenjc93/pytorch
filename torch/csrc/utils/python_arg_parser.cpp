@@ -302,8 +302,10 @@ static py::object maybe_get_registered_torch_dispatch_rule(
 static bool is_dtensor(PyObject* obj) {
 #ifdef USE_DISTRIBUTED
   const py::handle dtensor = get_dtensor_class();
-  return (PyObject*)Py_TYPE(obj) == dtensor.ptr() ||
-      py::isinstance(py::handle(obj), dtensor);
+  // Reserve the DTensor C++ fast path for the exact DTensor type so
+  // subclasses can participate in the normal Python __torch_dispatch__
+  // protocol.
+  return (PyObject*)Py_TYPE(obj) == dtensor.ptr();
 #else
   return false;
 #endif

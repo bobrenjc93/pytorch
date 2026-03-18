@@ -408,14 +408,16 @@ class DTensor(torch.Tensor):
         )
 
     @classmethod
+    @torch._disable_dynamo
     def __torch_dispatch__(cls, func, types, args=(), kwargs=None):  # type: ignore[override]
-        # We just need to have an implementation here; the __torch_dispatch__ machinery
-        # calls into a specific C++ fast path that doesn't call here.
-        # See #167051 for details
-        # python_arg_parser.cpp: dispatch_on_subclass()
-        # -> python_variable.cpp: dispatchDTensorOp()
-        raise NotImplementedError(
-            "DTensor.__torch_dispatch__ should not actually get called"
+        # Exact DTensor instances use the C++ fast path. DTensor subclasses
+        # still need the Python entrypoint so they can override
+        # __torch_dispatch__ or _op_dispatcher and delegate back here.
+        return cls._op_dispatcher.dispatch(
+            func,
+            args,
+            kwargs or {},
+            dtensor_type=cls,
         )
 
     @staticmethod

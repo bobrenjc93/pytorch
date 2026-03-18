@@ -103,7 +103,10 @@ def found_inf_reduce_handler(
     args: tuple[object, ...],
     kwargs: dict[str, object],
 ) -> None:
-    op_info = dtensor.DTensor._op_dispatcher.unwrap_to_op_info(op_call, args, kwargs)
+    grad_dtensor = cast(list[dtensor.DTensor], args[0])[0]
+    op_info = grad_dtensor.__class__._op_dispatcher.unwrap_to_op_info(
+        op_call, args, kwargs
+    )
     local_tensor_args = pytree.tree_unflatten(
         cast(list[object], op_info.local_args),
         op_info.args_tree_spec,  # type: ignore[arg-type]
@@ -111,7 +114,6 @@ def found_inf_reduce_handler(
     local_tensor_args = cast(tuple[object, ...], local_tensor_args)
     op_call(*local_tensor_args, **op_info.local_kwargs)
 
-    grad_dtensor = cast(list[dtensor.DTensor], args[0])[0]
     grad_placements = grad_dtensor.placements
     mesh = grad_dtensor.device_mesh
 
@@ -207,6 +209,105 @@ class OpDispatcher:
     @_allow_implicit_replication.setter
     def _allow_implicit_replication(self, value: bool) -> None:
         return torch._C._set_dtensor_allow_implicit_replication(value)
+
+    def dispatch(
+        self,
+        op_call: torch._ops.OpOverload,
+        args: tuple[object, ...],
+        kwargs: dict[str, object],
+        *,
+        dtensor_type: type[dtensor.DTensor] = dtensor.DTensor,
+    ) -> object:
+        """
+        Python DTensor dispatch entrypoint used by DTensor subclasses.
+
+        Exact DTensor instances are handled by the C++ fast path, but
+        subclasses still rely on Python __torch_dispatch__ so they can
+        customize dispatch and delegate back to the base implementation.
+        """
+        if op_call in self._custom_op_handlers:
+            return self._custom_op_handlers[op_call](op_call, args, kwargs)  # type: ignore[operator]
+
+        op_info = self.unwrap_to_op_info(op_call, args, kwargs)
+
+        sharding = self._propagate_op_sharding_dispatch_slow_path(
+            op_call,
+            args,
+            kwargs,
+            op_info,
+            try_cache=not _are_we_tracing(),
+        )
+        if not isinstance(sharding, OutputSharding):
+            return sharding
+        op_info.output_sharding = sharding
+
+        local_results = self._dispatch_get_local_results_slow_path(
+            op_call, args, op_info
+        )
+        output_sharding = op_info.output_sharding
+        if output_sharding is None:
+            raise AssertionError("output sharding should not be None")
+
+        participating = op_info.compute_mesh._is_current_rank_part_of_mesh()
+        if output_sharding.output_spec is None and op_call == aten.equal.default:
+            if not (local_results is None or isinstance(local_results, bool)):
+                raise AssertionError
+            reduced = torch.tensor(
+                int(local_results) if local_results is not None else 1,
+                device=op_info.compute_mesh.device_type,
+            )
+            dist.all_reduce(reduced, op=dist.ReduceOp.MIN)
+            local_results = bool(reduced.item())
+
+        if op_info.schema is None:
+            raise AssertionError("op_info.schema should not be None")
+
+        if op_info.schema.is_inplace_op():
+            if output_sharding.output_spec is not None:
+                output_spec = output_sharding.output_spec
+                if not isinstance(output_spec, DTensorSpec):
+                    raise AssertionError
+                if not isinstance(args[0], dtensor.DTensor):
+                    raise AssertionError
+
+                if op_call == aten.squeeze_.dim:
+                    args[0]._spec = output_spec
+                    return return_and_correct_aliasing(op_call, args, kwargs, args[0])
+
+                if args[0]._spec.placements != output_spec.placements:
+                    raise RuntimeError(
+                        f"{op_call}: in-place operations that require placement changes "
+                        f"are not supported. The operation would change placement from "
+                        f"{args[0]._spec.placements} to {output_spec.placements}, "
+                        f"which requires redistribution and breaks aliasing semantics. "
+                        f"Please use the out-of-place version of this operation instead."
+                    )
+                return args[0]
+            return None
+
+        if op_info.schema.is_out_variant_op():
+            output_specs = (
+                (output_sharding.output_spec,)
+                if not isinstance(output_sharding.output_spec, tuple)
+                else output_sharding.output_spec
+            )
+            out_dts = []
+            spec_idx = 0
+            for argument in op_call._schema.arguments:
+                if argument.is_out:
+                    out_dt = cast(dtensor.DTensor, kwargs[argument.name])
+                    out_dt._spec = cast(DTensorSpec, output_specs[spec_idx])
+                    out_dts.append(out_dt)
+                    spec_idx += 1
+
+            if len(out_dts) < 1:
+                raise AssertionError("out variant should have at least one out arg")
+            return tuple(out_dts) if len(out_dts) > 1 else out_dts[0]
+
+        ret = self.wrap(local_results, output_sharding.output_spec, dtensor_type)
+        if participating and op_info.schema.is_view_op():
+            return return_and_correct_aliasing(op_call, args, kwargs, ret)
+        return ret
 
     def _propagate_op_sharding_dispatch_slow_path(
         self,
@@ -720,7 +821,11 @@ class OpDispatcher:
         return op_info
 
     @staticmethod
-    def wrap(res: object, spec: OutputSpecType) -> object:
+    def wrap(
+        res: object,
+        spec: OutputSpecType,
+        dtensor_type: type[dtensor.DTensor] = dtensor.DTensor,
+    ) -> object:
         if isinstance(res, torch.Tensor):
             if spec is not None:
                 if not isinstance(spec, DTensorSpec):
@@ -728,7 +833,7 @@ class OpDispatcher:
                         f"output spec does not match with output! Expected DTensorSpec, got {spec}."
                     )
                 # pyrefly: ignore [bad-argument-type, bad-argument-count, unexpected-keyword]
-                return dtensor.DTensor(res, spec, requires_grad=res.requires_grad)
+                return dtensor_type(res, spec, requires_grad=res.requires_grad)
             else:
                 # if output does not have a DTensorSpec due to specific ops, it must be a scalar tensor
                 if res.ndim != 0:
@@ -742,7 +847,7 @@ class OpDispatcher:
             res_list = []
             for e, s in zip(res, spec):
                 # pyrefly: ignore [bad-argument-type]
-                res_list.append(OpDispatcher.wrap(e, s))
+                res_list.append(OpDispatcher.wrap(e, s, dtensor_type))
 
             return tuple(res_list) if isinstance(res, tuple) else res_list
         else:

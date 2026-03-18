@@ -29,8 +29,10 @@ def _get_output_sharding(
     kwargs: dict[str, object],
 ) -> OutputSharding:
     """Get the output sharding for the given op."""
-    op_info = dtensor.DTensor._op_dispatcher.unwrap_to_op_info(op_call, args, kwargs)
-    dtensor.DTensor._op_dispatcher.sharding_propagator.propagate(op_info)
+    input_dtensor = cast(dtensor.DTensor, args[0])
+    dispatcher = input_dtensor.__class__._op_dispatcher
+    op_info = dispatcher.unwrap_to_op_info(op_call, args, kwargs)
+    dispatcher.sharding_propagator.propagate(op_info)
     output_sharding = op_info.output_sharding
     if output_sharding is None:
         raise AssertionError("output sharding should not be None")
@@ -213,6 +215,7 @@ def argminmax_handler(
         str(op_call), args, kwargs
     )
     output_sharding = _get_output_sharding(op_call, args, kwargs)
+    dtensor_type = cast(dtensor.DTensor, args[0]).__class__
 
     expected_shape = _get_expected_shape(local_tensor, dim, keepdim)
     shard_mesh_dims = _collect_shard_mesh_dims(
@@ -230,7 +233,7 @@ def argminmax_handler(
         local_redux, local_idx = val_op(local_tensor, dim=dim, keepdim=True)
 
     if not shard_mesh_dims:
-        return dtensor.DTensor._op_dispatcher.wrap(
+        return dtensor_type._op_dispatcher.wrap(
             local_idx.reshape(expected_shape), output_sharding.output_spec
         )
 
@@ -246,7 +249,7 @@ def argminmax_handler(
     rank_winner = op_call(gathered_redux, select_dim, True)
     final_idx = torch.gather(gather_idxs, dim=gather_dim, index=rank_winner)
 
-    return dtensor.DTensor._op_dispatcher.wrap(
+    return dtensor_type._op_dispatcher.wrap(
         final_idx.reshape(expected_shape), output_sharding.output_spec
     )
 
@@ -265,6 +268,7 @@ def minmax_dim_handler(
         str(op_call), args, kwargs
     )
     output_sharding = _get_output_sharding(op_call, args, kwargs)
+    dtensor_type = cast(dtensor.DTensor, args[0]).__class__
 
     expected_shape = _get_expected_shape(local_tensor, dim, keepdim)
     shard_mesh_dims = _collect_shard_mesh_dims(
@@ -277,7 +281,7 @@ def minmax_dim_handler(
     local_redux, local_idx = op_call(local_tensor, dim=dim, keepdim=True)
 
     if not shard_mesh_dims:
-        return dtensor.DTensor._op_dispatcher.wrap(
+        return dtensor_type._op_dispatcher.wrap(
             (
                 local_redux.reshape(expected_shape),
                 local_idx.reshape(expected_shape),
@@ -296,7 +300,7 @@ def minmax_dim_handler(
     final_redux, rank_winner = op_call(gathered_redux, dim, True)
     final_idx = torch.gather(gather_idxs, dim=gather_dim, index=rank_winner)
 
-    return dtensor.DTensor._op_dispatcher.wrap(
+    return dtensor_type._op_dispatcher.wrap(
         (
             final_redux.reshape(expected_shape),
             final_idx.reshape(expected_shape),
