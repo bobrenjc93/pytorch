@@ -636,7 +636,9 @@ def fold_foreach_input_mutation_ops(fx_g: torch.fx.Graph) -> None:
     for node in fx_g.nodes:
         candidate = _get_foreach_copy_candidate(node)
         if candidate is None:
-            if current_key is not None and _is_getitem_from_parent(node, current_key[0]):
+            if current_key is not None and _is_getitem_from_parent(
+                node, current_key[0]
+            ):
                 continue
             flush()
             continue
@@ -666,13 +668,13 @@ def fold_foreach_input_mutation_ops(fx_g: torch.fx.Graph) -> None:
         foreach_copy.meta["val"] = first_copy.meta.get("val")
 
         insert_after = foreach_copy
-        for group_index, (copy_node, _, _, _) in enumerate(group):
+        for copy_node, _, dst, _ in group:
             if not copy_node.users:
                 continue
 
             with fx_g.inserting_after(insert_after):
                 replacement = fx_g.call_function(
-                    operator.getitem, args=(foreach_copy, group_index)
+                    torch.ops.aten.alias.default, args=(dst,)
                 )
             replacement.meta.update(copy_node.meta)
             copy_node.replace_all_uses_with(replacement)
