@@ -1236,6 +1236,38 @@ def split_strategy(op_schema: OpSchema) -> OpStrategy:
     return OpStrategy(all_strategies)
 
 
+@register_op_strategy(aten.glu.default, schema_info=RuntimeSchemaInfo(1))
+def glu_strategy(op_schema: OpSchema) -> OpStrategy:
+    input_strategy = op_schema.args_schema[0]
+    if not isinstance(input_strategy, OpStrategy):
+        raise AssertionError(f"Expected OpStrategy, got {type(input_strategy)}")
+
+    glu_dim = (
+        cast(int, op_schema.args_schema[1]) if len(op_schema.args_schema) > 1 else -1
+    )
+    dim = normalize_dim(glu_dim, input_strategy.ndim)
+
+    # GLU pairs the first and second halves of `dim`, so that dimension must be
+    # replicated before the op while shardings on the other dimensions can flow through.
+    glu_strategies = []
+    for strategy in input_strategy.strategies:
+        output_spec = DTensorSpec(
+            strategy.output_spec.mesh,
+            replicate_tensor_dim(strategy.output_spec.placements, dim=dim),
+        )
+        glu_strategies.append(
+            OpSpec(
+                output_specs=output_spec,
+                input_specs=(output_spec,),
+                redistribute_cost=[
+                    generate_redistribute_costs(input_strategy, output_spec)
+                ],
+            )
+        )
+
+    return OpStrategy(glu_strategies)
+
+
 # TODO: fix remaining failures in xfail("unbind") in test_dtensor_ops.py
 #       and remove this xfail item
 @register_op_strategy(aten.unbind.int, schema_info=RuntimeSchemaInfo(1))
