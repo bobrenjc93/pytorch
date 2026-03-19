@@ -160,6 +160,19 @@ def find_first_node(gm, func):
     return None
 
 
+def collect_non_primal_node_and_ancestors(nodes):
+    collected = set()
+    worklist = [node for node in nodes if isinstance(node, torch.fx.Node)]
+    while worklist:
+        node = worklist.pop()
+        if node in collected or node.name.startswith("primals_"):
+            continue
+        collected.add(node)
+        if node.op != "placeholder":
+            worklist.extend(node.all_input_nodes)
+    return {node.name for node in collected}
+
+
 def op_count(gm):
     result = 0
     for node in gm.graph.nodes:
@@ -958,8 +971,8 @@ Non-primal fwd outputs from model w/o backward hook: {mod_no_hook_fwd_outputs_no
             if isinstance(output, torch.fx.Node)
             and not output.name.startswith("primals_")
         }
-        scaled_mm_inputs = {
-            input_node.name
+        scaled_mm_input_nodes = {
+            input_node
             for input_node in (
                 *scaled_mm_node.args,
                 *scaled_mm_node.kwargs.values(),
@@ -967,14 +980,18 @@ Non-primal fwd outputs from model w/o backward hook: {mod_no_hook_fwd_outputs_no
             if isinstance(input_node, torch.fx.Node)
             and not input_node.name.startswith("primals_")
         }
-        self.assertTrue(scaled_mm_inputs)
+        scaled_mm_input_ancestors = collect_non_primal_node_and_ancestors(
+            scaled_mm_input_nodes
+        )
+        self.assertTrue(scaled_mm_input_ancestors)
         self.assertFalse(
-            saved_outputs & scaled_mm_inputs,
+            saved_outputs & scaled_mm_input_ancestors,
             msg=(
-                "SAC should recompute non-primal _scaled_mm inputs instead of "
-                f"saving them in the forward graph outputs, but saved "
-                f"{saved_outputs & scaled_mm_inputs}. "
-                f"Forward outputs: {saved_outputs}. _scaled_mm inputs: {scaled_mm_inputs}."
+                "SAC should recompute non-primal _scaled_mm inputs and their "
+                f"producer chains instead of saving them in the forward graph "
+                f"outputs, but saved {saved_outputs & scaled_mm_input_ancestors}. "
+                f"Forward outputs: {saved_outputs}. _scaled_mm input ancestors: "
+                f"{scaled_mm_input_ancestors}."
             ),
         )
         self.assertIsNone(
