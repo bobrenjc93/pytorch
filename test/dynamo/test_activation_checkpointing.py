@@ -29,7 +29,10 @@ from torch._dynamo.testing import (
 )
 from torch._higher_order_ops.wrap import tag_activation_checkpoint
 from torch.testing._internal.common_cuda import PLATFORM_SUPPORTS_FP8
-from torch.testing._internal.common_device_type import instantiate_device_type_tests
+from torch.testing._internal.common_device_type import (
+    e4m3_type,
+    instantiate_device_type_tests,
+)
 from torch.testing._internal.common_utils import IS_WINDOWS, parametrize, skipIfHpu
 from torch.testing._internal.inductor_utils import HAS_CUDA_AND_TRITON
 from torch.testing._internal.triton_utils import requires_cuda_and_triton
@@ -869,7 +872,7 @@ Non-primal fwd outputs from model w/o backward hook: {mod_no_hook_fwd_outputs_no
     def test_compile_selective_checkpoint_scaled_mm_must_save(
         self, device, partition_fn
     ):
-        float8_dtype = torch.float8_e4m3fn
+        float8_dtype = e4m3_type
 
         def to_float8(x):
             amax = torch.max(torch.abs(x))
@@ -956,9 +959,13 @@ Non-primal fwd outputs from model w/o backward hook: {mod_no_hook_fwd_outputs_no
             and not output.name.startswith("primals_")
         }
         scaled_mm_inputs = {
-            arg.name
-            for arg in scaled_mm_node.args
-            if isinstance(arg, torch.fx.Node) and not arg.name.startswith("primals_")
+            input_node.name
+            for input_node in (
+                *scaled_mm_node.args,
+                *scaled_mm_node.kwargs.values(),
+            )
+            if isinstance(input_node, torch.fx.Node)
+            and not input_node.name.startswith("primals_")
         }
         self.assertTrue(scaled_mm_inputs)
         self.assertFalse(
