@@ -402,6 +402,12 @@ class CppWrapperCpu(PythonWrapperCodegen):
         """
 
         def gen_check(handle_kind, idx, name, tensor):
+            if not isinstance(tensor, ir.TensorBox):
+                # Symbolic scalar inputs are tensorized by the Python AOT
+                # loaders, but these runtime checks are only defined for real
+                # tensor graph inputs with size/stride metadata.
+                return
+
             # Wrap AtenTensorHandle with ConstantHandle for cleaner utility function access
             self.prefix.writeline(
                 f"ConstantHandle {name} = ConstantHandle({handle_kind}[{idx}]);"
