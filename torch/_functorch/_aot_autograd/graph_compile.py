@@ -44,6 +44,7 @@ from torch._dynamo.utils import (
 from torch._guards import CompileContext, TracingContext
 from torch._logging import getArtifactLogger, trace_structured
 from torch._subclasses import FakeTensor
+from torch._subclasses.fake_tensor import maybe_get_fake_mode
 from torch._subclasses.meta_utils import is_sparse_any
 from torch.fx.experimental._backward_state import BackwardState
 from torch.fx.experimental.proxy_tensor import is_sym_node
@@ -53,7 +54,10 @@ from torch.fx.node import map_arg
 from torch.fx.passes._tensorify_python_scalars import tensorify_python_scalars
 from torch.multiprocessing.reductions import StorageWeakRef
 from torch.types import py_sym_types
-from torch.utils._python_dispatch import TorchDispatchMode, is_traceable_wrapper_subclass
+from torch.utils._python_dispatch import (
+    is_traceable_wrapper_subclass,
+    TorchDispatchMode,
+)
 from torchgen.utils import dataclass_repr
 
 from .. import config
@@ -353,20 +357,48 @@ def _contains_python_scalar(arg: Any) -> bool:
     return False
 
 
+def _find_fake_mode(arg: Any) -> Any | None:
+    fake_mode = maybe_get_fake_mode(arg)
+    if fake_mode is not None:
+        return fake_mode
+
+    result = None
+    values = ()
+    if isinstance(arg, (tuple, list)):
+        values = arg
+    elif isinstance(arg, dict):
+        values = arg.values()
+
+    for value in values:
+        value_fake_mode = _find_fake_mode(value)
+        if value_fake_mode is None:
+            continue
+        if result is None:
+            result = value_fake_mode
+        elif result is not value_fake_mode:
+            raise AssertionError("All fake tensor modes must be the same")
+
+    return result
+
+
 # AOT graphs can inherit Tensor overloads from the Python API even when a
 # literal number would resolve to a Scalar overload through torch.ops.aten.
 def _resolve_python_scalar_aten_overload(
     target: torch._ops.OpOverload,
     args: tuple[Any, ...],
     kwargs: dict[str, Any],
-    fake_mode: Any,
+    fake_mode: Any | None,
 ) -> torch._ops.OpOverload:
     if (
-        target._schema.overload_name != "Tensor"
+        target._schema.overload_name not in {"Tensor", "Tensor_mode", "Tensor_Tensor"}
         or not target._schema.name.startswith("aten::")
         or not torch._C._should_allow_numbers_as_tensors(target.overloadpacket.__name__)
         or not (_contains_python_scalar(args) or _contains_python_scalar(kwargs))
     ):
+        return target
+
+    fake_mode = _find_fake_mode(args) or _find_fake_mode(kwargs) or fake_mode
+    if fake_mode is None:
         return target
 
     op_trace_dispatch_mode = _OpTraceDispatchMode()
@@ -395,9 +427,6 @@ def _resolve_python_scalar_aten_overload(
 
 def _apply_python_scalar_overload_resolution(module: torch.fx.GraphModule) -> None:
     fake_mode = detect_fake_mode()
-    if fake_mode is None:
-        return
-
     env: dict[torch.fx.Node, Any] = {}
     updated = False
     for node in module.graph.nodes:

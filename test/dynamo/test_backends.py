@@ -319,7 +319,7 @@ class TestCustomBackendAPI(torch._dynamo.test_case.TestCase):
         my_backend = aot_autograd(fw_compiler=my_compiler)
 
         def f(x):
-            return x + 2
+            return x + 2, torch.div(x, 2, rounding_mode="floor")
 
         x = torch.randn(3, 3)
         self.assertTrue(
@@ -327,7 +327,9 @@ class TestCustomBackendAPI(torch._dynamo.test_case.TestCase):
         )
         self.assertIsNotNone(traced_targets)
         self.assertIn(torch.ops.aten.add.Scalar, traced_targets)
+        self.assertIn(torch.ops.aten.div.Scalar_mode, traced_targets)
         self.assertNotIn(torch.ops.aten.add.Tensor, traced_targets)
+        self.assertNotIn(torch.ops.aten.div.Tensor_mode, traced_targets)
 
     def test_lookup_backend(self):
         from torch._dynamo import lookup_backend
