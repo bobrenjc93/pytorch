@@ -13,7 +13,7 @@ It does so by:
 import warnings
 from collections.abc import Callable, Generator
 from contextlib import AbstractContextManager, contextmanager, ExitStack, nullcontext
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, cast, TypeVar
 from unittest.mock import patch
 
@@ -57,6 +57,9 @@ from .descriptors import (
     PhiloxForwardSeedAOTInput,
     PhiloxUpdatedBackwardOffsetAOTOutput,
     PhiloxUpdatedForwardOffsetAOTOutput,
+    SubclassGetAttrAOTInput,
+    SubclassSizeAOTInput,
+    SubclassStrideAOTInput,
 )
 from .functional_utils import (
     _check_if_mutation_can_be_in_graph,
@@ -1303,6 +1306,50 @@ def handle_effect_tokens_fn(
 # - fw_only: this is *always* the forward-only function.
 #   Why do we need this? We need to collect updated ViewAndMutationMeta on our new dense -> dense functions.
 #   In particular, we need this to tell the partitioner how many dense forward outputs there are.
+def _get_outer_subclass_input_desc(desc: AOTInput) -> AOTInput:
+    while isinstance(
+        desc,
+        (SubclassGetAttrAOTInput, SubclassSizeAOTInput, SubclassStrideAOTInput),
+    ):
+        desc = desc.base
+    return desc
+
+
+def _remap_unwrapped_subclass_input_sources(
+    aot_config: AOTConfig,
+    outer_input_descs: list[AOTInput],
+    unwrapped_input_descs: list[AOTInput],
+) -> list[Any] | None:
+    if aot_config.aot_autograd_arg_pos_to_source is None:
+        return None
+
+    if len(outer_input_descs) != len(aot_config.aot_autograd_arg_pos_to_source):
+        raise AssertionError(
+            "expected outer input descriptors and aot_autograd sources to match, "
+            f"got {len(outer_input_descs)} and "
+            f"{len(aot_config.aot_autograd_arg_pos_to_source)}"
+        )
+
+    outer_desc_to_source = {}
+    for outer_desc, source in zip(
+        outer_input_descs, aot_config.aot_autograd_arg_pos_to_source, strict=True
+    ):
+        if outer_desc in outer_desc_to_source:
+            raise AssertionError(f"duplicate outer input descriptor: {outer_desc}")
+        outer_desc_to_source[outer_desc] = source
+
+    remapped_sources = []
+    for desc in unwrapped_input_descs:
+        outer_desc = _get_outer_subclass_input_desc(desc)
+        if outer_desc not in outer_desc_to_source:
+            raise AssertionError(
+                f"expected {outer_desc} to be present in outer input descriptors"
+            )
+        remapped_sources.append(outer_desc_to_source[outer_desc])
+
+    return remapped_sources
+
+
 def _raise_subclass_aliased_input_mutation_error() -> None:
     raise RuntimeError(
         """\
@@ -1438,12 +1485,26 @@ def aot_dispatch_subclass(
 
     if is_joint_structure:
         primals_unwrapped = cast(list[Any], args_unwrapped[0])
-        primals_unwrapped_descs = args_descs_unwrapped[0]  # type: ignore[assignment]
+        primals_unwrapped_descs = cast(list[AOTInput], args_descs_unwrapped[0])
+        outer_primal_descs = cast(list[AOTInput], args_descs[0])
         fn_to_trace = joint_fn  # type: ignore[assignment]
     else:
         primals_unwrapped = cast(list[Any], args_unwrapped)
-        primals_unwrapped_descs = args_descs_unwrapped  # type: ignore[assignment]
+        primals_unwrapped_descs = cast(list[AOTInput], args_descs_unwrapped)
+        outer_primal_descs = cast(list[AOTInput], args_descs)
         fn_to_trace = fw_fn  # type: ignore[assignment]
+
+    primals_unwrapped_aot_config = aot_config
+    primals_unwrapped_sources = _remap_unwrapped_subclass_input_sources(
+        aot_config,
+        outer_primal_descs,
+        primals_unwrapped_descs,
+    )
+    if primals_unwrapped_sources is not None:
+        primals_unwrapped_aot_config = replace(
+            aot_config,
+            aot_autograd_arg_pos_to_source=primals_unwrapped_sources,
+        )
 
     # Note: [Partitioner handling for Subclasses, Part 1]
     # The way the partitioner works is that:
@@ -1476,7 +1537,7 @@ def aot_dispatch_subclass(
     # subclasses are flattened. Distinct subclass inputs can therefore expose
     # aliased dense tensors only after desugaring, which we must reject.
     if has_aliased_input_mutation(
-        aot_config, primals_unwrapped, meta_updated.input_info
+        primals_unwrapped_aot_config, primals_unwrapped, meta_updated.input_info
     ):
         _raise_subclass_aliased_input_mutation_error()
 

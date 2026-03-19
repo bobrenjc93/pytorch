@@ -2604,14 +2604,24 @@ def forward(self, primals_1, primals_2):
             a.mul_(2)
             return a + b
 
-        compiled_f = aot_function(f, nop)
-        x = torch.ones(2)
+        compiled_fns = {
+            "aot_function": aot_function(f, nop),
+            "torch.compile(dynamic=True)": torch.compile(
+                f,
+                backend="aot_eager",
+                dynamic=True,
+                fullgraph=True,
+            ),
+        }
 
-        with self.assertRaisesRegex(
-            RuntimeError,
-            "Encountered aliased inputs that are mutated in the graph, but",
-        ):
-            compiled_f(WrapperSubclass(x), WrapperSubclass(x))
+        for name, compiled_f in compiled_fns.items():
+            with self.subTest(compiler=name):
+                x = torch.ones(2)
+                with self.assertRaisesRegex(
+                    RuntimeError,
+                    "Encountered aliased inputs that are mutated in the graph, but",
+                ):
+                    compiled_f(WrapperSubclass(x), WrapperSubclass(x))
 
     # https://github.com/pytorch/pytorch/issues/106456
     def test_input_mutation_noncontiguous(self):
