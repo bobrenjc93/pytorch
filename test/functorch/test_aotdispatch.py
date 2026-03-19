@@ -2612,16 +2612,12 @@ def forward(self, primals_1, primals_2):
         self.verify_aot_autograd(
             f, partial(inp_callable, req_grad=True), test_mutation=True
         )
-        with self.assertRaisesRegex(
-            RuntimeError,
-            "Encountered aliased inputs that are mutated in the graph",
-        ):
-            self.verify_aot_autograd(
-                f,
-                partial(inp_callable, req_grad=False),
-                test_mutation=True,
-                make_inputs_subclasses=True,
-            )
+        self.verify_aot_autograd(
+            f,
+            partial(inp_callable, req_grad=False),
+            test_mutation=True,
+            make_inputs_subclasses=True,
+        )
         self.verify_aot_autograd(
             f,
             partial(inp_callable, req_grad=True),
@@ -3444,12 +3440,16 @@ def forward(self, primals_1, primals_2):
             f, partial(inp_callable, req_grad=False), test_mutation=True
         )
 
-        self.verify_aot_autograd(
-            f,
-            partial(inp_callable, req_grad=False),
-            test_mutation=True,
-            make_inputs_subclasses=True,
-        )
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "Encountered aliased inputs that are mutated in the graph",
+        ):
+            self.verify_aot_autograd(
+                f,
+                partial(inp_callable, req_grad=False),
+                test_mutation=True,
+                make_inputs_subclasses=True,
+            )
 
         fw_graph = self.verify_aot_autograd(
             f, partial(inp_callable, req_grad=True), test_mutation=True
