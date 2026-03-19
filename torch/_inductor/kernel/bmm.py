@@ -3,6 +3,7 @@ import logging
 from typing import TYPE_CHECKING
 
 import torch
+from torch._prims_common import ELEMENTWISE_TYPE_PROMOTION_KIND
 from torch._dynamo.utils import counters
 from torch._inductor.codegen.rocm.ck_universal_gemm_template import CKGemmTemplate
 from torch._inductor.kernel.mm_common import load_kernel_template
@@ -69,7 +70,7 @@ aten_baddbmm = ExternKernelChoice(
 )
 
 
-def _check_bmm_dtypes(mat1, mat2, out_dtype) -> None:
+def _check_bmm_input_dtypes(mat1, mat2) -> None:
     input_dtype = mat1.get_dtype()
     other_dtype = mat2.get_dtype()
     torch._check(
@@ -79,7 +80,11 @@ def _check_bmm_dtypes(mat1, mat2, out_dtype) -> None:
             f"{input_dtype} != {other_dtype}"
         ),
     )
+
+
+def _check_bmm_out_dtype(mat1, out_dtype) -> None:
     if out_dtype is not None:
+        input_dtype = mat1.get_dtype()
         torch._check(
             mat1.get_device().type in ("cuda", "xpu"),
             lambda: "out_dtype is only supported for CUDA or XPU",
@@ -94,12 +99,32 @@ def _check_bmm_dtypes(mat1, mat2, out_dtype) -> None:
         )
 
 
+def _should_enforce_bmm_input_dtypes() -> bool:
+    original_aten = V.graph.current_node.meta.get("original_aten")
+    return (
+        isinstance(original_aten, torch._ops.OpOverload)
+        and original_aten._overloadpacket in (aten.bmm, aten.matmul)
+    )
+
+
 @L.register_lowering(aten.bmm, type_promotion_kind=None)
 def tuned_bmm(mat1, mat2, out_dtype=None, *, layout=None):
     """
     Lowering for autotuning aten.bmm with different backends (Aten, Triton, CUTLASS, etc.)
     """
-    _check_bmm_dtypes(mat1, mat2, out_dtype)
+    if _should_enforce_bmm_input_dtypes():
+        _check_bmm_input_dtypes(mat1, mat2)
+    else:
+        # Preserve eager promotion for higher-level ops like einsum that decompose through bmm.
+        args, _ = transform_args(
+            args=[mat1, mat2],
+            kwargs={},
+            broadcast=False,
+            type_promotion_kind=ELEMENTWISE_TYPE_PROMOTION_KIND.DEFAULT,
+            convert_input_to_bool=False,
+        )
+        mat1, mat2 = args
+    _check_bmm_out_dtype(mat1, out_dtype)
 
     if all(x.get_device().type == "cpu" for x in [mat1, mat2]):
         # decompose to small ops when memory bound
