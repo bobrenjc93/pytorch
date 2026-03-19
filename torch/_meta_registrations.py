@@ -4583,21 +4583,26 @@ def meta_index_put_(self, indices, values, accumulate=False):
     return self
 
 
+def _get_source_fn_name(source_fn) -> str | None:
+    if isinstance(source_fn, str):
+        return source_fn
+    return getattr(source_fn, "__name__", None)
+
+
 def _should_enforce_bmm_input_dtypes() -> bool:
     current_meta = fx_traceback.get_current_meta()
+    original_aten = current_meta.get("original_aten")
+    if isinstance(original_aten, OpOverload):
+        return original_aten._overloadpacket in (aten.bmm, aten.matmul)
+
     for key in ("source_fn_stack", "fwd_source_fn_stack"):
         source_fn_stack = current_meta.get(key)
         if not source_fn_stack:
             continue
-        source_fn = source_fn_stack[-1][1]
-        source_fn_name = (
-            source_fn if isinstance(source_fn, str) else getattr(source_fn, "__name__", None)
-        )
-        return source_fn_name in ("bmm", "matmul")
-
-    original_aten = current_meta.get("original_aten")
-    if isinstance(original_aten, OpOverload):
-        return original_aten._overloadpacket in (aten.bmm, aten.matmul)
+        for _, source_fn in source_fn_stack:
+            source_fn_name = _get_source_fn_name(source_fn)
+            if source_fn_name in ("bmm", "matmul", "einsum"):
+                return source_fn_name in ("bmm", "matmul")
 
     return True
 
