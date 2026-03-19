@@ -485,6 +485,7 @@ def forward(self, arg0_1: "f32[3][1]cpu", arg1_1: "f32[3][1]cpu", arg2_1: "f32[3
 
         for op, x in test_cases:
             with self.subTest(op=op.__name__):
+
                 def f(out, x):
                     return op(x, 0, out=out)
 
@@ -493,12 +494,12 @@ def forward(self, arg0_1: "f32[3][1]cpu", arg1_1: "f32[3][1]cpu", arg2_1: "f32[3
                 inductor_out = eager_out.clone()
 
                 eager_ret = f(eager_out, x)
-                aot_eager_ret = torch.compile(
-                    f, backend="aot_eager", fullgraph=True
-                )(aot_eager_out, x)
-                inductor_ret = torch.compile(
-                    f, backend="inductor", fullgraph=True
-                )(inductor_out, x)
+                aot_eager_ret = torch.compile(f, backend="aot_eager", fullgraph=True)(
+                    aot_eager_out, x
+                )
+                inductor_ret = torch.compile(f, backend="inductor", fullgraph=True)(
+                    inductor_out, x
+                )
 
                 self.assertEqual(aot_eager_out, eager_out)
                 self.assertEqual(inductor_out, eager_out)
