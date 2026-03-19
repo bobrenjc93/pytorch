@@ -180,8 +180,7 @@ class TestDecompSharding(TestCase):
         out = aten.expand_copy.default(input, [-1, 16])
         self.assertEqual(out.placements, (Partial("min"),))
 
-        # glu: force replicate
-        check_no_strategy(aten.glu.default)
+        # glu: explicit strategy forces replicate on the active dimension
         x = d_empty(16, device_mesh=mesh, placements=[Partial()])
         out = aten.glu.default(x)
         self.assertEqual(out.placements, (Replicate(),))
