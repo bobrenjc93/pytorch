@@ -15,6 +15,7 @@ Other key classes include:
 These classes work together to track tensor operations and properties during Dynamo's tracing process.
 """
 
+import ast
 import functools
 import inspect
 import logging
@@ -779,6 +780,70 @@ class TensorVariable(VariableTracker):
             torch._dynamo.config._autograd_backward_strict_mode_conditional_banned_ops
         )
 
+    def _iter_sparse_alias_tensors(
+        self, tensor: torch.Tensor
+    ) -> Iterable[torch.Tensor]:
+        if tensor.is_sparse:
+            for accessor in ("_values", "_indices"):
+                yield getattr(tensor, accessor)()
+            return
+
+        for accessor in (
+            "values",
+            "crow_indices",
+            "col_indices",
+            "ccol_indices",
+            "row_indices",
+        ):
+            try:
+                value = getattr(tensor, accessor)()
+            except (AttributeError, NotImplementedError, RuntimeError):
+                continue
+
+            if isinstance(value, torch.Tensor):
+                yield value
+
+    def _get_source_alias_storages(self, tensor: torch.Tensor) -> set[Any]:
+        from torch._subclasses.fake_tensor import get_plain_tensors
+
+        from .higher_order_ops import get_tensor_storages
+
+        storages = set()
+        pending = [tensor]
+        seen: set[int] = set()
+
+        while pending:
+            candidate = pending.pop()
+            if not isinstance(candidate, torch.Tensor):
+                continue
+
+            candidate_id = id(candidate)
+            if candidate_id in seen:
+                continue
+            seen.add(candidate_id)
+
+            if is_traceable_wrapper_subclass(candidate):
+                plain_tensors: list[Any] = []
+                get_plain_tensors(candidate, out=plain_tensors)
+                pending.extend(
+                    plain_tensor
+                    for plain_tensor in plain_tensors
+                    if isinstance(plain_tensor, torch.Tensor)
+                )
+            elif is_sparse_any(candidate):
+                pending.extend(self._iter_sparse_alias_tensors(candidate))
+            else:
+                try:
+                    storages.update(get_tensor_storages(candidate))
+                except NotImplementedError:
+                    pass
+
+            base = getattr(candidate, "_base", None)
+            if isinstance(base, torch.Tensor):
+                pending.append(base)
+
+        return storages
+
     def _has_source_or_source_alias(self, tx: "InstructionTranslator") -> bool:
         if self.source is not None:
             return True
@@ -787,21 +852,15 @@ class TensorVariable(VariableTracker):
         if not isinstance(example_value, torch.Tensor):
             return False
 
-        from .higher_order_ops import get_tensor_storages
-
-        try:
-            storages = get_tensor_storages(example_value)
-        except NotImplementedError:
+        storages = self._get_source_alias_storages(example_value)
+        if not storages:
             return False
 
         for tracked_fake in tx.output.tracked_fakes:
             if not isinstance(tracked_fake.fake, torch.Tensor):
                 continue
-            try:
-                if storages & get_tensor_storages(tracked_fake.fake):
-                    return True
-            except NotImplementedError:
-                continue
+            if storages & self._get_source_alias_storages(tracked_fake.fake):
+                return True
 
         return False
 
@@ -912,6 +971,48 @@ class TensorVariable(VariableTracker):
             if callable(value) or isinstance(value, str):
                 yield value
 
+        yield from self._iter_lookup_backend_targets(candidate)
+
+    def _iter_lookup_backend_targets(self, candidate: Any) -> Iterable[str]:
+        source_target = candidate if inspect.isroutine(candidate) else None
+        if source_target is None and callable(candidate):
+            try:
+                source_target = inspect.getattr_static(candidate, "__call__")
+            except AttributeError:
+                source_target = None
+
+        if source_target is None:
+            return
+
+        try:
+            source = textwrap.dedent(inspect.getsource(source_target))
+        except (OSError, TypeError):
+            return
+
+        try:
+            tree = ast.parse(source)
+        except SyntaxError:
+            return
+
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call) or not node.args:
+                continue
+
+            backend_name = node.args[0]
+            if not (
+                isinstance(backend_name, ast.Constant)
+                and isinstance(backend_name.value, str)
+            ):
+                continue
+
+            if isinstance(node.func, ast.Name) and node.func.id == "lookup_backend":
+                yield backend_name.value
+            elif (
+                isinstance(node.func, ast.Attribute)
+                and node.func.attr == "lookup_backend"
+            ):
+                yield backend_name.value
+
     def _example_value_for_true_division_arg(
         self, arg: VariableTracker
     ) -> object | None:
@@ -1006,6 +1107,7 @@ class TensorVariable(VariableTracker):
             )
 
         tx.speculation_log.graph_break_on_integral_inplace_true_division = True
+        # Restart analysis so preceding side effects survive the graph break.
         raise IntegralInplaceTrueDivisionRestartAnalysis(
             restart_reason="integral in-place true division on source-backed tensor"
         )

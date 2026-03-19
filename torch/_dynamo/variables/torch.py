@@ -1155,6 +1155,8 @@ class TorchInGraphFunctionVariable(BaseTorchVariable):
             if not args or not isinstance(args[0], TensorVariable):
                 return None
 
+            # Route low-level in-place ATen true-division overloads through the
+            # same source-tensor guard as Tensor.div_()/Tensor.true_divide_().
             assert isinstance(self.value, torch._ops.OpOverload)
             op_name = self.value._schema.name.rsplit("::", maxsplit=1)[-1]
             args[0]._handle_integral_inplace_true_division(
