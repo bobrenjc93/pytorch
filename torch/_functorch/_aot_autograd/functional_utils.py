@@ -349,6 +349,12 @@ def gen_alias_from_base(
             # generic reconstruction below.
             if out.shape == target_meta_tensor.shape:
                 return patch_requires_grad(out)
+            aot_joint_log.debug(
+                "Aliased output ViewMeta replay produced shape %s, expected %s; "
+                "falling back to generic alias reconstruction.",
+                tuple(out.shape),
+                tuple(target_meta_tensor.shape),
+            )
 
     # Try to do view-replay if possible.
     # fall back to .as_strided() if we can't.

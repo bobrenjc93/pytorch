@@ -2448,7 +2448,7 @@ def forward(self, primals_1):
     def test_output_aliases_intermediate_falls_back_when_view_replay_fails(self):
         def f(a):
             tmp = a.sin()
-            return tmp.sum(0, keepdim=True).expand(a.shape[0], -1)
+            return tmp.view(-1)
 
         inp = [torch.randn(4, 3, requires_grad=True)]
         with patch.object(
