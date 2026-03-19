@@ -965,7 +965,11 @@ static CacheNode* _compiled_autograd_impl(
       if (node_args.cond(call.needed)) {
         fn->compiled_args(node_args);
         node_args.collect(call.node->next_edges());
-        node_args.collect(fn->next_edges_order());
+        const auto output_order = fn->next_edges_order();
+        // The identity traversal does not need cache-key specialization.
+        if (!output_order.empty()) {
+          node_args.collect(output_order);
+        }
       }
       CacheKey key = node_args.key();
       if (vlogger.has_value() && !compile_reason.has_value()) {

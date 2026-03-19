@@ -113,9 +113,11 @@ def maybe_skip_decompose(aot_config: AOTConfig) -> Generator[None, None, None]:
 def _get_backward_output_order(
     bw_module: GraphModule,
     bw_outs: Any,
+    leaf_input_grads: Sequence[bool] | None = None,
 ) -> list[int] | None:
-    PASSTHROUGH_PRIORITY = 2
-    SEQ_NR_PRIORITY = 1
+    PASSTHROUGH_PRIORITY = 3
+    SEQ_NR_PRIORITY = 2
+    TOPOLOGY_PRIORITY = 1
     STABLE_PRIORITY = 0
 
     topo_orders: dict[int, dict[torch.fx.Node, int]] = {}
@@ -153,6 +155,17 @@ def _get_backward_output_order(
         if "_tangents_" not in name:
             return False
         return name.rsplit("_tangents_", 1)[1].isdigit()
+
+    def is_leaf_tangent_placeholder(
+        value: torch.fx.Node, bw_out_idx: int | None
+    ) -> bool:
+        return (
+            leaf_input_grads is not None
+            and bw_out_idx is not None
+            and bw_out_idx < len(leaf_input_grads)
+            and leaf_input_grads[bw_out_idx]
+            and is_tangent_placeholder(value)
+        )
 
     def get_invoke_subgraph_module(
         module: GraphModule, value: torch.fx.Node
@@ -199,6 +212,7 @@ def _get_backward_output_order(
         module: GraphModule,
         value: Any,
         remaining_path: tuple[int, ...] = (),
+        bw_out_idx: int | None = None,
     ) -> tuple[tuple[int, int, int], ...]:
         source, path = unwrap_getitems(value)
         full_path = path + remaining_path
@@ -208,17 +222,19 @@ def _get_backward_output_order(
         seq_nr = source.meta.get("seq_nr")
         has_seq_nr = isinstance(seq_nr, int)
         topo_idx = get_topo_order(module)[source]
-        if is_tangent_placeholder(source):
+        if is_leaf_tangent_placeholder(source, bw_out_idx):
             priority_kind = PASSTHROUGH_PRIORITY
         elif has_seq_nr:
             priority_kind = SEQ_NR_PRIORITY
+        elif source.op not in ("placeholder", "get_attr"):
+            priority_kind = TOPOLOGY_PRIORITY
         else:
             priority_kind = STABLE_PRIORITY
         priority = (
             (
                 priority_kind,
                 seq_nr if has_seq_nr else 0,
-                topo_idx if has_seq_nr else 0,
+                topo_idx if priority_kind in (SEQ_NR_PRIORITY, TOPOLOGY_PRIORITY) else 0,
             ),
         )
 
@@ -231,7 +247,9 @@ def _get_backward_output_order(
             return priority
 
         inner_value, inner_path = inner_output
-        return priority + build_priority(submodule, inner_value, inner_path)
+        return priority + build_priority(
+            submodule, inner_value, inner_path, bw_out_idx
+        )
 
     def compare_priority(
         lhs: tuple[tuple[int, int, int], ...],
@@ -248,6 +266,8 @@ def _get_backward_output_order(
                     return -1 if lhs_seq_nr > rhs_seq_nr else 1
                 if lhs_topo_idx != rhs_topo_idx:
                     return -1 if lhs_topo_idx > rhs_topo_idx else 1
+            elif lhs_kind == TOPOLOGY_PRIORITY and lhs_topo_idx != rhs_topo_idx:
+                return -1 if lhs_topo_idx > rhs_topo_idx else 1
         if len(lhs) != len(rhs):
             extra = lhs[shared_levels:] if len(lhs) > len(rhs) else rhs[shared_levels:]
             if (
@@ -257,7 +277,10 @@ def _get_backward_output_order(
                 return -1 if len(lhs) > len(rhs) else 1
         return 0
 
-    priorities = [build_priority(bw_module, bw_out) for bw_out in bw_outs]
+    priorities = [
+        build_priority(bw_module, bw_out, bw_out_idx=bw_out_idx)
+        for bw_out_idx, bw_out in enumerate(bw_outs)
+    ]
     order = sorted(
         range(len(bw_outs)),
         key=cmp_to_key(
@@ -2102,7 +2125,12 @@ def _aot_stage2a_partition(
                     f"got {len(bw_outs_no_rng_no_tokens)}"
                 )
             fw_metadata.backward_output_order = _get_backward_output_order(
-                bw_module, bw_outs_no_rng_no_tokens
+                bw_module,
+                bw_outs_no_rng_no_tokens,
+                leaf_input_grads=[
+                    input_info.is_leaf and input_info.requires_grad
+                    for input_info in fw_metadata.input_info
+                ],
             )
 
             for i, (bw_out) in enumerate(bw_outs_no_rng_no_tokens):

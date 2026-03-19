@@ -77,6 +77,19 @@ class AotAutogradFallbackTests(torch._inductor.test_case.TestCase):
         bw_module = torch.fx.GraphModule(torch.nn.Module(), graph)
         self.assertIsNone(_get_backward_output_order(bw_module, [grad0, grad1]))
 
+    def test_get_backward_output_order_uses_topology_without_seq_nr(self):
+        graph = torch.fx.Graph()
+        grad = graph.placeholder("grad")
+        low_priority = graph.call_function(operator.neg, args=(grad,))
+        high_priority = graph.call_function(operator.mul, args=(low_priority, grad))
+        graph.output((low_priority, high_priority))
+
+        bw_module = torch.fx.GraphModule(torch.nn.Module(), graph)
+        self.assertEqual(
+            _get_backward_output_order(bw_module, [low_priority, high_priority]),
+            [1, 0],
+        )
+
     def test_get_backward_output_order_uses_topology_for_seq_nr_ties(self):
         graph = torch.fx.Graph()
         grad = graph.placeholder("grad")
@@ -156,7 +169,11 @@ class AotAutogradFallbackTests(torch._inductor.test_case.TestCase):
 
         bw_module = torch.fx.GraphModule(torch.nn.Module(), graph)
         self.assertEqual(
-            _get_backward_output_order(bw_module, [computed_grad, passthrough_grad]),
+            _get_backward_output_order(
+                bw_module,
+                [computed_grad, passthrough_grad],
+                leaf_input_grads=[False, True],
+            ),
             [1, 0],
         )
 
@@ -172,6 +189,23 @@ class AotAutogradFallbackTests(torch._inductor.test_case.TestCase):
         self.assertEqual(
             _get_backward_output_order(bw_module, [saved_tensor, computed_grad]),
             [1, 0],
+        )
+
+    def test_get_backward_output_order_does_not_prioritize_non_leaf_tangents(self):
+        graph = torch.fx.Graph()
+        grad = graph.placeholder("tangents_0")
+        activation_grad = graph.placeholder("tangents_1")
+        computed_grad = graph.call_function(operator.neg, args=(grad,))
+        computed_grad.meta["seq_nr"] = 1
+        graph.output((computed_grad, activation_grad))
+
+        bw_module = torch.fx.GraphModule(torch.nn.Module(), graph)
+        self.assertIsNone(
+            _get_backward_output_order(
+                bw_module,
+                [computed_grad, activation_grad],
+                leaf_input_grads=[True, False],
+            )
         )
 
     def test_remove_dupe_metadata_remaps_backward_output_order(self):

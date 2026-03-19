@@ -1000,9 +1000,7 @@ def forward(self, L_x_ : torch.Tensor):
     def test_post_acc_grad_hook_tiebreaker_order_matches_eager(self):
         x = torch.randn(10, 10)
 
-        def get_order(
-            module_factory, backend=None, args=(), compiled_bwd_backend=None
-        ):
+        def get_order(module_factory, backend=None, args=(), compiled_bwd_backend=None):
             module = module_factory()
             hook_order = []
 
