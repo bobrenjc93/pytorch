@@ -583,13 +583,12 @@ def _is_foreach_op(node: torch.fx.Node) -> bool:
 
 def _get_foreach_copy_candidate(
     node: torch.fx.Node,
-) -> tuple[torch.fx.Node, int, torch.fx.Node, torch.fx.Node] | None:
+) -> tuple[torch.fx.Node, torch.fx.Node, torch.fx.Node] | None:
     if (
         node.op != "call_function"
         or node.target is not torch.ops.aten.copy_.default
         or node.kwargs
         or len(node.args) != 2
-        or node.users
     ):
         return None
 
@@ -605,18 +604,27 @@ def _get_foreach_copy_candidate(
     if not _is_foreach_op(parent):
         return None
 
-    return parent, index, dst, src
+    return parent, dst, src
+
+
+def _is_getitem_from_parent(node: torch.fx.Node, parent: torch.fx.Node) -> bool:
+    return (
+        node.op == "call_function"
+        and node.target is operator.getitem
+        and len(node.args) == 2
+        and node.args[0] is parent
+        and isinstance(node.args[1], int)
+    )
 
 
 def fold_foreach_input_mutation_ops(fx_g: torch.fx.Graph) -> None:
     groups: list[
-        list[tuple[torch.fx.Node, torch.fx.Node, int, torch.fx.Node, torch.fx.Node]]
+        list[tuple[torch.fx.Node, torch.fx.Node, torch.fx.Node, torch.fx.Node]]
     ] = []
     current_group: list[
-        tuple[torch.fx.Node, torch.fx.Node, int, torch.fx.Node, torch.fx.Node]
+        tuple[torch.fx.Node, torch.fx.Node, torch.fx.Node, torch.fx.Node]
     ] = []
     current_key: tuple[torch.fx.Node, str | None] | None = None
-    seen_indices: set[int] = set()
 
     def flush() -> None:
         nonlocal current_key
@@ -624,31 +632,30 @@ def fold_foreach_input_mutation_ops(fx_g: torch.fx.Graph) -> None:
             groups.append(current_group.copy())
         current_group.clear()
         current_key = None
-        seen_indices.clear()
 
     for node in fx_g.nodes:
         candidate = _get_foreach_copy_candidate(node)
         if candidate is None:
+            if current_key is not None and _is_getitem_from_parent(node, current_key[0]):
+                continue
             flush()
             continue
 
-        parent, index, dst, src = candidate
+        parent, dst, src = candidate
         candidate_key = (parent, node.meta.get("partitioner_tag"))
-        if current_group and (candidate_key != current_key or index in seen_indices):
+        if current_group and candidate_key != current_key:
             flush()
 
         if current_key is None:
             current_key = candidate_key
-        current_group.append((node, parent, index, dst, src))
-        seen_indices.add(index)
+        current_group.append((node, parent, dst, src))
 
     flush()
 
     for group in groups:
-        sorted_group = sorted(group, key=lambda entry: entry[2])
-        first_copy = sorted_group[0][0]
-        dsts = [dst for _, _, _, dst, _ in sorted_group]
-        srcs = [src for _, _, _, _, src in sorted_group]
+        first_copy = group[0][0]
+        dsts = [dst for _, _, dst, _ in group]
+        srcs = [src for _, _, _, src in group]
 
         with fx_g.inserting_before(first_copy):
             foreach_copy = fx_g.call_function(
@@ -656,10 +663,22 @@ def fold_foreach_input_mutation_ops(fx_g: torch.fx.Graph) -> None:
             )
 
         foreach_copy.meta.update(first_copy.meta)
-        foreach_copy.meta["val"] = None
-        foreach_copy.meta.pop("tensor_meta", None)
+        foreach_copy.meta["val"] = first_copy.meta.get("val")
 
-        for copy_node, *_ in sorted_group:
+        insert_after = foreach_copy
+        for group_index, (copy_node, _, _, _) in enumerate(group):
+            if not copy_node.users:
+                continue
+
+            with fx_g.inserting_after(insert_after):
+                replacement = fx_g.call_function(
+                    operator.getitem, args=(foreach_copy, group_index)
+                )
+            replacement.meta.update(copy_node.meta)
+            copy_node.replace_all_uses_with(replacement)
+            insert_after = replacement
+
+        for copy_node, *_ in group:
             fx_g.erase_node(copy_node)
 
 
