@@ -113,10 +113,9 @@ def _propagate_tensor_meta(
     *,
     dtensor_type: type[DTensor] | None = None,
 ) -> TensorMeta:
+    input_dtensor = cast(DTensor, args[0])
     dtensor_type = (
-        cast(type[DTensor], cast(DTensor, args[0]).__class__)
-        if dtensor_type is None
-        else dtensor_type
+        input_dtensor.__class__ if dtensor_type is None else dtensor_type
     )
     dispatcher = dtensor_type._op_dispatcher
     op_info = dispatcher.unwrap_to_op_info(op_call, args, kwargs)
@@ -171,9 +170,7 @@ def _log_softmax_handler(
     dtensor_type: type[DTensor] | None = None,
 ) -> object:
     x = cast(DTensor, args[0])
-    dtensor_type = (
-        cast(type[DTensor], x.__class__) if dtensor_type is None else dtensor_type
-    )
+    dtensor_type = x.__class__ if dtensor_type is None else dtensor_type
     dim = cast(int, args[1])
     half_to_float = cast(bool, args[2])
 
@@ -302,9 +299,7 @@ def _nll_loss_forward_handler(
     dtensor_type: type[DTensor] | None = None,
 ) -> object:
     x = cast(DTensor, args[0])
-    dtensor_type = (
-        cast(type[DTensor], x.__class__) if dtensor_type is None else dtensor_type
-    )
+    dtensor_type = x.__class__ if dtensor_type is None else dtensor_type
     target = args[1]
     weight = args[2]
     reduction = cast(int, args[3])
@@ -461,9 +456,7 @@ def _nll_loss_backward_handler(
 ) -> object:
     grad_output = cast(DTensor, args[0])
     x = cast(DTensor, args[1])
-    dtensor_type = (
-        cast(type[DTensor], x.__class__) if dtensor_type is None else dtensor_type
-    )
+    dtensor_type = x.__class__ if dtensor_type is None else dtensor_type
     target = args[2]
     weight = args[3]
     reduction = cast(int, args[4])

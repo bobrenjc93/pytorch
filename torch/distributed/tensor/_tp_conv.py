@@ -253,10 +253,9 @@ def convolution_handler(
     *,
     dtensor_type: "type[dtensor.DTensor] | None" = None,
 ) -> object:
+    input_dtensor = cast(dtensor.DTensor, args[0])
     dtensor_type = (
-        cast(type[dtensor.DTensor], cast(dtensor.DTensor, args[0]).__class__)
-        if dtensor_type is None
-        else dtensor_type
+        input_dtensor.__class__ if dtensor_type is None else dtensor_type
     )
     # extract local tensor and sharding infos to a OpInfo
     op_info = dtensor_type._op_dispatcher.unwrap_to_op_info(op_call, args, kwargs)
@@ -300,10 +299,9 @@ def convolution_backward_handler(
     # pyrefly: ignore [unsupported-operation]
     args[0] = args[0].redistribute(args[1].device_mesh, args[1].placements)
     args = tuple(args)
+    grad_output_dtensor = cast(dtensor.DTensor, args[0])
     dtensor_type = (
-        cast(type[dtensor.DTensor], cast(dtensor.DTensor, args[0]).__class__)
-        if dtensor_type is None
-        else dtensor_type
+        grad_output_dtensor.__class__ if dtensor_type is None else dtensor_type
     )
 
     # extract local tensor and sharding infos to a OpInfo

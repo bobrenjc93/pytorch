@@ -4,8 +4,8 @@ import copy
 import inspect
 import logging
 import warnings
-from collections.abc import Sequence
-from functools import lru_cache
+from collections.abc import Callable, Iterator, Mapping, MutableMapping, Sequence
+from functools import cache
 from typing import cast
 
 import torch
@@ -167,47 +167,138 @@ DEFAULT_CUSTOM_OP_HANDLERS = {
 }
 
 
-class _CustomOpHandlerMap(dict[torch._ops.OpOverload, object]):
+class _CustomOpHandlerMap(MutableMapping[torch._ops.OpOverload, object]):
     _missing = object()
+    _masked = object()
 
-    def __init__(self, *args, explicit_keys=None, **kwargs) -> None:
-        super().__init__(*args, **kwargs)
+    def __init__(
+        self,
+        initial: Mapping[torch._ops.OpOverload, object] | None = None,
+        *,
+        explicit_keys: set[torch._ops.OpOverload] | None = None,
+        base_handlers: "_CustomOpHandlerMap | None" = None,
+    ) -> None:
+        self._handlers: dict[torch._ops.OpOverload, object] = (
+            {} if initial is None else dict(initial)
+        )
         self._explicit_keys: set[torch._ops.OpOverload] = (
             set() if explicit_keys is None else set(explicit_keys)
         )
+        self._base_handlers = base_handlers
+
+    def _resolve_from_base(self, key: torch._ops.OpOverload) -> object:
+        if self._base_handlers is None:
+            return self._missing
+        return self._base_handlers._resolve(key)
+
+    def _resolve(self, key: torch._ops.OpOverload) -> object:
+        local_value = self._handlers.get(key, self._missing)
+        if local_value is self._masked:
+            return self._missing
+
+        if local_value is not self._missing:
+            default_handler = DEFAULT_CUSTOM_OP_HANDLERS.get(key)
+            if local_value is default_handler and key not in self._explicit_keys:
+                inherited_value = self._resolve_from_base(key)
+                if inherited_value is not self._missing:
+                    return inherited_value
+            return local_value
+
+        inherited_value = self._resolve_from_base(key)
+        if inherited_value is not self._missing:
+            return inherited_value
+
+        return DEFAULT_CUSTOM_OP_HANDLERS.get(key, self._missing)
+
+    def _resolve_without_local(self, key: torch._ops.OpOverload) -> object:
+        inherited_value = self._resolve_from_base(key)
+        if inherited_value is not self._missing:
+            return inherited_value
+        return DEFAULT_CUSTOM_OP_HANDLERS.get(key, self._missing)
+
+    def rebase(self, base_handlers: "_CustomOpHandlerMap") -> None:
+        self._base_handlers = base_handlers
+
+    def __getitem__(self, key: torch._ops.OpOverload) -> object:
+        value = self._resolve(key)
+        if value is self._missing:
+            raise KeyError(key)
+        return value
 
     def __setitem__(self, key: torch._ops.OpOverload, value: object) -> None:
         self._explicit_keys.add(key)
-        super().__setitem__(key, value)
+        self._handlers[key] = value
+
+    def __delitem__(self, key: torch._ops.OpOverload) -> None:
+        self.pop(key)
+
+    def __iter__(self) -> Iterator[torch._ops.OpOverload]:
+        seen: set[torch._ops.OpOverload] = set()
+        for key in self._handlers:
+            seen.add(key)
+            if self._resolve(key) is not self._missing:
+                yield key
+
+        if self._base_handlers is not None:
+            for key in self._base_handlers:
+                if key in seen:
+                    continue
+                seen.add(key)
+                if self._resolve(key) is not self._missing:
+                    yield key
+
+        for key in DEFAULT_CUSTOM_OP_HANDLERS:
+            if key in seen:
+                continue
+            if self._resolve(key) is not self._missing:
+                yield key
+
+    def __len__(self) -> int:
+        return sum(1 for _ in self)
+
+    def __contains__(self, key: object) -> bool:
+        if not isinstance(key, torch._ops.OpOverload):
+            return False
+        return self._resolve(key) is not self._missing
+
+    def get(
+        self,
+        key: torch._ops.OpOverload,
+        default: object | None = None,
+    ) -> object | None:
+        value = self._resolve(key)
+        if value is self._missing:
+            return default
+        return value
 
     def pop(self, key, default=_missing):
-        self._explicit_keys.discard(key)
-        if default is self._missing:
-            return super().pop(key)
-        return super().pop(key, default)
+        current_value = self._resolve(key)
+        if current_value is self._missing:
+            if default is self._missing:
+                raise KeyError(key)
+            return default
 
-    def update(self, *args, **kwargs) -> None:
-        updates = dict(*args, **kwargs)
-        self._explicit_keys.update(updates)
-        super().update(updates)
+        self._handlers.pop(key, None)
+        self._explicit_keys.discard(key)
+        if self._resolve_without_local(key) is not self._missing:
+            self._handlers[key] = self._masked
+            self._explicit_keys.add(key)
+
+        return current_value
+
+    def update(self, other: Mapping[torch._ops.OpOverload, object]) -> None:
+        for key, value in other.items():
+            self[key] = value
 
     def copy(self):
-        return type(self)(self, explicit_keys=self._explicit_keys)
+        return type(self)(
+            self._handlers,
+            explicit_keys=self._explicit_keys,
+            base_handlers=self._base_handlers,
+        )
 
     def is_explicit(self, key: torch._ops.OpOverload) -> bool:
         return key in self._explicit_keys
-
-
-def _is_explicit_default_handler(
-    handlers: dict[torch._ops.OpOverload, object],
-    op_call: torch._ops.OpOverload,
-    handler: object,
-) -> bool:
-    return (
-        handler is DEFAULT_CUSTOM_OP_HANDLERS.get(op_call)
-        and isinstance(handlers, _CustomOpHandlerMap)
-        and handlers.is_explicit(op_call)
-    )
 
 
 def _handler_accepts_dtensor_type_kwarg(handler: object) -> bool:
@@ -217,14 +308,14 @@ def _handler_accepts_dtensor_type_kwarg(handler: object) -> bool:
         return _handler_accepts_dtensor_type_kwarg_uncached(handler)
 
 
-@lru_cache(maxsize=None)
+@cache
 def _handler_accepts_dtensor_type_kwarg_cached(handler: object) -> bool:
     return _handler_accepts_dtensor_type_kwarg_uncached(handler)
 
 
 def _handler_accepts_dtensor_type_kwarg_uncached(handler: object) -> bool:
     try:
-        signature = inspect.signature(handler)
+        signature = inspect.signature(cast(Callable[..., object], handler))
     except (TypeError, ValueError):
         return False
 
@@ -298,12 +389,14 @@ class OpDispatcher:
             aten.bernoulli.default,
             aten.bernoulli_.float,
         }
-        self._custom_op_handlers = _CustomOpHandlerMap(DEFAULT_CUSTOM_OP_HANDLERS)
+        self._custom_op_handlers = _CustomOpHandlerMap()
 
     def clone(self) -> "OpDispatcher":
         cloned = copy.copy(self)
         cloned._random_ops = set(self._random_ops)
-        cloned._custom_op_handlers = self._custom_op_handlers.copy()
+        cloned._custom_op_handlers = _CustomOpHandlerMap(
+            base_handlers=self._custom_op_handlers
+        )
         cloned.sharding_propagator = ShardingPropagator(self.sharding_propagator)
         return cloned
 
@@ -311,6 +404,11 @@ class OpDispatcher:
         if base_dispatcher is self:
             return
         self.sharding_propagator.rebase(base_dispatcher.sharding_propagator)
+
+    def rebase_custom_op_handlers(self, base_dispatcher: "OpDispatcher") -> None:
+        if base_dispatcher is self:
+            return
+        self._custom_op_handlers.rebase(base_dispatcher._custom_op_handlers)
 
     # ********************************************************************************************
     # def dispatch(...)
@@ -338,40 +436,9 @@ class OpDispatcher:
     def _get_custom_op_handler(
         self,
         op_call: torch._ops.OpOverload,
-        dtensor_type: "type[dtensor.DTensor]",
+        _dtensor_type: "type[dtensor.DTensor]",
     ):
-        handler = self._custom_op_handlers.get(op_call)
-        default_handler = DEFAULT_CUSTOM_OP_HANDLERS.get(op_call)
-        if handler is not None:
-            if handler is not default_handler:
-                return handler
-            if _is_explicit_default_handler(
-                self._custom_op_handlers,
-                op_call,
-                handler,
-            ):
-                return handler
-
-        inherited_handler = None
-        for base_type in dtensor_type.__mro__[1:]:
-            dispatcher = getattr(base_type, "_op_dispatcher", None)
-            if not isinstance(dispatcher, OpDispatcher) or dispatcher is self:
-                continue
-            base_handler = dispatcher._custom_op_handlers.get(op_call)
-            if base_handler is None:
-                continue
-            if inherited_handler is None:
-                inherited_handler = base_handler
-            if base_handler is not DEFAULT_CUSTOM_OP_HANDLERS.get(op_call) or (
-                _is_explicit_default_handler(
-                    dispatcher._custom_op_handlers,
-                    op_call,
-                    base_handler,
-                )
-            ):
-                return base_handler
-
-        return handler if handler is not None else inherited_handler
+        return self._custom_op_handlers.get(op_call)
 
     def dispatch(
         self,

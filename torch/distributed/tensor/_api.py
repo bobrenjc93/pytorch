@@ -371,6 +371,7 @@ class DTensor(torch.Tensor):
 
         if dispatcher is not base_dispatcher:
             dispatcher.rebase_sharding_propagator(base_dispatcher)
+            dispatcher.rebase_custom_op_handlers(base_dispatcher)
 
     # pyre-fixme[14]: `__repr__` overrides method defined in `DTensor` inconsistently.
     # pyre-fixme[3]: Return type must be annotated.

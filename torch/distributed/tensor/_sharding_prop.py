@@ -6,7 +6,7 @@ from collections.abc import Callable, MutableMapping, Sequence
 from contextlib import nullcontext
 from functools import lru_cache
 from itertools import chain
-from typing import cast, TypeVar
+from typing import Any, cast, TypeVar
 
 import torch
 from torch._guards import detect_fake_mode
@@ -80,7 +80,7 @@ def _lookup_schema_info_entry(
     schema_info = mapping[op_overload]
     if schema_info is _NO_SCHEMA_INFO:
         return True, None
-    return True, schema_info
+    return True, cast(RuntimeSchemaInfo, schema_info)
 
 
 _SHARDING_RULE_REGISTRATION = "rule"
@@ -306,9 +306,10 @@ def _select_min_redistribute_cost(
 
     # Figure out heuristic hints for unbacked shapes.
     # If available, use shape upper bound. If not, fallback to some integer (inductor size-hinting style).
-    shape_env = next(
-        iter(x for x in costs if not is_concrete_float(x))
-    ).node.shape_env  # type: ignore[arg-type]
+    symbolic_cost = cast(
+        Any, next(iter(x for x in costs if not is_concrete_float(x)))
+    )
+    shape_env = symbolic_cost.node.shape_env
     replacements = {}
     for sym in free_unbacked:
         # TODO(laithsakka): unify with optimization_hint API
