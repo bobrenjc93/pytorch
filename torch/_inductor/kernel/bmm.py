@@ -94,7 +94,7 @@ def _check_bmm_dtypes(mat1, mat2, out_dtype) -> None:
         )
 
 
-@L.register_lowering(aten.bmm)
+@L.register_lowering(aten.bmm, type_promotion_kind=None)
 def tuned_bmm(mat1, mat2, out_dtype=None, *, layout=None):
     """
     Lowering for autotuning aten.bmm with different backends (Aten, Triton, CUTLASS, etc.)
