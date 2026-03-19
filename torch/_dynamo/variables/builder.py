@@ -1977,7 +1977,7 @@ class VariableBuilder:
         result = ListIteratorVariable(items, source=self.source)
         return self.tx.output.side_effects.track_mutable(value, result)
 
-    def wrap_itertools_count(self, value: itertools.count) -> VariableTracker:
+    def wrap_itertools_count(self, value: Any) -> VariableTracker:
         current_item, step = normalize_count_iter(value)
         if not (
             ConstantVariable.is_literal(current_item)
