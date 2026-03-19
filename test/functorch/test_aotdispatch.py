@@ -990,6 +990,74 @@ def forward(self, primals_1):
 
         self.assertEqual(x_ref.grad, x_test.grad)
 
+    def test_warn_on_unused_subclass_outputs_without_detach_in_forward(self):
+        class NonRewrappingTensor(torch.Tensor):
+            @staticmethod
+            def __new__(cls, t, outer_size=None, outer_stride=None):
+                if outer_size is None:
+                    outer_size = t.size()
+                if outer_stride is None:
+                    outer_stride = t.stride()
+
+                return torch.Tensor._make_wrapper_subclass(
+                    cls,
+                    outer_size,
+                    strides=outer_stride,
+                    storage_offset=t.storage_offset(),
+                    device=t.device,
+                    layout=t.layout,
+                    requires_grad=t.requires_grad,
+                    dtype=t.dtype,
+                )
+
+            def __init__(self, t, outer_size=None, outer_stride=None):
+                self.tensor = t
+
+            def __tensor_flatten__(self):
+                return ["tensor"], None
+
+            @staticmethod
+            def __tensor_unflatten__(inner_tensors, meta, outer_size, outer_stride):
+                if meta is not None:
+                    raise AssertionError("Expected meta to be None")
+                return NonRewrappingTensor(
+                    inner_tensors["tensor"],
+                    outer_size,
+                    outer_stride,
+                )
+
+            @classmethod
+            def __torch_dispatch__(cls, func, types, args=(), kwargs=None):
+                if kwargs is None:
+                    kwargs = {}
+                return func(
+                    *pytree.tree_map_only(cls, lambda x: x.tensor, args),
+                    **pytree.tree_map_only(cls, lambda x: x.tensor, kwargs),
+                )
+
+        def inner_f(x):
+            return x.sin(), NonRewrappingTensor(x.cos())
+
+        f = torch.compile(inner_f, backend="aot_eager", fullgraph=True)
+
+        x_ref = torch.randn(4, requires_grad=True)
+        x_test = x_ref.detach().clone().requires_grad_()
+
+        out_ref = inner_f(x_ref)
+        out_test = f(x_test)
+
+        self.assertEqual(out_ref[0], out_test[0])
+        self.assertIsInstance(out_test[1], NonRewrappingTensor)
+
+        out_ref[0].sum().backward()
+        with self.assertWarnsRegex(
+            UserWarning,
+            r"forward outputs \[1\].*extra backward computation compared to eager",
+        ):
+            out_test[0].sum().backward()
+
+        self.assertEqual(x_ref.grad, x_test.grad)
+
     def test_nested_subclasses(self):
         @torch.compile(backend="aot_eager")
         def f(x):

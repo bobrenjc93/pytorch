@@ -1887,9 +1887,86 @@ def _raise_if_functorch_active() -> None:
     )
 
 
+@dataclass(frozen=True)
+class _PlainTensorZeroSpec:
+    size: tuple[IntLikeType, ...]
+    dtype: torch.dtype
+    device: torch.device
+    layout: torch.layout
+
+
+@dataclass(frozen=True)
+class _SubclassZeroSpec:
+    subclass_type: type
+    meta: Any
+    outer_size: tuple[IntLikeType, ...]
+    outer_stride: tuple[IntLikeType, ...]
+    attrs: dict[str, object]
+
+
+def _make_runtime_zero_spec(
+    x: torch.Tensor,
+    *,
+    preserve_subclass: bool,
+) -> _PlainTensorZeroSpec | _SubclassZeroSpec:
+    if preserve_subclass and is_traceable_wrapper_subclass(x):
+        keys, meta = x.__tensor_flatten__()
+        attrs: dict[str, object] = {}
+        for key in keys:
+            attr = getattr(x, key)
+            attrs[key] = (
+                _make_runtime_zero_spec(attr, preserve_subclass=True)
+                if isinstance(attr, torch.Tensor)
+                else attr
+            )
+        return _SubclassZeroSpec(
+            subclass_type=type(x),
+            meta=meta,
+            outer_size=tuple(x.size()),
+            outer_stride=tuple(x.stride()),
+            attrs=attrs,
+        )
+
+    return _PlainTensorZeroSpec(
+        size=tuple(x.shape),
+        dtype=x.dtype,
+        device=x.device,
+        layout=x.layout,
+    )
+
+
+def _materialize_zero_from_spec(
+    spec: _PlainTensorZeroSpec | _SubclassZeroSpec,
+) -> torch.Tensor:
+    if isinstance(spec, _PlainTensorZeroSpec):
+        return torch.zeros(
+            spec.size,
+            dtype=spec.dtype,
+            device=spec.device,
+            layout=spec.layout,
+        )
+
+    inner_tensors = {
+        key: (
+            _materialize_zero_from_spec(attr)
+            if isinstance(attr, (_PlainTensorZeroSpec, _SubclassZeroSpec))
+            else attr
+        )
+        for key, attr in spec.attrs.items()
+    }
+    return spec.subclass_type.__tensor_unflatten__(
+        inner_tensors,
+        spec.meta,
+        spec.outer_size,
+        spec.outer_stride,
+    )
+
+
 def _materialize_undefined_grad_outputs(
     flat_args: Sequence[Any],
-    grad_output_prototypes: Sequence[Tensor | None],
+    grad_output_zero_specs: Sequence[
+        _PlainTensorZeroSpec | _SubclassZeroSpec | None
+    ],
     metadata: ViewAndMutationMeta,
 ) -> tuple[list[Any], list[int]]:
     num_intermediate_bases = metadata.num_intermediate_bases
@@ -1902,10 +1979,10 @@ def _materialize_undefined_grad_outputs(
         raise AssertionError(
             f"expected {expected_grad_outs} grad_outs, got {len(flat_args)}"
         )
-    if len(grad_output_prototypes) != expected_grad_outs:
+    if len(grad_output_zero_specs) != expected_grad_outs:
         raise AssertionError(
-            "expected grad_output_prototypes to line up with backward grad outputs, "
-            f"got {len(grad_output_prototypes)} != {expected_grad_outs}"
+            "expected grad_output_zero_specs to line up with backward grad outputs, "
+            f"got {len(grad_output_zero_specs)} != {expected_grad_outs}"
         )
 
     output_tangents_start = num_mutated_runtime_inps
@@ -1913,12 +1990,12 @@ def _materialize_undefined_grad_outputs(
     materialized_output_indices: list[int] = []
     materialized_flat_args: list[Any] = []
 
-    for i, (grad_out, prototype) in enumerate(zip(flat_args, grad_output_prototypes)):
-        if grad_out is not None or prototype is None:
+    for i, (grad_out, zero_spec) in enumerate(zip(flat_args, grad_output_zero_specs)):
+        if grad_out is not None or zero_spec is None:
             materialized_flat_args.append(grad_out)
             continue
 
-        materialized_flat_args.append(torch.zeros_like(prototype))
+        materialized_flat_args.append(_materialize_zero_from_spec(zero_spec))
         if output_tangents_start <= i < output_tangents_end:
             output_idx = i - output_tangents_start
             info = metadata.output_info[output_idx]
@@ -2068,7 +2145,7 @@ def _backward_prologue_functional(
     # (2) If an output is a subclass, its grad_out will also be a subclass,
     #     *unless* the user explicitly passes in a plain tensor as the grad_output.
     #     Undefined gradients from calling backward() on only a subset of outputs are
-    #     handled earlier in Python by materializing zeros from saved output prototypes.
+    #     handled earlier in Python by materializing zeros from lightweight runtime specs.
     #
     # Today, we make a guess on subclass-ness based on the above examples,
     # and hard-error in the backward if we guessed wrong.
@@ -2819,12 +2896,22 @@ Your tensor subclass must implement __coerce_same_metadata_as_tangent__."""
                     and not raw_returns_meta[i].requires_grad
                 ]
 
-                def _needs_grad_output_prototype(i: int) -> bool:
+                if len(raw_returns) != len(
+                    CompiledFunction.metadata.subclass_tangent_meta
+                ):
+                    raise AssertionError(
+                        "expected raw_returns and subclass_tangent_meta to have the same length, "
+                        f"got {len(raw_returns)} != {len(CompiledFunction.metadata.subclass_tangent_meta)}"
+                    )
+
+                def _needs_undefined_grad_materialization(i: int) -> bool:
                     if i < num_mutated_runtime_inps:
                         input_info_idx = (
                             CompiledFunction.metadata.mutated_inp_runtime_indices[i]
                         )
-                        input_info = CompiledFunction.metadata.input_info[input_info_idx]
+                        input_info = CompiledFunction.metadata.input_info[
+                            input_info_idx
+                        ]
                         return input_info.mutates_data and input_info.requires_grad
                     if i < num_mutated_runtime_inps + num_outputs:
                         output_info = CompiledFunction.metadata.output_info[
@@ -2842,9 +2929,16 @@ Your tensor subclass must implement __coerce_same_metadata_as_tangent__."""
                         )
                     return True
 
-                ctx._grad_output_prototypes = tuple(
-                    out.detach()
-                    if isinstance(out, torch.Tensor) and _needs_grad_output_prototype(i)
+                ctx._grad_output_zero_specs = tuple(
+                    _make_runtime_zero_spec(
+                        out,
+                        preserve_subclass=isinstance(
+                            CompiledFunction.metadata.subclass_tangent_meta[i],
+                            SubclassCreationMeta,
+                        ),
+                    )
+                    if isinstance(out, torch.Tensor)
+                    and _needs_undefined_grad_materialization(i)
                     else None
                     for i, out in enumerate(raw_returns)
                 )
@@ -2858,7 +2952,7 @@ Your tensor subclass must implement __coerce_same_metadata_as_tangent__."""
                 flat_args, materialized_output_indices = (
                     _materialize_undefined_grad_outputs(
                         flat_args,
-                        ctx._grad_output_prototypes,
+                        ctx._grad_output_zero_specs,
                         CompiledFunction.metadata,
                     )
                 )
