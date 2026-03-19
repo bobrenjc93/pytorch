@@ -3003,7 +3003,11 @@ def forward(self, add, tangents_1):
         def mm_fwd_fake(input, weight):
             return torch.matmul(input, weight)
 
-        @torch.library.custom_op("_test::mm_bwd_163716", mutates_args=())
+        @torch.library.custom_op(
+            "_test::mm_bwd_163716",
+            mutates_args=(),
+            schema="(Tensor grad_output, Tensor input, Tensor weight) -> (Tensor, Tensor?)",
+        )
         def mm_bwd(
             grad_output: torch.Tensor,
             input: torch.Tensor,
@@ -3037,7 +3041,13 @@ def forward(self, add, tangents_1):
 
         def bw_compiler(gm, example_inputs):
             nonlocal seen_bw_requires_grad
-            seen_bw_requires_grad = example_inputs[1].requires_grad
+            saved_weight, = [
+                example_input
+                for example_input in example_inputs
+                if isinstance(example_input, torch.Tensor)
+                and tuple(example_input.shape) == tuple(weight.shape)
+            ]
+            seen_bw_requires_grad = saved_weight.requires_grad
             return gm.forward
 
         def fn(input, weight):
