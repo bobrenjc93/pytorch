@@ -409,7 +409,7 @@ class TestCustomBackendAPI(torch._dynamo.test_case.TestCase):
                 self.assertEqual(fw_metadata.output_base_indices, [])
                 self.assertEqual(fw_metadata.static_input_indices, [0, 1])
                 self.assertEqual(fw_metadata.num_mutated_inp_runtime_indices, 0)
-                self.assertIsNone(fw_metadata.bw_donated_idxs)
+                self.assertEqual(fw_metadata.bw_donated_idxs, [1])
             backend_run = True
             return make_boxed_func(gm.forward)
 
