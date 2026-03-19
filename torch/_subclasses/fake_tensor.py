@@ -1068,6 +1068,11 @@ class FakeTensor(Tensor):
             )
         return self.nested_int_memo * coeff
 
+    def __bool__(self) -> bool:
+        # Route FakeTensor truthiness through aten.is_nonzero instead of the
+        # default local-scalar path so fake-specific scalar handling applies.
+        return bool(aten.is_nonzero.default(self))
+
     # Similar to FunctionalTensor.tolist
     def tolist(self) -> Any:
         if self.dim() == 0:
