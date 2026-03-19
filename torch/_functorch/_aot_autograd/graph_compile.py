@@ -13,19 +13,14 @@ import dataclasses
 import itertools
 import logging
 import operator
+import threading
 import time
 import traceback
 from collections import defaultdict
 from collections.abc import Callable, Generator, Sequence
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 from functools import cmp_to_key
 from typing import Any
-
-from torch._library.fake_class_registry import FakeScriptObject
-from torch._opaque_base import OpaqueBase
-
-import threading
-from contextlib import contextmanager
 
 import torch
 import torch.utils._pytree as pytree
@@ -38,7 +33,9 @@ from torch._dynamo.utils import (
     lazy_format_graph_code,
 )
 from torch._guards import CompileContext, TracingContext
+from torch._library.fake_class_registry import FakeScriptObject
 from torch._logging import getArtifactLogger, trace_structured
+from torch._opaque_base import OpaqueBase
 from torch._subclasses import FakeTensor
 from torch._subclasses.meta_utils import is_sparse_any
 from torch.fx.experimental._backward_state import BackwardState
@@ -117,6 +114,10 @@ def _get_backward_output_order(
     bw_module: GraphModule,
     bw_outs: Any,
 ) -> list[int] | None:
+    PASSTHROUGH_PRIORITY = 2
+    SEQ_NR_PRIORITY = 1
+    STABLE_PRIORITY = 0
+
     topo_orders: dict[int, dict[torch.fx.Node, int]] = {}
 
     def get_topo_order(module: GraphModule) -> dict[torch.fx.Node, int]:
@@ -172,8 +173,10 @@ def _get_backward_output_order(
             return current, ()
 
         remaining = list(path)
-        while remaining and isinstance(current, Sequence) and not isinstance(
-            current, (str, bytes)
+        while (
+            remaining
+            and isinstance(current, Sequence)
+            and not isinstance(current, (str, bytes))
         ):
             index = remaining.pop(0)
             if index < -len(current) or index >= len(current):
@@ -186,7 +189,7 @@ def _get_backward_output_order(
         module: GraphModule,
         value: Any,
         remaining_path: tuple[int, ...] = (),
-    ) -> tuple[tuple[bool, int, int], ...]:
+    ) -> tuple[tuple[int, int, int], ...]:
         source, path = unwrap_getitems(value)
         full_path = path + remaining_path
         if not isinstance(source, torch.fx.Node):
@@ -195,9 +198,15 @@ def _get_backward_output_order(
         seq_nr = source.meta.get("seq_nr")
         has_seq_nr = isinstance(seq_nr, int)
         topo_idx = get_topo_order(module)[source]
+        if source.op == "placeholder":
+            priority_kind = PASSTHROUGH_PRIORITY
+        elif has_seq_nr:
+            priority_kind = SEQ_NR_PRIORITY
+        else:
+            priority_kind = STABLE_PRIORITY
         priority = (
             (
-                has_seq_nr,
+                priority_kind,
                 seq_nr if has_seq_nr else 0,
                 topo_idx if has_seq_nr else 0,
             ),
@@ -215,25 +224,29 @@ def _get_backward_output_order(
         return priority + build_priority(submodule, inner_value, inner_path)
 
     def compare_priority(
-        lhs: tuple[tuple[bool, int, int], ...],
-        rhs: tuple[tuple[bool, int, int], ...],
+        lhs: tuple[tuple[int, int, int], ...],
+        rhs: tuple[tuple[int, int, int], ...],
     ) -> int:
         shared_levels = min(len(lhs), len(rhs))
         for i in range(shared_levels):
-            lhs_level = lhs[i]
-            rhs_level = rhs[i]
-            lhs_has_seq_nr, lhs_seq_nr, lhs_topo_idx = lhs_level
-            rhs_has_seq_nr, rhs_seq_nr, rhs_topo_idx = rhs_level
-            if lhs_has_seq_nr != rhs_has_seq_nr:
-                return -1 if lhs_has_seq_nr else 1
-            if lhs_has_seq_nr:
+            lhs_kind, lhs_seq_nr, lhs_topo_idx = lhs[i]
+            rhs_kind, rhs_seq_nr, rhs_topo_idx = rhs[i]
+            if lhs_kind != rhs_kind:
+                return -1 if lhs_kind > rhs_kind else 1
+            if lhs_kind == SEQ_NR_PRIORITY:
                 if lhs_seq_nr != rhs_seq_nr:
                     return -1 if lhs_seq_nr > rhs_seq_nr else 1
                 if lhs_topo_idx != rhs_topo_idx:
                     return -1 if lhs_topo_idx > rhs_topo_idx else 1
         if len(lhs) != len(rhs):
             extra = lhs[shared_levels:] if len(lhs) > len(rhs) else rhs[shared_levels:]
-            if any(has_seq_nr for has_seq_nr, _, _ in extra) or shared_levels == 0:
+            if (
+                any(
+                    priority_kind != STABLE_PRIORITY
+                    for priority_kind, _, _ in extra
+                )
+                or shared_levels == 0
+            ):
                 return -1 if len(lhs) > len(rhs) else 1
         return 0
 

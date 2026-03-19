@@ -146,6 +146,20 @@ class AotAutogradFallbackTests(torch._inductor.test_case.TestCase):
             [2, 0, 1],
         )
 
+    def test_get_backward_output_order_prioritizes_passthrough_leaf_grads(self):
+        graph = torch.fx.Graph()
+        grad = graph.placeholder("grad")
+        passthrough_grad = graph.placeholder("passthrough_grad")
+        computed_grad = graph.call_function(operator.neg, args=(grad,))
+        computed_grad.meta["seq_nr"] = 1
+        graph.output((computed_grad, passthrough_grad))
+
+        bw_module = torch.fx.GraphModule(torch.nn.Module(), graph)
+        self.assertEqual(
+            _get_backward_output_order(bw_module, [computed_grad, passthrough_grad]),
+            [1, 0],
+        )
+
     def test_remove_dupe_metadata_remaps_backward_output_order(self):
         input_info = [
             InputAliasInfo(
