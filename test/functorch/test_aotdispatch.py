@@ -285,12 +285,24 @@ class TestPythonKey(AOTTestCase):
 
         placeholders = [node for node in gm.graph.nodes if node.op == "placeholder"]
         p_node = placeholders[1]
-        self.assertGreater(len(p_node.users), 0)
+        self.assertTrue(
+            any(
+                p_node in node.all_input_nodes
+                and node.target is not torch.ops.aten._local_scalar_dense.default
+                for node in gm.graph.nodes
+                if node.op == "call_function"
+            )
+        )
 
-        call_targets = {
-            node.target for node in gm.graph.nodes if node.op == "call_function"
-        }
-        self.assertNotIn(torch.ops.aten._local_scalar_dense.default, call_targets)
+    def test_make_fx_dropout_tensor_probability_preserves_validation(self, device):
+        with self.assertRaisesRegex(
+            ValueError, "dropout probability has to be between 0 and 1"
+        ):
+            make_fx(
+                lambda x, p: F.dropout(x, p),
+                decomposition_table={},
+                tracing_mode="real",
+            )(torch.randn(10, device=device), torch.tensor(1.5, device=device))
 
     def test_make_fx_dropout_uses_native_dropout_on_cpu(self, device):
         if device != "cpu":

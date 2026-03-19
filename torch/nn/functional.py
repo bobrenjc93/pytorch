@@ -1422,7 +1422,10 @@ def _dropout_with_tensor_probability(
     training: bool,
 ) -> Tensor:
     from torch._subclasses.fake_tensor import is_fake
-    from torch.fx.experimental.proxy_tensor import get_proxy_mode
+    from torch.fx.experimental.proxy_tensor import (
+        disable_proxy_modes_tracing,
+        get_proxy_mode,
+    )
 
     if p.ndim != 0:
         raise ValueError(
@@ -1432,8 +1435,30 @@ def _dropout_with_tensor_probability(
 
     # Outside tracing, reuse the eager float path so tensor probabilities keep
     # the same validation and kernel behavior as the existing API.
-    if get_proxy_mode() is None and not is_fake(p):
+    if get_proxy_mode() is None:
         return dropout(input, float(p.item()), training=training)
+
+    p = p.detach()
+
+    if not is_fake(p):
+        with disable_proxy_modes_tracing():
+            scalar_p = float(p.item())
+        if scalar_p < 0.0 or scalar_p > 1.0:
+            raise ValueError(
+                f"dropout probability has to be between 0 and 1, but got {scalar_p}"
+            )
+
+    # Preserve eager's probability range checks when tracing with fake inputs.
+    else:
+        scalar_p = p.item()
+        torch._check_value(
+            scalar_p >= 0.0,
+            lambda: "dropout probability has to be between 0 and 1, but got p < 0",
+        )
+        torch._check_value(
+            scalar_p <= 1.0,
+            lambda: "dropout probability has to be between 0 and 1, but got p > 1",
+        )
 
     if not training:
         return input
@@ -1492,7 +1517,11 @@ def dropout(
             if inplace
             else _VF.dropout(input, p, training)
         )
-    return torch.ops.aten.native_dropout.default(input, p, training)[0]
+    from torch.fx.experimental.proxy_tensor import get_proxy_mode
+
+    if get_proxy_mode() is not None:
+        return torch.ops.aten.native_dropout.default(input, p, training)[0]
+    return _VF.dropout(input, p, training)
 
 
 def alpha_dropout(
