@@ -817,6 +817,19 @@ def forward(self, x_1):
             gm, (sample,), options={"fx_wrapper": True, "compile_threads": 1}
         )
 
+    def test_noop_slice_keeps_alias_for_concrete_tracing(self):
+        if self.tracing_mode == "symbolic":
+            self.skipTest("symbolic tracing must materialize the slice op")
+
+        def f(x):
+            return x[:, :x.shape[1]]
+
+        traced = make_fx(f, tracing_mode=self.tracing_mode)(torch.randn(2, 3))
+        self.assertExpectedInline(traced.code.strip(), """\
+def forward(self, x_1):
+    alias = torch.ops.aten.alias.default(x_1);  x_1 = None
+    return alias""")
+
 
 class TestGenericProxyTensorReal(TestGenericProxyTensor):
     tracing_mode = "real"
@@ -954,19 +967,6 @@ class TestFakeProxyTensor(TestCase):
         r = str(make_fx(f, tracing_mode="fake")(torch.randn(2)).code).strip()
         # NB: this should not have a detach call
         self.assertExpectedInline(r, """\
-def forward(self, x_1):
-    alias = torch.ops.aten.alias.default(x_1);  x_1 = None
-    return alias""")
-
-    def test_noop_slice_keeps_alias_for_concrete_tracing(self):
-        if self.tracing_mode == "symbolic":
-            self.skipTest("symbolic tracing must materialize the slice op")
-
-        def f(x):
-            return x[:, :x.shape[1]]
-
-        traced = make_fx(f, tracing_mode=self.tracing_mode)(torch.randn(2, 3))
-        self.assertExpectedInline(traced.code.strip(), """\
 def forward(self, x_1):
     alias = torch.ops.aten.alias.default(x_1);  x_1 = None
     return alias""")

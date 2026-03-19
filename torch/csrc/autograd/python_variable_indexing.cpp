@@ -226,14 +226,13 @@ static PyObject* get_dispatch_mode_pre_dispatch() {
     throw python_error();
   }
 
-  auto get_dispatch_mode_pre_dispatch =
-      PyObject_GetAttrString(torch_ops.get(), "_get_dispatch_mode_pre_dispatch");
+  auto get_dispatch_mode_pre_dispatch = PyObject_GetAttrString(
+      torch_ops.get(), "_get_dispatch_mode_pre_dispatch");
   if (!get_dispatch_mode_pre_dispatch) {
     throw python_error();
   }
 
-  THPVariable_get_dispatch_mode_pre_dispatch =
-      get_dispatch_mode_pre_dispatch;
+  THPVariable_get_dispatch_mode_pre_dispatch = get_dispatch_mode_pre_dispatch;
   return THPVariable_get_dispatch_mode_pre_dispatch;
 }
 
@@ -247,8 +246,8 @@ static PyObject* get_proxy_mode_key() {
     throw python_error();
   }
 
-  auto torch_dispatch_mode_key =
-      THPObjectPtr(PyObject_GetAttrString(torch_C.get(), "_TorchDispatchModeKey"));
+  auto torch_dispatch_mode_key = THPObjectPtr(
+      PyObject_GetAttrString(torch_C.get(), "_TorchDispatchModeKey"));
   if (!torch_dispatch_mode_key) {
     throw python_error();
   }
@@ -272,6 +271,14 @@ static bool isPreDispatchProxyTracingModeActive() {
     throw python_error();
   }
   return maybe_mode.get() != Py_None;
+}
+
+static bool sliceHasSymbolicBounds(PyObject* obj) {
+  auto* sliceobj = reinterpret_cast<PySliceObject*>(obj);
+  return (
+      torch::is_symint(sliceobj->start) ||
+      torch::is_symint(sliceobj->stop) ||
+      torch::is_symint(sliceobj->step));
 }
 
 static bool shouldDisableSliceOptimizationForProxyMode(PyObject* mode) {
@@ -319,7 +326,7 @@ static Variable applySlicing(
     PyObject* index,
     variable_list& outIndices,
     bool is_tracing,
-    bool disable_slice_optimization,
+    bool symbolic_or_predispatch_proxy_tracing,
     const at::Device& self_device,
     const std::optional<int64_t>& self_ndim,
     int64_t specified_dims) {
@@ -337,6 +344,9 @@ static Variable applySlicing(
   Variable result = self;
   for (const auto i : c10::irange(size)) {
     PyObject* obj = PyTuple_GET_ITEM(index, i);
+    bool disable_slice_optimization =
+        is_tracing || (symbolic_or_predispatch_proxy_tracing &&
+                       PySlice_Check(obj) && sliceHasSymbolicBounds(obj));
     // NOTE [nested tensor size for indexing]
     // nested tensor does not have a size (yet) so for now we represent its size
     // as null may need to be changed after we reach a better solution for
@@ -510,8 +520,8 @@ PyObject* THPVariable_getitem(PyObject* self, PyObject* index) {
   }
 
   bool is_tracing = torch::jit::tracer::isTracing();
-  bool disable_slice_optimization =
-      is_tracing || isSymbolicOrPreDispatchProxyTracingModeActive();
+  bool symbolic_or_predispatch_proxy_tracing =
+      isSymbolicOrPreDispatchProxyTracingModeActive();
 
   // handle simple types: integers, slices, bool
   if (THPUtils_checkLong(index)) {
@@ -549,8 +559,8 @@ PyObject* THPVariable_getitem(PyObject* self, PyObject* index) {
       self_,
       holder.get(),
       variableIndices,
-      /*is_tracing=*/is_tracing,
-      /*disable_slice_optimization=*/disable_slice_optimization,
+      is_tracing,
+      symbolic_or_predispatch_proxy_tracing,
       self_.device(),
       self_.ndimension(),
       specified_dims);
@@ -639,8 +649,8 @@ int THPVariable_setitem(PyObject* self, PyObject* index, PyObject* py_value) {
   }
 
   bool is_tracing = torch::jit::tracer::isTracing();
-  bool disable_slice_optimization =
-      is_tracing || isSymbolicOrPreDispatchProxyTracingModeActive();
+  bool symbolic_or_predispatch_proxy_tracing =
+      isSymbolicOrPreDispatchProxyTracingModeActive();
 
   // handle simple types: integers, slices
   if (THPUtils_checkLong(index) || torch::is_symint(index)) {
@@ -656,6 +666,9 @@ int THPVariable_setitem(PyObject* self, PyObject* index, PyObject* py_value) {
     if (is_tracing) {
       recordSliceTrace(index);
     }
+    bool disable_slice_optimization =
+        is_tracing || (symbolic_or_predispatch_proxy_tracing &&
+                       sliceHasSymbolicBounds(index));
     // See NOTE [ Setting `disable_slice_optimization` when calling C++ tensor
     // indexing functions from Python ]
     dispatch_set_item(
@@ -681,8 +694,8 @@ int THPVariable_setitem(PyObject* self, PyObject* index, PyObject* py_value) {
       self_,
       holder.get(),
       variableIndices,
-      /*is_tracing=*/is_tracing,
-      /*disable_slice_optimization=*/disable_slice_optimization,
+      is_tracing,
+      symbolic_or_predispatch_proxy_tracing,
       self_device,
       self_.ndimension(),
       specified_dims);

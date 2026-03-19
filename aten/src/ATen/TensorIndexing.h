@@ -625,10 +625,13 @@ inline Tensor dispatch_index_put_(
 //      return sliced;
 //    }
 //    ```)
-// 2. When we are doing JIT tracing or Python-dispatch-based ProxyTensor
-//    tracing, i.e. symbolic tracing or pre-dispatch ProxyTensor tracing.
-//    Reason: tracing needs the `self.slice(...)` call to properly trace the
+// 2. When we are doing JIT tracing.
+//    Reason: JIT tracing needs the `self.slice(...)` call to properly trace the
 //    slice operation instead of optimizing it away.
+// 3. When we are doing symbolic or pre-dispatch ProxyTensor tracing on a
+//    Python slice with symbolic bounds.
+//    Reason: the symbolic bound needs the `self.slice(...)` call to survive
+//    tracing instead of being optimized into an alias.
 
 // This mirrors `THPVariable_getitem` in
 // torch/csrc/autograd/python_variable_indexing.cpp See NOTE [ Setting
