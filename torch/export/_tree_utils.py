@@ -56,7 +56,9 @@ def flatten_aoti_runtime_inputs(
         if isinstance(
             value, (bool, float, torch.SymInt, torch.SymFloat, torch.SymBool)
         ):
-            runtime_inputs.append(torch.tensor(value, device="cpu"))
+            # Use the refs tensor constructor so symbolic scalars avoid the
+            # eager tensor_new path, which would guard unbacked Sym* inputs.
+            runtime_inputs.append(torch._refs.tensor(value, device="cpu"))
 
     return runtime_inputs
 
