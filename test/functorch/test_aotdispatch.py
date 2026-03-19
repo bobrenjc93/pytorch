@@ -2445,6 +2445,19 @@ def forward(self, primals_1):
     return (transpose, squeeze, transpose_1, unsqueeze, mul)""",
         )
 
+    def test_output_aliases_intermediate_falls_back_when_view_replay_fails(self):
+        def f(a):
+            tmp = a.sin()
+            return tmp.sum(0, keepdim=True).expand(a.shape[0], -1)
+
+        inp = [torch.randn(4, 3, requires_grad=True)]
+        with patch.object(
+            torch._C._functionalization,
+            "apply_view_meta_sequence",
+            side_effect=RuntimeError("boom"),
+        ):
+            self.verify_aot_autograd(f, inp)
+
     @parametrize("req_grad", [False, True])
     def test_subclass_metadata_mutation(self, req_grad):
         def f(a):

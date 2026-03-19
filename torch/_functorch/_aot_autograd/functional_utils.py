@@ -330,18 +330,25 @@ def gen_alias_from_base(
         and target_view_meta_sequence is not None
         and not any(vm.has_symbolic_inputs for vm in target_view_meta_sequence.sequence)
     ):
-        out = _functionalization.apply_view_meta_sequence(
-            aliased_base_tensor, target_view_meta_sequence.sequence
-        )
-        # If re-applying the ViewMeta sequence succeeded, there should be no more
-        # problems going forward. We just check we got to the target shape and
-        # patch requires_grad flag.
-        if out.shape != target_meta_tensor.shape:
-            raise AssertionError(
-                "incorrect out shape after application of ViewMeta sequence: "
-                f"{tuple(out.shape)} (actual) vs {tuple(target_meta_tensor.shape)} (expected)"
+        try:
+            out = _functionalization.apply_view_meta_sequence(
+                aliased_base_tensor, target_view_meta_sequence.sequence
             )
-        return patch_requires_grad(out)
+        except RuntimeError:
+            # View replay is an optimization. If the saved ViewMeta sequence
+            # fails to replay cleanly at runtime, fall back to the more general
+            # reconstruction below.
+            aot_joint_log.debug(
+                "Failed to replay aliased output ViewMeta sequence; "
+                "falling back to generic alias reconstruction.",
+                exc_info=True,
+            )
+        else:
+            # If re-applying the ViewMeta sequence succeeded, there should be
+            # no more problems going forward. Otherwise, fall back to the
+            # generic reconstruction below.
+            if out.shape == target_meta_tensor.shape:
+                return patch_requires_grad(out)
 
     # Try to do view-replay if possible.
     # fall back to .as_strided() if we can't.
