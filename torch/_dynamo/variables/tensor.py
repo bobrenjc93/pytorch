@@ -1883,6 +1883,7 @@ class TensorVariable(VariableTracker):
             (self.as_proxy(),),
             {},
         )
+        # Run the fake op so the proxy metadata reflects the detached tensor state.
         wrap_fx_proxy(tx, proxy)
         self.synchronize_attributes(tx)
         return self
