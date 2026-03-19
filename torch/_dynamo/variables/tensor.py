@@ -934,7 +934,12 @@ class TensorVariable(VariableTracker):
             "__self__",
         ):
             try:
-                nested = inspect.getattr_static(candidate, attr)
+                if attr == "__self__":
+                    # Bound methods expose the owning backend instance via getattr(),
+                    # while getattr_static() only sees method descriptors.
+                    nested = getattr(candidate, attr)
+                else:
+                    nested = inspect.getattr_static(candidate, attr)
             except AttributeError:
                 continue
 
@@ -1066,9 +1071,10 @@ class TensorVariable(VariableTracker):
                     example_kwargs[key] = example_value
                 else:
                     try:
-                        getattr(example_self.clone(), name)(
-                            *example_args, **example_kwargs
-                        )
+                        # Integral in-place true division always raises before it can
+                        # mutate, so use the original example tensor to preserve eager
+                        # view/layout errors for aliasing cases like expand().
+                        getattr(example_self, name)(*example_args, **example_kwargs)
                     except RuntimeError as e:
                         raise TorchRuntimeError(
                             str(e), getattr(e, "real_stack", None)

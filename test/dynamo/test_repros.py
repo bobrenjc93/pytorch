@@ -51,6 +51,7 @@ from torch._dynamo.testing import (
     CompileCounterWithBackend,
     EagerAndRecordGraphs,
     expectedFailureDynamic,
+    InductorAndRecordGraphs,
     rand_strided,
     same,
     skipIfNotPy312,
@@ -4741,6 +4742,15 @@ class ReproTests(torch._dynamo.test_case.TestCase):
             func, backend_factory=AotEagerAndRecordGraphs
         )
 
+    def test_source_tensor_integral_div_inplace_inductor_backend_object_raises(self):
+        def func(x, y):
+            x.div_(y)
+            return x
+
+        self._assert_integral_inplace_true_division_raises(
+            func, backend_factory=InductorAndRecordGraphs
+        )
+
     def test_source_tensor_integral_aten_div_inplace_overloads_raise(self):
         overloads = {
             "div_.Tensor": lambda x, y: torch.ops.aten.div_.Tensor(x, y),
@@ -4775,6 +4785,20 @@ class ReproTests(torch._dynamo.test_case.TestCase):
                     return x
 
                 self._assert_integral_inplace_true_division_raises(func)
+
+    def test_source_tensor_integral_div_inplace_preserves_view_error(self):
+        def func(x):
+            y = x.expand(2)
+            y.div_(2)
+            return y
+
+        compiled = torch.compile(func, backend="aot_eager", fullgraph=True)
+
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "more than one element of the written-to tensor refers to a single memory location",
+        ):
+            compiled(torch.tensor([1], dtype=torch.int64))
 
     def test_source_tensor_integral_div_inplace_preserves_prior_side_effects(self):
         def func(x, y, values):

@@ -326,6 +326,8 @@ class AotEagerAndRecordGraphs:
 
 
 class InductorAndRecordGraphs:
+    _torchdynamo_uses_aot_autograd = True
+
     def __init__(self) -> None:
         self.graphs: list[torch.fx.GraphModule] = []
         self.inductor_graphs: list[torch.fx.GraphModule] = []
