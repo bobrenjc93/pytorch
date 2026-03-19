@@ -2603,6 +2603,51 @@ def _check_conv_input_same_type_as_parameters(
         )
 
 
+def _is_empty_conv_input(input_tensor: torch.Tensor) -> bool:
+    from torch.fx.experimental.symbolic_shapes import guard_or_false
+
+    return guard_or_false(input_tensor.size(0) == 0) or guard_or_false(
+        input_tensor.size(1) == 0
+    )
+
+
+def _should_check_conv_input_same_type_as_parameters(
+    input_tensor: torch.Tensor,
+) -> bool:
+    if _is_empty_conv_input(input_tensor):
+        return False
+
+    # Eager skips the generic same-type checks for overrideable backends and
+    # lets the backend implementation decide how to handle mixed dtype/device
+    # ConvTranspose inputs.
+    input_device_type = _conv_device_or_fake_device(input_tensor).type
+    return input_tensor.is_mkldnn or input_device_type in (
+        "cpu",
+        "cuda",
+        "meta",
+        "mps",
+    )
+
+
+def _conv_empty_output_dtype(
+    input_tensor: torch.Tensor,
+    weight: torch.Tensor,
+    bias: torch.Tensor | None = None,
+) -> torch.dtype:
+    if input_tensor.is_mkldnn:
+        return input_tensor.dtype
+
+    promote_args = [input_tensor, weight]
+    if bias is not None:
+        promote_args.append(bias)
+
+    _, result_dtype = utils.elementwise_dtypes(
+        *promote_args,
+        type_promotion_kind=ELEMENTWISE_TYPE_PROMOTION_KIND.DEFAULT,
+    )
+    return result_dtype
+
+
 @register_meta(aten.miopen_batch_norm.default)
 def meta_miopen_batch_norm(
     input_tensor: torch.Tensor,
@@ -2653,7 +2698,9 @@ def meta_conv(
     output_padding: list[int],
     groups: int,
 ):
-    if is_transposed:
+    if is_transposed and _should_check_conv_input_same_type_as_parameters(
+        input_tensor
+    ):
         # Keep fake/meta validation aligned with eager so invalid ConvTranspose
         # inputs fail during tracing instead of compiling incorrect kernels.
         _check_conv_input_same_type_as_parameters(input_tensor, weight, bias)
@@ -2675,6 +2722,12 @@ def meta_conv(
     output_channels_dim = 1
     if guard_or_false(input_tensor.size(input_channels_dim) == 0):
         shape_out[output_channels_dim] = 0
+
+    if is_transposed and _is_empty_conv_input(input_tensor):
+        return input_tensor.new_empty(
+            shape_out,
+            dtype=_conv_empty_output_dtype(input_tensor, weight, bias),
+        )
 
     out = input_tensor.new_empty(shape_out)
     return out
@@ -3754,7 +3807,16 @@ def meta_convolution_backward(
             return torch.channels_last_3d
         return torch.contiguous_format
 
-    if transposed:
+    if transposed and _is_empty_conv_input(input_):
+        if output_mask[0]:
+            backend_grad_input = input_.new_empty(input_.size())
+        if output_mask[1]:
+            backend_grad_weight = weight_.new_empty(weight_.size())
+        if output_mask[2]:
+            backend_grad_bias = weight_.new_empty(bias_sizes_opt)
+        return (backend_grad_input, backend_grad_weight, backend_grad_bias)
+
+    if transposed and _should_check_conv_input_same_type_as_parameters(input_):
         _check_conv_input_same_type_as_parameters(input_, weight_)
 
     if output_mask[0]:

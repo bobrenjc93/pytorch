@@ -1855,7 +1855,9 @@ class FakeTensorOperatorInvariants(TestCase):
             grad_output = torch.randn(2, 3, 4, 4, dtype=torch.float16)
             inp = torch.randn(2, 3, 4, 4, dtype=torch.float16)
             weight = torch.randn(3, 3, 1, 1, dtype=torch.float32)
-            error_regex = "should be the same|expected scalar type"
+            error_regex = (
+                "should be the same|expected scalar type|primitive descriptor"
+            )
 
             with self.assertRaisesRegex(RuntimeError, error_regex):
                 torch.ops.aten.convolution_backward(
@@ -1871,6 +1873,53 @@ class FakeTensorOperatorInvariants(TestCase):
                     1,
                     [True, True, False],
                 )
+
+    def test_conv_transpose_empty_input_skips_same_type_check(self):
+        with FakeTensorMode():
+            inp = torch.randn(0, 3, 4, 4, dtype=torch.float16)
+            weight = torch.randn(3, 3, 1, 1, dtype=torch.float32)
+
+            out = torch.ops.aten.convolution(
+                inp,
+                weight,
+                None,
+                [1, 1],
+                [0, 0],
+                [1, 1],
+                True,
+                [0, 0],
+                1,
+            )
+
+            self.assertEqual(out.shape, (0, 3, 4, 4))
+            self.assertEqual(out.dtype, torch.promote_types(inp.dtype, weight.dtype))
+
+    def test_conv_transpose_backward_empty_input_skips_same_type_check(self):
+        with FakeTensorMode():
+            grad_output = torch.randn(0, 3, 4, 4, dtype=torch.float16)
+            inp = torch.randn(0, 3, 4, 4, dtype=torch.float16)
+            weight = torch.randn(3, 3, 1, 1, dtype=torch.float32)
+
+            grad_input, grad_weight, grad_bias = torch.ops.aten.convolution_backward(
+                grad_output,
+                inp,
+                weight,
+                [3],
+                [1, 1],
+                [0, 0],
+                [1, 1],
+                True,
+                [0, 0],
+                1,
+                [True, True, True],
+            )
+
+            self.assertEqual(grad_input.shape, inp.shape)
+            self.assertEqual(grad_input.dtype, inp.dtype)
+            self.assertEqual(grad_weight.shape, weight.shape)
+            self.assertEqual(grad_weight.dtype, weight.dtype)
+            self.assertEqual(grad_bias.shape, (3,))
+            self.assertEqual(grad_bias.dtype, weight.dtype)
 
     @unittest.skipIf(not RUN_CUDA, "requires cuda")
     def test_conv_transpose_device_mismatch_errors(self):
