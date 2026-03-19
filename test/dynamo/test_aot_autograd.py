@@ -148,8 +148,8 @@ class AotAutogradFallbackTests(torch._inductor.test_case.TestCase):
 
     def test_get_backward_output_order_prioritizes_passthrough_leaf_grads(self):
         graph = torch.fx.Graph()
-        grad = graph.placeholder("grad")
-        passthrough_grad = graph.placeholder("passthrough_grad")
+        grad = graph.placeholder("tangents_0")
+        passthrough_grad = graph.placeholder("tangents_1")
         computed_grad = graph.call_function(operator.neg, args=(grad,))
         computed_grad.meta["seq_nr"] = 1
         graph.output((computed_grad, passthrough_grad))
@@ -157,6 +157,20 @@ class AotAutogradFallbackTests(torch._inductor.test_case.TestCase):
         bw_module = torch.fx.GraphModule(torch.nn.Module(), graph)
         self.assertEqual(
             _get_backward_output_order(bw_module, [computed_grad, passthrough_grad]),
+            [1, 0],
+        )
+
+    def test_get_backward_output_order_does_not_prioritize_saved_tensors(self):
+        graph = torch.fx.Graph()
+        saved_tensor = graph.placeholder("primals_1")
+        tangent = graph.placeholder("tangents_1")
+        computed_grad = graph.call_function(operator.neg, args=(tangent,))
+        computed_grad.meta["seq_nr"] = 1
+        graph.output((saved_tensor, computed_grad))
+
+        bw_module = torch.fx.GraphModule(torch.nn.Module(), graph)
+        self.assertEqual(
+            _get_backward_output_order(bw_module, [saved_tensor, computed_grad]),
             [1, 0],
         )
 

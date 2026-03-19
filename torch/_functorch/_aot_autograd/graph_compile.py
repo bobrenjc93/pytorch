@@ -144,6 +144,16 @@ def _get_backward_output_order(
         path.reverse()
         return value, tuple(path)
 
+    def is_tangent_placeholder(value: torch.fx.Node) -> bool:
+        if value.op != "placeholder":
+            return False
+        name = value.name
+        if name.startswith("tangents_"):
+            return name.removeprefix("tangents_").isdigit()
+        if "_tangents_" not in name:
+            return False
+        return name.rsplit("_tangents_", 1)[1].isdigit()
+
     def get_invoke_subgraph_module(
         module: GraphModule, value: torch.fx.Node
     ) -> GraphModule | None:
@@ -198,7 +208,7 @@ def _get_backward_output_order(
         seq_nr = source.meta.get("seq_nr")
         has_seq_nr = isinstance(seq_nr, int)
         topo_idx = get_topo_order(module)[source]
-        if source.op == "placeholder":
+        if is_tangent_placeholder(source):
             priority_kind = PASSTHROUGH_PRIORITY
         elif has_seq_nr:
             priority_kind = SEQ_NR_PRIORITY
@@ -241,10 +251,7 @@ def _get_backward_output_order(
         if len(lhs) != len(rhs):
             extra = lhs[shared_levels:] if len(lhs) > len(rhs) else rhs[shared_levels:]
             if (
-                any(
-                    priority_kind != STABLE_PRIORITY
-                    for priority_kind, _, _ in extra
-                )
+                any(priority_kind != STABLE_PRIORITY for priority_kind, _, _ in extra)
                 or shared_levels == 0
             ):
                 return -1 if len(lhs) > len(rhs) else 1

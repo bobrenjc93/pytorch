@@ -1000,7 +1000,9 @@ def forward(self, L_x_ : torch.Tensor):
     def test_post_acc_grad_hook_tiebreaker_order_matches_eager(self):
         x = torch.randn(10, 10)
 
-        def get_order(module_factory, backend=None, args=()):
+        def get_order(
+            module_factory, backend=None, args=(), compiled_bwd_backend=None
+        ):
             module = module_factory()
             hook_order = []
 
@@ -1015,7 +1017,15 @@ def forward(self, L_x_ : torch.Tensor):
             fn = module
             if backend is not None:
                 fn = torch.compile(module, backend=backend, fullgraph=True)
-            fn(x, *args).sum().backward()
+            compiled_bwd_ctx = (
+                compiled_autograd._enable(
+                    torch.compile(backend=compiled_bwd_backend, fullgraph=True)
+                )
+                if compiled_bwd_backend is not None
+                else contextlib.nullcontext()
+            )
+            with compiled_bwd_ctx:
+                fn(x, *args).sum().backward()
             return hook_order
 
         def reordered_layers():
@@ -1061,6 +1071,15 @@ def forward(self, L_x_ : torch.Tensor):
             eager_order = get_order(module_factory, args=args)
             self.assertEqual(
                 get_order(module_factory, "aot_eager", args=args), eager_order
+            )
+            self.assertEqual(
+                get_order(
+                    module_factory,
+                    "aot_eager",
+                    args=args,
+                    compiled_bwd_backend="aot_eager",
+                ),
+                eager_order,
             )
 
     def test_recompile(self):
