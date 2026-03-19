@@ -2463,6 +2463,28 @@ def forward(self, primals_1):
             make_inputs_subclasses=True,
         )
 
+    @parametrize("req_grad", [False, True])
+    def test_subclass_metadata_mutation_noncontiguous_input(self, req_grad):
+        def f(a):
+            a.transpose_(1, 0)
+            tmp = a.mul(2)
+            return tmp.transpose(1, 0)
+
+        def inp_callable(req_grad):
+            x = torch.ones(2, 4, requires_grad=req_grad).clone()[:, ::2]
+            return [(x,), (x,)]
+
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "Metadata mutations on non-contiguous tensor subclasses are not currently allowed",
+        ):
+            self.verify_aot_autograd(
+                f,
+                partial(inp_callable, req_grad=req_grad),
+                test_mutation=True,
+                make_inputs_subclasses=True,
+            )
+
     def test_input_data_and_metadata_mutation(self):
         def f(a):
             a.t_()

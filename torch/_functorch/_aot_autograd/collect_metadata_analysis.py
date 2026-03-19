@@ -257,6 +257,15 @@ def run_functionalized_fw_and_collect_metadata(
             mutates_metadata = has_metadata_mutation(
                 f_arg, arg, check_only_storage_mutation=False
             )
+            if (
+                mutates_metadata
+                and is_traceable_wrapper_subclass(arg)
+                and not arg.is_contiguous()
+            ):
+                # Wrapper subclasses still replay stale outer metadata for this case.
+                raise RuntimeError(
+                    "Metadata mutations on non-contiguous tensor subclasses are not currently allowed"
+                )
             mutates_storage_metadata = has_metadata_mutation(
                 f_arg, arg, check_only_storage_mutation=True
             )
