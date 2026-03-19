@@ -1892,25 +1892,46 @@ class FakeTensorOperatorInvariants(TestCase):
             self.assertEqual(out.shape, (0, 3, 4, 4))
             self.assertEqual(out.dtype, inp.dtype)
 
-    def test_conv_transpose_empty_channel_promotes_dtype(self):
+    def test_conv_transpose_empty_batch_bias_cast_errors(self):
         with FakeTensorMode():
-            inp = torch.randn(2, 0, 4, 4, dtype=torch.float16)
-            weight = torch.randn(0, 3, 1, 1, dtype=torch.float32)
+            inp = torch.randn(0, 3, 4, 4, dtype=torch.float16)
+            weight = torch.randn(3, 3, 1, 1, dtype=torch.float32)
+            bias = torch.randn(3, dtype=torch.float64)
 
-            out = torch.ops.aten.convolution(
-                inp,
-                weight,
-                None,
-                [1, 1],
-                [0, 0],
-                [1, 1],
-                True,
-                [0, 0],
-                1,
-            )
+            with self.assertRaisesRegex(
+                RuntimeError, "can't be cast to the desired output type"
+            ):
+                torch.ops.aten.convolution(
+                    inp,
+                    weight,
+                    bias,
+                    [1, 1],
+                    [0, 0],
+                    [1, 1],
+                    True,
+                    [0, 0],
+                    1,
+                )
 
-            self.assertEqual(out.shape, (2, 0, 4, 4))
-            self.assertEqual(out.dtype, torch.promote_types(inp.dtype, weight.dtype))
+    def test_conv_transpose_empty_channel_shape_errors(self):
+        with FakeTensorMode():
+            inp = torch.randn(2, 0, 4, 4)
+            weight = torch.randn(0, 3, 1, 1)
+
+            with self.assertRaisesRegex(
+                RuntimeError, "expected weight to be at least 1 at dimension 0"
+            ):
+                torch.ops.aten.convolution(
+                    inp,
+                    weight,
+                    None,
+                    [1, 1],
+                    [0, 0],
+                    [1, 1],
+                    True,
+                    [0, 0],
+                    1,
+                )
 
     def test_conv_transpose_backward_empty_batch_skips_same_type_check(self):
         with FakeTensorMode():
@@ -1939,30 +1960,36 @@ class FakeTensorOperatorInvariants(TestCase):
             self.assertEqual(grad_bias.shape, (3,))
             self.assertEqual(grad_bias.dtype, weight.dtype)
 
+    def test_conv_transpose_backward_empty_batch_preserves_channels_last(self):
+        with FakeTensorMode():
+            grad_output = torch.randn(0, 3, 4, 4).to(memory_format=torch.channels_last)
+            inp = torch.randn(0, 3, 4, 4).to(memory_format=torch.channels_last)
+            weight = torch.randn(3, 3, 1, 1).to(memory_format=torch.channels_last)
+
+            grad_input, grad_weight, _ = torch.ops.aten.convolution_backward(
+                grad_output,
+                inp,
+                weight,
+                [3],
+                [1, 1],
+                [0, 0],
+                [1, 1],
+                True,
+                [0, 0],
+                1,
+                [True, True, False],
+            )
+
+            self.assertTrue(grad_input.is_contiguous(memory_format=torch.channels_last))
+            self.assertTrue(
+                grad_weight.is_contiguous(memory_format=torch.channels_last)
+            )
+
     @unittest.skipIf(not RUN_CUDA, "requires cuda")
     def test_conv_transpose_device_mismatch_errors(self):
         with FakeTensorMode():
             inp = torch.randn(2, 3, 4, 4, device="cuda")
             weight = torch.randn(3, 3, 1, 1, device="cpu")
-
-            with self.assertRaisesRegex(RuntimeError, "should be the same"):
-                torch.ops.aten.convolution(
-                    inp,
-                    weight,
-                    None,
-                    [1, 1],
-                    [0, 0],
-                    [1, 1],
-                    True,
-                    [0, 0],
-                    1,
-                )
-
-    @unittest.skipIf(not RUN_CUDA, "requires cuda")
-    def test_conv_transpose_empty_channel_device_mismatch_errors(self):
-        with FakeTensorMode():
-            inp = torch.randn(2, 0, 4, 4, device="cuda")
-            weight = torch.randn(0, 3, 1, 1, device="cpu")
 
             with self.assertRaisesRegex(RuntimeError, "should be the same"):
                 torch.ops.aten.convolution(
