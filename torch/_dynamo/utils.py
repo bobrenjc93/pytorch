@@ -2941,6 +2941,13 @@ def dataclass_fields(cls: Any) -> Any:
 iter_next = next
 
 
+def normalize_count_iter(count_iter: Any) -> tuple[Any, Any]:
+    _, args = count_iter.__reduce__()
+    if len(args) == 1:
+        return (args[0], 1)
+    return args
+
+
 def normalize_range_iter(range_iter: Any) -> tuple[int, int, int]:
     _, (range_obj,), maybe_idx = range_iter.__reduce__()
     # In 3.12+, `maybe_idx` could be None, and `range_obj.start` would've been
