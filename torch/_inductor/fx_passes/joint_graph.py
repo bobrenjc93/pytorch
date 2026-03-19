@@ -2,6 +2,7 @@
 import functools
 import itertools
 import logging
+import numbers
 import operator
 import typing
 from collections import Counter
@@ -95,13 +96,12 @@ def remove_no_ops(
                             return True
             return False
 
+        def is_literal_number(arg: Any, value: int) -> bool:
+            return isinstance(arg, numbers.Number) and arg == value
+
         def replace_no_op(node, replace_input_index):
             replacement = node.args[replace_input_index]
-
-            # https://github.com/pytorch/pytorch/issues/86128 causes
-            # non-Tensor inputs even for ops with only Tensor inputs.
-            # TODO - decompose/type promote to avoid this
-            if not all(isinstance(arg, torch.fx.Node) for arg in node.args):
+            if not isinstance(replacement, torch.fx.Node):
                 return
 
             # https://github.com/pytorch/pytorch/issues/174187
@@ -129,35 +129,63 @@ def remove_no_ops(
             replacement.meta.update(node.meta)
             graph.erase_node(node)
 
-        for node in graph.find_nodes(op="call_function", target=aten.add.Tensor):
-            # TODO handle Tensor-Scalar adds, it's a different schema
+        for node in itertools.chain(
+            graph.find_nodes(op="call_function", target=aten.add.Tensor),
+            graph.find_nodes(op="call_function", target=aten.add.Scalar),
+        ):
             if len(node.args) == 2:
-                if (
-                    not any(e in zeros for e in node.args)
-                    or node.kwargs.get("alpha", 1) != 1
-                ):
+                if node.kwargs.get("alpha", 1) != 1:
                     continue
 
-                replace_index = 1 if node.args[0] in zeros else 0
+                if node.target is aten.add.Tensor:
+                    if not any(e in zeros for e in node.args):
+                        continue
+                    replace_index = 1 if node.args[0] in zeros else 0
+                else:
+                    if not is_literal_number(node.args[1], 0):
+                        continue
+                    replace_index = 0
                 replace_no_op(node, replace_index)
 
-        for node in graph.find_nodes(op="call_function", target=aten.sub.Tensor):
+        for node in itertools.chain(
+            graph.find_nodes(op="call_function", target=aten.sub.Tensor),
+            graph.find_nodes(op="call_function", target=aten.sub.Scalar),
+        ):
             if len(node.args) == 2:
-                if node.args[1] not in zeros or node.kwargs.get("alpha", 1) != 1:
+                if node.kwargs.get("alpha", 1) != 1:
+                    continue
+                if node.target is aten.sub.Tensor:
+                    if node.args[1] not in zeros:
+                        continue
+                elif not is_literal_number(node.args[1], 0):
                     continue
 
                 replace_no_op(node, 0)
 
-        for node in graph.find_nodes(op="call_function", target=aten.mul.Tensor):
+        for node in itertools.chain(
+            graph.find_nodes(op="call_function", target=aten.mul.Tensor),
+            graph.find_nodes(op="call_function", target=aten.mul.Scalar),
+        ):
             if len(node.args) == 2:
-                if not any(e in ones for e in node.args):
-                    continue
-
-                replace_input_index = 1 if node.args[0] in ones else 0
+                if node.target is aten.mul.Tensor:
+                    if not any(e in ones for e in node.args):
+                        continue
+                    replace_input_index = 1 if node.args[0] in ones else 0
+                else:
+                    if not is_literal_number(node.args[1], 1):
+                        continue
+                    replace_input_index = 0
                 replace_no_op(node, replace_input_index)
 
-        for node in graph.find_nodes(op="call_function", target=aten.div.Tensor):
-            if len(node.args) == 2 and node.args[1] in ones:
+        for node in itertools.chain(
+            graph.find_nodes(op="call_function", target=aten.div.Tensor),
+            graph.find_nodes(op="call_function", target=aten.div.Scalar),
+        ):
+            if len(node.args) != 2:
+                continue
+            if node.target is aten.div.Tensor and node.args[1] in ones:
+                replace_no_op(node, 0)
+            elif node.target is aten.div.Scalar and is_literal_number(node.args[1], 1):
                 replace_no_op(node, 0)
 
         # meta tensors returned from the graph have no data and can be replaced with empty_strided

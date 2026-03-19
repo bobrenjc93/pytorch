@@ -448,8 +448,7 @@ def _resolve_python_scalar_aten_overload(
     kwargs: dict[str, Any],
 ) -> torch._ops.OpOverload:
     if (
-        not target._schema.overload_name.startswith("Tensor")
-        or not target._schema.name.startswith("aten::")
+        not target._schema.name.startswith("aten::")
         or not torch._C._should_allow_numbers_as_tensors(target.overloadpacket.__name__)
         or not (_contains_python_scalar(args) or _contains_python_scalar(kwargs))
     ):

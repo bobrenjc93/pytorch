@@ -1,6 +1,7 @@
 # mypy: allow-untyped-defs
 import functools
 import itertools
+import numbers
 
 import torch
 
@@ -80,7 +81,21 @@ def recover_original_precision_folded_computation_ops(gm):
                     node.replace_input_with(old_input, new_input)
 
 
-_binary_ops = [aten.add.Tensor, aten.sub.Tensor, aten.mul.Tensor, aten.div.Tensor]
+_binary_tensor_targets = {
+    aten.add.Tensor: aten.add.Tensor,
+    aten.add.Scalar: aten.add.Tensor,
+    aten.sub.Tensor: aten.sub.Tensor,
+    aten.sub.Scalar: aten.sub.Tensor,
+    aten.mul.Tensor: aten.mul.Tensor,
+    aten.mul.Scalar: aten.mul.Tensor,
+    aten.div.Tensor: aten.div.Tensor,
+    aten.div.Scalar: aten.div.Tensor,
+}
+_binary_ops = list(_binary_tensor_targets)
+
+
+def _tensor_binary_target(target):
+    return _binary_tensor_targets[target]
 
 
 @functools.cache
@@ -181,11 +196,7 @@ def binary_folding_init():
         # conv.bias
         if conv_node.args[1] is not None and conv_node.args[1].op != "get_attr":
             return False
-        if (
-            not isinstance(other, int)
-            and not isinstance(other, float)
-            and other.op != "get_attr"
-        ):
+        if not isinstance(other, numbers.Number) and other.op != "get_attr":
             return False
 
         if len(conv_node.args[1].users) != 1:
@@ -217,7 +228,7 @@ def binary_folding_init():
 
             if not _op_not_broadcasting_with_conv(weight_meta_value, other_meta_value):
                 return False
-        elif not isinstance(other, float):
+        elif not isinstance(other, numbers.Number):
             return False
 
         return True
@@ -235,11 +246,7 @@ def binary_folding_init():
             return False
         if bias_node is not None and bias_node.op != "get_attr":
             return False
-        if (
-            not isinstance(other, int)
-            and not isinstance(other, float)
-            and other.op != "get_attr"
-        ):
+        if not isinstance(other, numbers.Number) and other.op != "get_attr":
             return False
 
         if len(weight_node.users) != 1:
@@ -273,7 +280,7 @@ def binary_folding_init():
                 weight_meta_value, other_meta_value, has_reshape
             ):
                 return False
-        elif not isinstance(other, float):
+        elif not isinstance(other, numbers.Number):
             return False
 
         return True
@@ -306,7 +313,7 @@ def binary_folding_init():
         return False
 
     def resize_scalar_or_tensor_to_shape(graph, other, shape, weight):
-        if isinstance(other, float):
+        if isinstance(other, numbers.Number):
             with torch.utils._python_dispatch._disable_current_modes():
                 other_tensor = torch.tensor(
                     other, dtype=weight.dtype, device=weight.device
@@ -348,7 +355,8 @@ def binary_folding_init():
         conv_args = list(conv_node.args)
         weight_meta_value = conv_node.args[1].meta.get("val")
         bias = conv_args[2]
-        if binary_node.target in [aten.add.Tensor, aten.sub.Tensor]:
+        binary_target = _tensor_binary_target(binary_node.target)
+        if binary_target in [aten.add.Tensor, aten.sub.Tensor]:
             other_reshape = resize_scalar_or_tensor_to_shape(
                 graph,
                 other,
@@ -357,12 +365,12 @@ def binary_folding_init():
             )
             new_bias = graph.create_node(
                 "call_function",
-                binary_node.target,
+                binary_target,
                 (0 if bias is None else bias, other_reshape),
             )
             conv_args[2] = new_bias
         else:
-            assert binary_node.target in [aten.mul.Tensor, aten.div.Tensor]
+            assert binary_target in [aten.mul.Tensor, aten.div.Tensor]
             weight_broadcast_shape = [1 for _ in range(len(weight_meta_value.shape))]
             weight_broadcast_shape[0] = weight_meta_value.size(0)
             other_reshape1 = resize_scalar_or_tensor_to_shape(
@@ -372,7 +380,7 @@ def binary_folding_init():
                 weight_meta_value,
             )
             new_weight = graph.create_node(
-                "call_function", binary_node.target, (conv_args[1], other_reshape1)
+                "call_function", binary_target, (conv_args[1], other_reshape1)
             )
             new_weight.meta.update(conv_args[1].meta)
             conv_args[1] = new_weight
@@ -384,7 +392,7 @@ def binary_folding_init():
                     weight_meta_value,
                 )
                 new_bias = graph.create_node(
-                    "call_function", binary_node.target, (bias, other_reshape)
+                    "call_function", binary_target, (bias, other_reshape)
                 )
                 new_bias.meta.update(bias.meta)
                 conv_args[2] = new_bias
@@ -406,7 +414,8 @@ def binary_folding_init():
             linear_node.args[0] if linear_node.target is aten.addmm.default else None
         )
         weight_meta_value = weight_node.meta.get("val")
-        if binary_node.target in [aten.add.Tensor, aten.sub.Tensor]:
+        binary_target = _tensor_binary_target(binary_node.target)
+        if binary_target in [aten.add.Tensor, aten.sub.Tensor]:
             other_reshape = resize_scalar_or_tensor_to_shape(
                 graph,
                 other,
@@ -415,7 +424,7 @@ def binary_folding_init():
             )
             new_bias_node = graph.create_node(
                 "call_function",
-                binary_node.target,
+                binary_target,
                 (0 if bias_node is None else bias_node, other_reshape),
             )
             return graph.create_node(
@@ -424,7 +433,7 @@ def binary_folding_init():
                 (new_bias_node, input_node, weight_node),
             )
         else:
-            assert binary_node.target in [aten.mul.Tensor, aten.div.Tensor]
+            assert binary_target in [aten.mul.Tensor, aten.div.Tensor]
             weight_broadcast_shape = [1, weight_meta_value.size(1)]
             other_reshape1 = resize_scalar_or_tensor_to_shape(
                 graph,
@@ -433,7 +442,7 @@ def binary_folding_init():
                 weight_meta_value,
             )
             new_weight_node = graph.create_node(
-                "call_function", binary_node.target, (weight_node, other_reshape1)
+                "call_function", binary_target, (weight_node, other_reshape1)
             )
             new_weight_node.meta.update(weight_node.meta)
             if bias_node is not None:
@@ -444,7 +453,7 @@ def binary_folding_init():
                     weight_meta_value,
                 )
                 new_bias_node = graph.create_node(
-                    "call_function", binary_node.target, (bias_node, other_reshape)
+                    "call_function", binary_target, (bias_node, other_reshape)
                 )
                 new_bias_node.meta.update(bias_node.meta)
                 return graph.create_node(

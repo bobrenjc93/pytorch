@@ -324,7 +324,11 @@ class TestCustomBackendAPI(torch._dynamo.test_case.TestCase):
         my_backend = aot_autograd(fw_compiler=my_compiler)
 
         def f(x):
-            return x + 2, torch.div(x, 2, rounding_mode="floor")
+            return (
+                x + 2,
+                torch.div(x, 2, rounding_mode="floor"),
+                torch.floor_divide(x, 2),
+            )
 
         x = torch.randn(3, 3)
         self.assertTrue(
@@ -333,8 +337,10 @@ class TestCustomBackendAPI(torch._dynamo.test_case.TestCase):
         self.assertIsNotNone(traced_targets)
         self.assertIn(torch.ops.aten.add.Scalar, traced_targets)
         self.assertIn(torch.ops.aten.div.Scalar_mode, traced_targets)
+        self.assertIn(torch.ops.aten.floor_divide.Scalar, traced_targets)
         self.assertNotIn(torch.ops.aten.add.Tensor, traced_targets)
         self.assertNotIn(torch.ops.aten.div.Tensor_mode, traced_targets)
+        self.assertNotIn(torch.ops.aten.floor_divide.default, traced_targets)
 
     def test_aot_autograd_uses_scalar_overload_for_python_numbers_in_hops(self):
         from functorch.compile import make_boxed_func
@@ -360,10 +366,18 @@ class TestCustomBackendAPI(torch._dynamo.test_case.TestCase):
         my_backend = aot_autograd(fw_compiler=my_compiler)
 
         def true_fn(x):
-            return x + 2, torch.div(x, 2, rounding_mode="floor")
+            return (
+                x + 2,
+                torch.div(x, 2, rounding_mode="floor"),
+                torch.floor_divide(x, 2),
+            )
 
         def false_fn(x):
-            return x + 3, torch.div(x, 3, rounding_mode="floor")
+            return (
+                x + 3,
+                torch.div(x, 3, rounding_mode="floor"),
+                torch.floor_divide(x, 3),
+            )
 
         def f(x):
             return torch.cond(x.sum() > 0, true_fn, false_fn, (x,))
@@ -375,8 +389,10 @@ class TestCustomBackendAPI(torch._dynamo.test_case.TestCase):
         self.assertIsNotNone(traced_targets)
         self.assertIn(torch.ops.aten.add.Scalar, traced_targets)
         self.assertIn(torch.ops.aten.div.Scalar_mode, traced_targets)
+        self.assertIn(torch.ops.aten.floor_divide.Scalar, traced_targets)
         self.assertNotIn(torch.ops.aten.add.Tensor, traced_targets)
         self.assertNotIn(torch.ops.aten.div.Tensor_mode, traced_targets)
+        self.assertNotIn(torch.ops.aten.floor_divide.default, traced_targets)
 
     def test_lookup_backend(self):
         from torch._dynamo import lookup_backend
