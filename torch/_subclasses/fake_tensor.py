@@ -1068,10 +1068,25 @@ class FakeTensor(Tensor):
             )
         return self.nested_int_memo * coeff
 
+    def _is_nonzero(self) -> bool | SymBool:
+        torch._check(
+            self.numel() != 0,
+            lambda: "Boolean value of Tensor with no values is ambiguous",
+        )
+        torch._check(
+            self.numel() < 2,
+            lambda: "Boolean value of Tensor with more than one value is ambiguous",
+        )
+        if self.constant is not None:
+            with no_dispatch():
+                return bool(self.constant)
+        scalar = aten._local_scalar_dense.default(self)
+        if isinstance(scalar, SymBool):
+            return cast(bool | SymBool, scalar)
+        return cast(bool | SymBool, scalar != 0)
+
     def __bool__(self) -> bool:
-        # Route FakeTensor truthiness through aten.is_nonzero instead of the
-        # default local-scalar path so fake-specific scalar handling applies.
-        return bool(aten.is_nonzero.default(self))
+        return bool(self._is_nonzero())
 
     # Similar to FunctionalTensor.tolist
     def tolist(self) -> Any:

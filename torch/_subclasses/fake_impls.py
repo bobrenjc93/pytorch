@@ -855,22 +855,7 @@ def local_scalar_dense(
 def is_nonzero(
     fake_mode: FakeTensorMode, func: OpOverload, arg: FakeTensor
 ) -> bool | torch.SymBool:
-    torch._check(
-        arg.numel() != 0,
-        lambda: "Boolean value of Tensor with no values is ambiguous",
-    )
-    torch._check(
-        arg.numel() < 2,
-        lambda: "Boolean value of Tensor with more than one value is ambiguous",
-    )
-    if arg.constant is not None:
-        with no_python_dispatcher():
-            return torch.ops.aten.is_nonzero.default(arg.constant)
-    if (scalar := arg.item_memo) is not None:
-        if isinstance(scalar, torch.SymBool):
-            return typing_cast(bool | torch.SymBool, scalar)
-        return typing_cast(bool | torch.SymBool, scalar != 0)
-    raise DataDependentOutputException(func)
+    return arg._is_nonzero()
 
 
 @register_op_impl(torch.ops.aten.nonzero_numpy.default)
