@@ -223,7 +223,7 @@ from .higher_order_ops import (
     LocalMapWrappedHigherOrderVariable,
     TorchHigherOrderOperatorVariable,
 )
-from .iter import ItertoolsVariable
+from .iter import CountIteratorVariable, ItertoolsVariable
 from .lazy import LazyConstantVariable, LazyVariableTracker
 from .lists import (
     BaseListVariable,
