@@ -507,7 +507,7 @@ def softplus(
     return torch.where(scaled_input > threshold, a, rhs)
 
 
-@aten.hardshrink.default.py_impl(DispatchKey.CompositeImplicitAutograd)
+@aten.hardshrink.out.py_impl(DispatchKey.CompositeImplicitAutograd)
 @aten.hardshrink.default.py_impl(DispatchKey.Autograd)
 @register_decomposition(aten.hardshrink)
 @out_wrapper()
@@ -519,6 +519,7 @@ def hardshrink(a: TensorLikeType, lambd: float = 0.5):
     return torch.where(torch.abs(a) <= lambd, 0, a)
 
 
+@aten.softshrink.out.py_impl(DispatchKey.CompositeImplicitAutograd)
 @aten.softshrink.default.py_impl(DispatchKey.CompositeImplicitAutograd)
 @aten.softshrink.default.py_impl(DispatchKey.Autograd)
 @register_decomposition(aten.softshrink)

@@ -1370,20 +1370,25 @@ class HasDecompTest(TestCase):
         core_aten_ops = useful_decomps - core_decomps
         self.assertExpected("".join(sorted(op.name() + "\n" for op in core_aten_ops)))
 
-    def test_autograd_python_decompositions_also_register_cia(self):
-        ops_missing_cia = sorted(
+    def test_autograd_python_decomposition_cia_exceptions_are_known(self):
+        ops_missing_cia = {
             op.name()
             for op in decomposition_table
             if isinstance(op, torch._ops.OpOverload)
             and DispatchKey.Autograd in op.py_kernels
             and DispatchKey.CompositeImplicitAutograd not in op.py_kernels
-        )
-        self.assertFalse(
+        }
+        self.assertSetEqual(
             ops_missing_cia,
+            {
+                # These default overloads already have Vulkan / Metal kernels,
+                # which map through AutogradOther and cannot coexist with CIA.
+                "aten::hardshrink",
+                "aten::upsample_bilinear2d",
+            },
             msg=(
-                "Python decompositions registered to DispatchKey.Autograd should "
-                "also register DispatchKey.CompositeImplicitAutograd. Missing: "
-                + ", ".join(ops_missing_cia)
+                "Autograd-only Python decompositions should be limited to "
+                "known AutogradOther backend conflicts."
             ),
         )
 

@@ -2369,6 +2369,7 @@ def nop_decomposition(x):
 # Also register to the Autograd and CompositeImplicitAutograd dispatch keys, so
 # this decomp runs both above autograd and in inference-mode tracing.
 # native_batch_norm needs to decompose into other ops before autograd.
+@aten.cudnn_batch_norm.out.py_impl(DispatchKey.CompositeImplicitAutograd)
 @aten.cudnn_batch_norm.default.py_impl(DispatchKey.CompositeImplicitAutograd)
 @aten.cudnn_batch_norm.default.py_impl(DispatchKey.Autograd)
 @register_decomposition(aten.cudnn_batch_norm)
@@ -3983,7 +3984,7 @@ def upsample_linear1d(
 @register_decomposition(
     [aten.upsample_bilinear2d.default, aten.upsample_bilinear2d.out]
 )
-@aten.upsample_bilinear2d.default.py_impl(DispatchKey.CompositeImplicitAutograd)
+@aten.upsample_bilinear2d.out.py_impl(DispatchKey.CompositeImplicitAutograd)
 @aten.upsample_bilinear2d.default.py_impl(DispatchKey.Autograd)
 @out_wrapper()
 def upsample_bilinear2d(
@@ -4797,6 +4798,7 @@ def matmul(tensor1, tensor2, *, is_out=False):
 
 
 @register_decomposition([aten.upsample_bicubic2d.default, aten.upsample_bicubic2d.out])
+@aten.upsample_bicubic2d.out.py_impl(DispatchKey.CompositeImplicitAutograd)
 @aten.upsample_bicubic2d.default.py_impl(DispatchKey.CompositeImplicitAutograd)
 @aten.upsample_bicubic2d.default.py_impl(DispatchKey.Autograd)
 @out_wrapper()
@@ -5126,6 +5128,7 @@ def out_dtype_decomp(*args, **kwargs):
 
 
 @register_decomposition(aten.multi_margin_loss)
+@aten.multi_margin_loss.out.py_impl(DispatchKey.CompositeImplicitAutograd)
 @aten.multi_margin_loss.default.py_impl(DispatchKey.CompositeImplicitAutograd)
 @aten.multi_margin_loss.default.py_impl(DispatchKey.Autograd)
 @out_wrapper()
@@ -5174,6 +5177,9 @@ def multi_margin_loss(
 
 
 @register_decomposition(aten.multilabel_margin_loss_forward)
+@aten.multilabel_margin_loss_forward.output.py_impl(
+    DispatchKey.CompositeImplicitAutograd
+)
 @aten.multilabel_margin_loss_forward.default.py_impl(
     DispatchKey.CompositeImplicitAutograd
 )
