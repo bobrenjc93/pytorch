@@ -27,11 +27,7 @@ import torch.utils.dlpack
 from torch import Tensor
 from torch._dynamo import config as dynamo_config
 from torch._dynamo.callback import callback_handler, CallbackTrigger
-from torch._dynamo.utils import (
-    CompileEventLogger,
-    dynamo_timed,
-    get_metrics_context,
-)
+from torch._dynamo.utils import CompileEventLogger, dynamo_timed, get_metrics_context
 from torch._guards import (
     compile_context,
     CompileContext,

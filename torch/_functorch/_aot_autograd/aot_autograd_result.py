@@ -22,7 +22,7 @@ import json
 import logging
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Sequence
-from copy import copy, deepcopy
+from copy import copy
 from dataclasses import dataclass
 from typing import Any, Generic, TYPE_CHECKING, TypeVar
 
@@ -36,6 +36,7 @@ from torch._inductor.output_code import (
 )
 from torch._inductor.utils import should_use_remote_fx_graph_cache
 from torch._logging import getArtifactLogger
+
 from .runtime_wrappers import (
     AOTDispatchAutograd,
     AOTDispatchSubclassWrapper,
@@ -309,18 +310,25 @@ class SerializedGraphModule:
 
 
 def serialize_graph_module(gm: torch.fx.GraphModule) -> SerializedGraphModule:
-    # Serialize a copy so lazy backward compilation can keep using the live graph.
-    with torch._subclasses.fake_tensor.unset_fake_temporarily():
-        serialized_gm = deepcopy(gm)
+    # Serialize a sanitized view of the graph, then restore the live metadata so
+    # compiled autograd and later lazy-backward work can keep using the original graph.
+    nodes = list(gm.graph.nodes)
+    original_gm_meta = gm.meta
+    original_node_metas = [node.meta for node in nodes]
 
-    serialized_gm.meta = {}
-    for node in serialized_gm.graph.nodes:
-        placeholder_meta = {}
-        if node.op == "placeholder" and "val" in node.meta:
-            placeholder_meta["val"] = node.meta["val"]
-        # pyrefly: ignore [implicit-any]
-        node.meta = placeholder_meta
-    return SerializedGraphModule(serialized_gm)
+    try:
+        gm.meta = {}
+        for node, original_meta in zip(nodes, original_node_metas):
+            placeholder_meta = {}
+            if node.op == "placeholder" and "val" in original_meta:
+                placeholder_meta["val"] = original_meta["val"]
+            # pyrefly: ignore [implicit-any]
+            node.meta = placeholder_meta
+        return SerializedGraphModule(gm)
+    finally:
+        gm.meta = original_gm_meta
+        for node, original_meta in zip(nodes, original_node_metas):
+            node.meta = original_meta
 
 
 TForward = TypeVar("TForward", bound="InductorOutput[Any]")

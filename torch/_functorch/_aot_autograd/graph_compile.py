@@ -2089,16 +2089,10 @@ def _aot_stage2b_bw_compile(
 
                     placeholder_list[i] = ph_arg.as_strided(ph_size, real_stride)
             compiled_bw_func = None
-            should_eagerly_compile_backward = (
+            if (
                 num_symints_saved_for_bw > 0
                 or aot_config.force_non_lazy_backward_lowering
-                # Autograd cache entries need both the forward and backward
-                # artifacts. If we leave the backward lazy here, graphs with no
-                # saved symints can repeatedly miss the cache because there is
-                # nothing to serialize yet.
-                or aot_config.cache_info is not None
-            )
-            if should_eagerly_compile_backward:
+            ):
                 try:
                     # See Note: [Backward graph lazy lowering]
                     with torch._subclasses.fake_tensor.unset_fake_temporarily():
