@@ -625,8 +625,8 @@ inline Tensor dispatch_index_put_(
 //      return sliced;
 //    }
 //    ```)
-// 2. When we are doing JIT tracing or ProxyTensor tracing, including
-//    pre-dispatch ProxyTensor tracing.
+// 2. When we are doing JIT tracing or Python-dispatch-based ProxyTensor
+//    tracing, i.e. symbolic tracing or pre-dispatch ProxyTensor tracing.
 //    Reason: tracing needs the `self.slice(...)` call to properly trace the
 //    slice operation instead of optimizing it away.
 

@@ -3,6 +3,7 @@
 #include <torch/csrc/DynamicTypes.h>
 #include <torch/csrc/Exceptions.h>
 #include <torch/csrc/Export.h>
+#include <torch/csrc/PyInterpreter.h>
 #include <torch/csrc/autograd/function.h>
 #include <torch/csrc/autograd/utils/wrap_outputs.h>
 #include <torch/csrc/autograd/variable.h>
@@ -273,11 +274,37 @@ static bool isPreDispatchProxyTracingModeActive() {
   return maybe_mode.get() != Py_None;
 }
 
-static bool isProxyTracingModeActive() {
-  if (c10::impl::TorchDispatchModeTLS::get_mode(
-          c10::impl::TorchDispatchModeKey::PROXY)
-          .has_value()) {
+static bool shouldDisableSliceOptimizationForProxyMode(PyObject* mode) {
+  THPObjectPtr pre_dispatch(PyObject_GetAttrString(mode, "pre_dispatch"));
+  if (!pre_dispatch) {
+    throw python_error();
+  }
+  int is_pre_dispatch = PyObject_IsTrue(pre_dispatch.get());
+  if (is_pre_dispatch < 0) {
+    throw python_error();
+  }
+  if (is_pre_dispatch) {
     return true;
+  }
+
+  THPObjectPtr tracing_mode(PyObject_GetAttrString(mode, "tracing_mode"));
+  if (!tracing_mode) {
+    throw python_error();
+  }
+  int tracing_mode_cmp =
+      PyUnicode_CompareWithASCIIString(tracing_mode.get(), "symbolic");
+  if (tracing_mode_cmp == -1 && PyErr_Occurred()) {
+    throw python_error();
+  }
+  return tracing_mode_cmp == 0;
+}
+
+static bool isSymbolicOrPreDispatchProxyTracingModeActive() {
+  if (auto maybe_mode = c10::impl::TorchDispatchModeTLS::get_mode(
+          c10::impl::TorchDispatchModeKey::PROXY);
+      maybe_mode.has_value()) {
+    return shouldDisableSliceOptimizationForProxyMode(
+        maybe_mode.value()->ptr(getPyInterpreter()));
   }
 
   if (!c10::impl::tls_is_dispatch_key_included(c10::DispatchKey::PreDispatch)) {
@@ -484,7 +511,7 @@ PyObject* THPVariable_getitem(PyObject* self, PyObject* index) {
 
   bool is_tracing = torch::jit::tracer::isTracing();
   bool disable_slice_optimization =
-      is_tracing || isProxyTracingModeActive();
+      is_tracing || isSymbolicOrPreDispatchProxyTracingModeActive();
 
   // handle simple types: integers, slices, bool
   if (THPUtils_checkLong(index)) {
@@ -613,7 +640,7 @@ int THPVariable_setitem(PyObject* self, PyObject* index, PyObject* py_value) {
 
   bool is_tracing = torch::jit::tracer::isTracing();
   bool disable_slice_optimization =
-      is_tracing || isProxyTracingModeActive();
+      is_tracing || isSymbolicOrPreDispatchProxyTracingModeActive();
 
   // handle simple types: integers, slices
   if (THPUtils_checkLong(index) || torch::is_symint(index)) {
