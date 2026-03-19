@@ -797,7 +797,7 @@ class TensorVariable(VariableTracker):
         ):
             try:
                 value = getattr(tensor, accessor)()
-            except (AttributeError, NotImplementedError, RuntimeError):
+            except (AttributeError, RuntimeError):
                 continue
 
             if isinstance(value, torch.Tensor):
@@ -931,6 +931,7 @@ class TensorVariable(VariableTracker):
             "compiler_name",
             "func",
             "__wrapped__",
+            "__self__",
         ):
             try:
                 nested = inspect.getattr_static(candidate, attr)

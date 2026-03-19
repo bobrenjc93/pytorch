@@ -4707,6 +4707,16 @@ class ReproTests(torch._dynamo.test_case.TestCase):
             func, backend_factory=BackendWrapper
         )
 
+    def test_source_tensor_integral_div_inplace_bound_method_backend_raises(self):
+        def func(x, y):
+            x.div_(y)
+            return x
+
+        self._assert_integral_inplace_true_division_raises(
+            func,
+            backend_factory=lambda: CompileCounterWithBackend("aot_eager").__call__,
+        )
+
     def test_source_tensor_integral_div_inplace_dynamic_aot_backend_raises(self):
         def func(x, y):
             x.div_(y)
