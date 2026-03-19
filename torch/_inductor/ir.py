@@ -4679,6 +4679,8 @@ class Buffer(IRNode, CodegenSymbol):
         return ()
 
     def get_read_names(self) -> OrderedSet[str]:
+        if isinstance(self.layout, NonOwningLayout):
+            return OrderedSet([self.layout.view.get_name()])
         return OrderedSet([self.get_name()])
 
     @cache_on_self_and_args("Buffer")
@@ -6136,6 +6138,7 @@ class ConcatKernel(NopKernel):
             if cls.can_realize_into_without_copy(src, dst):
                 # pyrefly: ignore [missing-attribute]
                 src.data.layout = NonOwningLayout(dst)
+                V.graph.register_buffer_alias(dst.get_name(), src)
                 return src.data
         # introduce a copy
         pw = Pointwise.create(

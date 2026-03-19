@@ -471,6 +471,7 @@ class GraphLowering(torch.fx.Interpreter):
         self.mutated_input_idxs: list[int] = []
         self.name_to_buffer: dict[str, ir.Buffer] = {}
         self.name_to_users: defaultdict[str, list[ir.IRNode]] = defaultdict(list)
+        self.name_to_aliases: defaultdict[str, list[ir.StorageBox]] = defaultdict(list)
         self.name_to_op: dict[str, ir.Operation] = {}
         self.creation_time = time.time()
         self.name = name  # type: ignore[assignment]
@@ -1076,12 +1077,46 @@ class GraphLowering(torch.fx.Interpreter):
 
         register(node_output)
 
+    def register_buffer_alias(self, name: str, box: ir.StorageBox) -> None:
+        aliases = self.name_to_aliases[name]
+        if not any(existing is box for existing in aliases):
+            aliases.append(box)
+
+    def detach_buffer_aliases(self, name: str) -> None:
+        if name not in self.name_to_aliases:
+            return
+
+        for alias_box in self.name_to_aliases[name]:
+            alias_buffer = alias_box.data
+            if not isinstance(alias_buffer, ir.Buffer):
+                continue
+            if not isinstance(alias_buffer.layout, ir.NonOwningLayout):
+                continue
+            if name not in alias_buffer.get_inputs_that_alias_output():
+                continue
+
+            device = alias_buffer.get_device()
+            assert device is not None
+            detached = ir.Pointwise.create(
+                device=device,
+                dtype=alias_buffer.get_dtype(),
+                inner_fn=alias_buffer.make_loader(),
+                ranges=alias_buffer.get_size(),
+                origin_node=alias_buffer.get_origin_node(),
+                traceback=alias_buffer.get_traceback(),
+            )
+            detached.realize()
+            assert isinstance(detached.data, ir.StorageBox), type(detached.data)
+            assert isinstance(detached.data.data, ir.Buffer), type(detached.data.data)
+            alias_box.data = detached.data.data
+
     def mark_buffer_mutated(self, name: str) -> None:
         """
         When a buffer is mutated we need to make sure all the reads to
         the old version are realized before the mutation happens.
         """
         assert isinstance(name, str)
+        self.detach_buffer_aliases(name)
         self.mutated_buffers.add(name)
 
         if name not in self.name_to_users:
