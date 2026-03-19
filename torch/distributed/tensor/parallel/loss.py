@@ -114,9 +114,7 @@ def _propagate_tensor_meta(
     dtensor_type: type[DTensor] | None = None,
 ) -> TensorMeta:
     input_dtensor = cast(DTensor, args[0])
-    dtensor_type = (
-        input_dtensor.__class__ if dtensor_type is None else dtensor_type
-    )
+    dtensor_type = input_dtensor.__class__ if dtensor_type is None else dtensor_type
     dispatcher = dtensor_type._op_dispatcher
     op_info = dispatcher.unwrap_to_op_info(op_call, args, kwargs)
     if op_info.schema is None:

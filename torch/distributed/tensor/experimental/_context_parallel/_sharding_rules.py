@@ -74,9 +74,7 @@ def _op_strategy_context(op_overload, strategy_func, schema_info=None):
         else:
             propagator.op_to_schema_info[op_overload] = _origin_op_strategy_schema
 
-        # Ideally, we should clear the cache, but it is too expensive.
-        # _clear_python_sharding_prop_cache()
-        # _clear_fast_path_sharding_prop_cache()
+        propagator.invalidate_caches()
 
 
 # ==================== Flash Attention Strategies ====================

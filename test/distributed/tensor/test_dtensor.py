@@ -509,6 +509,29 @@ class DTensorTest(DTensorTestBase):
         self.assertIs(base_dispatcher._custom_op_handlers[op], default_conv_handler)
         self.assertIs(child_dispatcher._get_custom_op_handler(op, ChildDTensor), marker)
 
+    def test_dtensor_subclass_inherits_runtime_cp_custom_handlers(self):
+        from torch.distributed.tensor.experimental._context_parallel import (
+            _attention as cp_attention,
+        )
+
+        class ChildDTensor(DTensor):
+            _op_dispatcher = type(DTensor._op_dispatcher)()
+
+        op = torch.ops.aten._scaled_dot_product_flash_attention.default
+        child_dispatcher = ChildDTensor._op_dispatcher
+        self.assertIsNone(child_dispatcher._get_custom_op_handler(op, ChildDTensor))
+
+        cp_attention._enable_cp_dtensor_dispatcher()
+        try:
+            self.assertIs(
+                child_dispatcher._get_custom_op_handler(op, ChildDTensor),
+                cp_attention.custom_ops[op],
+            )
+        finally:
+            cp_attention._disable_cp_dtensor_dispatcher()
+
+        self.assertIsNone(child_dispatcher._get_custom_op_handler(op, ChildDTensor))
+
     def test_dtensor_subclass_sharding_propagator_inherits_base_without_aliasing(self):
         lib = torch.library.Library("dtensor_subclass_dispatch_test", "FRAGMENT")
         lib.define("base_rule(Tensor input) -> Tensor")
@@ -618,6 +641,60 @@ class DTensorTest(DTensorTestBase):
                 base_prop.op_strategy_funcs.pop(base_strategy_op, None)
             else:
                 base_prop.op_strategy_funcs[base_strategy_op] = base_strategy_backup
+
+    @with_comms
+    def test_dtensor_subclass_inherited_sharding_cache_invalidates_on_parent_update(
+        self,
+    ):
+        from torch.distributed.tensor._op_schema import OpSchema
+
+        lib = torch.library.Library(
+            "dtensor_subclass_cache_invalidation_test", "FRAGMENT"
+        )
+        lib.define("runtime_override(Tensor input) -> Tensor")
+        op = torch.ops.dtensor_subclass_cache_invalidation_test.runtime_override.default
+
+        class ParentDTensor(DTensor):
+            _op_dispatcher = type(DTensor._op_dispatcher)()
+
+        class ChildDTensor(ParentDTensor):
+            _op_dispatcher = type(DTensor._op_dispatcher)()
+
+        device_mesh = self.build_device_mesh()
+        local_tensor = torch.randn(8, device=self.device_type)
+        tensor_meta = TensorMeta(
+            local_tensor.shape,
+            local_tensor.stride(),
+            local_tensor.dtype,
+        )
+        input_spec = DTensorSpec(device_mesh, (Replicate(),), tensor_meta=tensor_meta)
+        replicated_output_spec = DTensorSpec(
+            device_mesh, (Replicate(),), tensor_meta=tensor_meta
+        )
+        sharded_output_spec = DTensorSpec(
+            device_mesh, (Shard(0),), tensor_meta=tensor_meta
+        )
+        op_schema = OpSchema(op=op, args_schema=(input_spec,), kwargs_schema={})
+        parent_prop = ParentDTensor._op_dispatcher.sharding_propagator
+        child_prop = ChildDTensor._op_dispatcher.sharding_propagator
+
+        def replicated_rule(op_schema):
+            return OutputSharding(replicated_output_spec)
+
+        def sharded_rule(op_schema):
+            return OutputSharding(sharded_output_spec)
+
+        parent_prop.register_sharding_prop_rule(op, replicated_rule)
+        self.assertEqual(
+            child_prop.propagate_op_sharding(op_schema).output_spec.placements,
+            (Replicate(),),
+        )
+
+        parent_prop.register_sharding_prop_rule(op, sharded_rule)
+        self.assertEqual(
+            child_prop.propagate_op_sharding(op_schema).output_spec.placements,
+            (Shard(0),),
+        )
 
     @with_comms
     def test_dtensor_nested_subclass_inherits_custom_handler_overrides(self):

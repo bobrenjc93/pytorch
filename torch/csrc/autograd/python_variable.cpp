@@ -1506,18 +1506,24 @@ py::object dispatchDTensorOp(
   {
     const auto custom_op_handlers =
         op_dispatcher.attr(dtensor_interned_strings._custom_op_handlers);
-    TORCH_CHECK(
-        PyDict_Check(custom_op_handlers.ptr()),
-        "_custom_op_handlers must be a dict!");
-    PyObject* custom_op_handler =
-        PyDict_GetItemWithError(custom_op_handlers.ptr(), py_op.ptr());
-    if (custom_op_handler) {
+    py::object custom_op_handler = py::none();
+    if (PyDict_Check(custom_op_handlers.ptr())) {
+      PyObject* handler =
+          PyDict_GetItemWithError(custom_op_handlers.ptr(), py_op.ptr());
+      if (handler) {
+        custom_op_handler = py::reinterpret_borrow<py::object>(handler);
+      } else if (PyErr_Occurred()) {
+        throw py::error_already_set();
+      }
+    } else {
+      // DTensor subclasses may install an inheritance-aware custom handler map.
+      custom_op_handler = custom_op_handlers.attr("get")(py_op, py::none());
+    }
+    if (!custom_op_handler.is_none()) {
       auto result = checked_vectorcall(
-          custom_op_handler, py_op.ptr(), args.ptr(), kwargs.ptr());
+          custom_op_handler.ptr(), py_op.ptr(), args.ptr(), kwargs.ptr());
       stack->clear();
       return result;
-    } else if (PyErr_Occurred()) {
-      throw py::error_already_set();
     }
   }
 

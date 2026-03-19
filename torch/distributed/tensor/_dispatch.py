@@ -286,10 +286,6 @@ class _CustomOpHandlerMap(MutableMapping[torch._ops.OpOverload, object]):
 
         return current_value
 
-    def update(self, other: Mapping[torch._ops.OpOverload, object]) -> None:
-        for key, value in other.items():
-            self[key] = value
-
     def copy(self):
         return type(self)(
             self._handlers,
@@ -299,6 +295,30 @@ class _CustomOpHandlerMap(MutableMapping[torch._ops.OpOverload, object]):
 
     def is_explicit(self, key: torch._ops.OpOverload) -> bool:
         return key in self._explicit_keys
+
+    def _snapshot_local_entry(
+        self, key: torch._ops.OpOverload
+    ) -> tuple[bool, object, bool]:
+        if key not in self._handlers:
+            return False, self._missing, False
+        return True, self._handlers[key], key in self._explicit_keys
+
+    def _restore_local_entry(
+        self,
+        key: torch._ops.OpOverload,
+        entry: tuple[bool, object, bool],
+    ) -> None:
+        present, value, explicit = entry
+        if not present:
+            self._handlers.pop(key, None)
+            self._explicit_keys.discard(key)
+            return
+
+        self._handlers[key] = value
+        if explicit:
+            self._explicit_keys.add(key)
+        else:
+            self._explicit_keys.discard(key)
 
 
 def _handler_accepts_dtensor_type_kwarg(handler: object) -> bool:

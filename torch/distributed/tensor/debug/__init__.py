@@ -35,9 +35,7 @@ def _clear_python_sharding_prop_cache():
     """
     from torch.distributed.tensor._api import DTensor
 
-    return (
-        DTensor._op_dispatcher.sharding_propagator.propagate_op_sharding.cache_clear()  # type:ignore[attr-defined]
-    )
+    return DTensor._op_dispatcher.sharding_propagator.invalidate_caches()  # type:ignore[attr-defined]
 
 
 def _clear_fast_path_sharding_prop_cache():

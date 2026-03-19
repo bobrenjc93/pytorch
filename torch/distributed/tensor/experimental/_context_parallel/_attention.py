@@ -965,6 +965,7 @@ custom_ops = {
     aten._scaled_dot_product_cudnn_attention_backward.default: _sdpa_handler,
 }
 existing_custom_ops = DTensor._op_dispatcher._custom_op_handlers
+_cp_custom_op_snapshots: dict[torch._ops.OpOverload, tuple[bool, object, bool]] = {}
 
 
 ArgsType = tuple[Any, ...]
@@ -1020,25 +1021,41 @@ def _restore_function(fn: Callable, fn_module: types.ModuleType) -> None:
 
 def _enable_cp_dtensor_dispatcher() -> None:
     """Enables DTensor dispatcher to dispatch SDPA to CP."""
-    # Enable custom op handlers for CP
-    updated_custom_ops = existing_custom_ops.copy()
-    updated_custom_ops.update(custom_ops)
-    DTensor._op_dispatcher._custom_op_handlers = updated_custom_ops
+    global _cp_custom_op_snapshots
+
+    if _cp_custom_op_snapshots:
+        return
+
+    for op_overload, handler in custom_ops.items():
+        _cp_custom_op_snapshots[op_overload] = (
+            existing_custom_ops._snapshot_local_entry(op_overload)
+        )
+        existing_custom_ops[op_overload] = handler
+
     # Register CP-specific sharding rules
     from ._sharding_rules import register_cp_sharding_rules
 
-    register_cp_sharding_rules()
+    try:
+        register_cp_sharding_rules()
+    except Exception:
+        for op_overload, entry in _cp_custom_op_snapshots.items():
+            existing_custom_ops._restore_local_entry(op_overload, entry)
+        _cp_custom_op_snapshots = {}
+        raise
 
 
 def _disable_cp_dtensor_dispatcher() -> None:
     """Disables DTensor dispatcher to dispatch SDPA to CP."""
-    # Restore original custom op handlers
-    DTensor._op_dispatcher._custom_op_handlers = existing_custom_ops
+    global _cp_custom_op_snapshots
 
-    # TODO: unregister_cp_sharding_rules(clear_the_cache=True) will cause
-    # all DTensor sharding propagation cache being invalidated. It is not
-    # easy to achieve selectively invalidating lru cache without rewriting
-    # the sharding propagation wrapper.
+    if _cp_custom_op_snapshots:
+        for op_overload, entry in _cp_custom_op_snapshots.items():
+            existing_custom_ops._restore_local_entry(op_overload, entry)
+        _cp_custom_op_snapshots = {}
+
+    # unregister_cp_sharding_rules() already invalidates the Python sharding
+    # caches through the registration hooks below. Avoid clearing the global
+    # C++ fast-path cache unless the caller explicitly asks for it.
 
     from ._sharding_rules import unregister_cp_sharding_rules
 

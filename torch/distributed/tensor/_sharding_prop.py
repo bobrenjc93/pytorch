@@ -1,6 +1,7 @@
 # mypy: allow-untyped-defs
 import logging
 import threading
+import weakref
 from collections import ChainMap
 from collections.abc import Callable, MutableMapping, Sequence
 from contextlib import nullcontext
@@ -98,12 +99,8 @@ def _get_base_mapping(mapping: MutableMapping[K, V]) -> MutableMapping[K, V] | N
 
 def _resolve_op_registration(
     op_overload: OpOverload,
-    rule_mapping: MutableMapping[
-        OpOverload, Callable[[OpSchema], OutputSharding]
-    ],
-    strategy_mapping: MutableMapping[
-        OpOverload, Callable[[OpSchema], StrategyType]
-    ],
+    rule_mapping: MutableMapping[OpOverload, Callable[[OpSchema], OutputSharding]],
+    strategy_mapping: MutableMapping[OpOverload, Callable[[OpSchema], StrategyType]],
     single_dim_strategy_mapping: MutableMapping[
         OpOverload,
         _SingleDimStrategyInfo,
@@ -306,9 +303,7 @@ def _select_min_redistribute_cost(
 
     # Figure out heuristic hints for unbacked shapes.
     # If available, use shape upper bound. If not, fallback to some integer (inductor size-hinting style).
-    symbolic_cost = cast(
-        Any, next(iter(x for x in costs if not is_concrete_float(x)))
-    )
+    symbolic_cost = cast(Any, next(iter(x for x in costs if not is_concrete_float(x))))
     shape_env = symbolic_cost.node.shape_env
     replacements = {}
     for sym in free_unbacked:
@@ -423,9 +418,13 @@ class ShardingPropagator:
     _fake_mode_lock = nullcontext()
 
     def __init__(self, base_propagator: "ShardingPropagator | None" = None) -> None:
-        op_to_rules: MutableMapping[
-            OpOverload, Callable[[OpSchema], OutputSharding]
-        ]
+        self._base_propagator_ref: (
+            weakref.ReferenceType[ShardingPropagator] | None
+        ) = None
+        self._child_propagators: weakref.WeakSet[ShardingPropagator] = (
+            weakref.WeakSet()
+        )
+        op_to_rules: MutableMapping[OpOverload, Callable[[OpSchema], OutputSharding]]
         op_strategy_funcs: MutableMapping[
             OpOverload,
             Callable[[OpSchema], StrategyType],
@@ -468,9 +467,9 @@ class ShardingPropagator:
         ] = op_single_dim_strategy_funcs
         # op map to save static argnum to decide to reuse sharding prop cache or
         # re-run sharding prop
-        self.op_to_schema_info: MutableMapping[
-            OpOverload, SchemaInfoEntry
-        ] = op_to_schema_info
+        self.op_to_schema_info: MutableMapping[OpOverload, SchemaInfoEntry] = (
+            op_to_schema_info
+        )
         self.op_to_schema_info_for_single_dim_strategy: MutableMapping[
             OpOverload, SchemaInfoEntry
         ] = op_to_schema_info_for_single_dim_strategy
@@ -497,11 +496,33 @@ class ShardingPropagator:
             aten.select_backward.default: 1,
             aten.slice_backward.default: 1,
         }
+        if base_propagator is not None:
+            self._attach_to_base(base_propagator)
+
+    def _attach_to_base(self, base_propagator: "ShardingPropagator") -> None:
+        current_base = (
+            None
+            if self._base_propagator_ref is None
+            else self._base_propagator_ref()
+        )
+        if current_base is base_propagator:
+            return
+        if current_base is not None:
+            current_base._child_propagators.discard(self)
+        self._base_propagator_ref = weakref.ref(base_propagator)
+        base_propagator._child_propagators.add(self)
+
+    def invalidate_caches(self) -> None:
+        self.propagate_op_sharding.cache_clear()
+        self._propagate_tensor_meta_cached.cache_clear()
+        for child in list(self._child_propagators):
+            child.invalidate_caches()
 
     def rebase(self, base_propagator: "ShardingPropagator | None") -> None:
         if base_propagator is None:
             return
 
+        self._attach_to_base(base_propagator)
         self.op_to_rules = ChainMap(
             _get_local_overrides(self.op_to_rules),
             base_propagator.op_to_rules,
@@ -522,8 +543,7 @@ class ShardingPropagator:
             _get_local_overrides(self.op_to_schema_info_for_single_dim_strategy),
             base_propagator.op_to_schema_info_for_single_dim_strategy,
         )
-        self.propagate_op_sharding.cache_clear()
-        self._propagate_tensor_meta_cached.cache_clear()
+        self.invalidate_caches()
 
     def register_sharding_prop_rule(
         self,
@@ -536,6 +556,7 @@ class ShardingPropagator:
         """
         self.op_to_rules[op_overload] = rule_func
         _set_schema_info_entry(self.op_to_schema_info, op_overload, schema_info)
+        self.invalidate_caches()
 
     def register_single_dim_op_strategy(
         self,
@@ -552,6 +573,7 @@ class ShardingPropagator:
             op_overload,
             schema_info,
         )
+        self.invalidate_caches()
 
     def register_op_strategy(
         self,
@@ -606,6 +628,7 @@ class ShardingPropagator:
         """
         self.op_strategy_funcs[op_overload] = strategy_func
         _set_schema_info_entry(self.op_to_schema_info, op_overload, schema_info)
+        self.invalidate_caches()
 
     def get_schema_info(self, op_overload: OpOverload) -> RuntimeSchemaInfo | None:
         registration = _resolve_op_registration(
