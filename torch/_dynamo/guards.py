@@ -25,6 +25,7 @@ import enum
 import functools
 import importlib
 import inspect
+import itertools
 import io
 import logging
 import math
@@ -3828,6 +3829,10 @@ class GuardsStatePickler(pickle.Pickler):
         return dict.fromkeys(elems).keys()
 
     @classmethod
+    def _unpickle_count_iter(cls, item: Any, step: Any) -> Any:
+        return itertools.count(item, step)
+
+    @classmethod
     def _unpickle_fsdp_module_type(
         cls, original_type: type[torch.nn.Module]
     ) -> type[torch.nn.Module]:
@@ -4009,6 +4014,11 @@ class GuardsStatePickler(pickle.Pickler):
 
         elif isinstance(obj, types.MappingProxyType):
             return type(self)._unpickle_mapping_proxy, (obj.copy(),)
+
+        elif type(obj) is type(itertools.count()):
+            item, step = normalize_count_iter(obj)
+            if item is not NotImplemented and step is not NotImplemented:
+                return type(self)._unpickle_count_iter, (item, step)
 
         elif isinstance(obj, torch._dynamo.utils.dict_keys):
             return type(self)._unpickle_dict_keys, (list(obj),)

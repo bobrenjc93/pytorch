@@ -197,9 +197,7 @@ class ItertoolsVariable(VariableTracker):
             )
         elif self.value is itertools.count and not kwargs:
             if len(args) == 0:
-                return variables.CountIteratorVariable(
-                    mutation_type=ValueMutationNew()
-                )
+                return variables.CountIteratorVariable(mutation_type=ValueMutationNew())
             if len(args) == 1:
                 return variables.CountIteratorVariable(
                     item=args[0], mutation_type=ValueMutationNew()
@@ -210,6 +208,7 @@ class ItertoolsVariable(VariableTracker):
                     step=args[1],
                     mutation_type=ValueMutationNew(),
                 )
+            return super().call_function(tx, args, kwargs)
         elif (
             self.value is itertools.permutations
             and (len(args) == 1 or (len(args) == 2 and args[1].is_python_constant()))
