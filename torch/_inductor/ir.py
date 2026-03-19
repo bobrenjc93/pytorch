@@ -4652,7 +4652,13 @@ class Buffer(IRNode, CodegenSymbol):
 
         def loader(index: Sequence[Expr]) -> OpsValue:
             indexer = self.make_indexer()
-            return ops.load(self.name or "unnamed", indexer(index))
+            load_name = self.name or "unnamed"
+            if isinstance(self.layout, NonOwningLayout):
+                # NonOwningLayout is an alias into another buffer. Loading from the
+                # underlying storage keeps mutation dependencies attached to the
+                # aliased buffer instead of hiding them behind this alias name.
+                load_name = self.layout.view.get_name()
+            return ops.load(load_name, indexer(index))
 
         return loader
 

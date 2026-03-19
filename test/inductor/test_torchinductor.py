@@ -8975,6 +8975,22 @@ def forward(self, arg0_1: "Sym(s77)", arg1_1: "Sym(s27)", arg2_1: "Sym(s53)", ar
         self.common(fn, (a, idx))
         assertGeneratedKernelCountEqual(self, 1)
 
+    def test_index_put_after_cat_preserves_cat_input(self):
+        # https://github.com/pytorch/pytorch/issues/177821
+        def fn(x, y):
+            x = 2 * x
+            c = torch.cat([x, y], dim=1)
+            c[:, [1, 0]] = c[:, [0, 1]]
+            return c[:, :2] + x
+
+        self.common(
+            fn,
+            (
+                torch.arange(4, device=self.device).reshape(2, 2),
+                torch.arange(4, device=self.device).reshape(2, 2),
+            ),
+        )
+
     def test_index_put_failed_reinplace(self):
         def fn(x, idx):
             src = torch.ones(idx.size(0), device=x.device)
