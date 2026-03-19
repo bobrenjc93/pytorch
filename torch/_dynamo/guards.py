@@ -25,8 +25,8 @@ import enum
 import functools
 import importlib
 import inspect
-import itertools
 import io
+import itertools
 import logging
 import math
 import pickle
