@@ -2743,74 +2743,43 @@ struct WeakEntry {
   PyObject* cap; // capsule whose m_self is used by the callback
 };
 
-struct CachedTensorMetadata {
-  explicit CachedTensorMetadata(
-      const LocalState& state,
-      const at::Tensor& tensor)
-      : dispatch_key_(state.apply(tensor.key_set()).raw_repr()),
-        dtype_(tensor.scalar_type()),
-        device_(tensor.device()),
-        requires_grad_(tensor.requires_grad()),
-        sizes_(tensor.sizes().vec()),
-        supports_stride_(supports_stride(tensor)),
-        strides_(
-            supports_stride_ ? tensor.strides().vec()
-                             : std::vector<int64_t>{}) {}
-
-  static bool supports_stride(const at::Tensor& tensor) {
-    auto layout = tensor.layout();
-    return layout != c10::kSparseCsr && layout != c10::kSparseCsc &&
-        layout != c10::kSparseBsc && layout != c10::kSparseBsr;
+// Convert concrete sizes/strides to the optional<SymInt> vectors that
+// TensorCheck expects.  All dimensions are treated as static (no nullopt).
+inline std::vector<std::optional<c10::SymInt>> to_opt_symint(
+    c10::IntArrayRef vals) {
+  std::vector<std::optional<c10::SymInt>> out;
+  out.reserve(vals.size());
+  for (auto v : vals) {
+    out.emplace_back(c10::SymInt(v));
   }
+  return out;
+}
 
-  bool check(const LocalState& state, const at::Tensor& tensor) const {
-    if (dispatch_key_ != state.apply(tensor.key_set()).raw_repr() ||
-        dtype_ != tensor.scalar_type() || device_ != tensor.device() ||
-        requires_grad_ != tensor.requires_grad()) {
-      return false;
-    }
-
-    auto sizes = tensor.sizes();
-    if (sizes.size() != sizes_.size()) {
-      return false;
-    }
-    for (const auto i : c10::irange(sizes.size())) {
-      if (sizes_[i] != sizes[i]) {
-        return false;
-      }
-    }
-
-    if (supports_stride_ != supports_stride(tensor)) {
-      return false;
-    }
-    if (supports_stride_) {
-      auto strides = tensor.strides();
-      if (strides.size() != strides_.size()) {
-        return false;
-      }
-      for (const auto i : c10::irange(strides.size())) {
-        if (strides_[i] != strides[i]) {
-          return false;
-        }
-      }
-    }
-
-    return true;
-  }
-
- private:
-  uint64_t dispatch_key_;
-  at::ScalarType dtype_;
-  c10::Device device_;
-  bool requires_grad_;
-  std::vector<int64_t> sizes_;
-  bool supports_stride_;
-  std::vector<int64_t> strides_;
-};
+// Build a TensorCheck that validates all concrete metadata (dispatch key,
+// dtype, device, requires_grad, sizes, strides) for the dict-tag fast path.
+inline TensorCheck make_tensor_check(
+    const LocalState& state,
+    const at::Tensor& tensor) {
+  auto layout = tensor.layout();
+  bool sparse = layout == c10::kSparseCsr || layout == c10::kSparseCsc ||
+      layout == c10::kSparseBsc || layout == c10::kSparseBsr;
+  // Sparse layouts don't support strides; use nullopt per dim so
+  // TensorCheck skips stride comparison for each dimension.
+  auto strides = sparse
+      ? std::vector<std::optional<c10::SymInt>>(tensor.dim(), std::nullopt)
+      : to_opt_symint(tensor.strides());
+  return TensorCheck(
+      state,
+      /*pt=*/nullptr,
+      tensor,
+      tensor.key_set(),
+      to_opt_symint(tensor.sizes()),
+      std::move(strides));
+}
 
 struct RecordedTensorMetadata {
   PyObject* tensor_ptr;
-  CachedTensorMetadata metadata;
+  TensorCheck check;
 };
 
 /**
@@ -3214,14 +3183,14 @@ class GuardManager {
     return true;
   }
 
-  bool check_tensor_metadata_fast(PyObject* value) const {
+  bool check_tensor_metadata_fast(PyObject* value) {
     auto it = _tensor_metadata_pointers.find(value);
     if (it == _tensor_metadata_pointers.end()) {
       return true;
     }
-    for (const auto& recorded_tensor : it->second) {
+    for (auto& recorded_tensor : it->second) {
       if (!THPVariable_Check(recorded_tensor.tensor_ptr) ||
-          !recorded_tensor.metadata.check(
+          !recorded_tensor.check.check(
               get_local_state(_root),
               THPVariable_Unpack(recorded_tensor.tensor_ptr))) {
         return false;
@@ -4049,7 +4018,7 @@ class RootGuardManager : public GuardManager {
   void record_tensor_metadata(PyObject* tensor_pointer) {
     _recorded_tensor_metadata.push_back(RecordedTensorMetadata{
         tensor_pointer,
-        CachedTensorMetadata(_local_state, THPVariable_Unpack(tensor_pointer)),
+        make_tensor_check(_local_state, THPVariable_Unpack(tensor_pointer)),
     });
   }
 
