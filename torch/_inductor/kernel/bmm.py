@@ -3,10 +3,10 @@ import logging
 from typing import TYPE_CHECKING
 
 import torch
-from torch._prims_common import ELEMENTWISE_TYPE_PROMOTION_KIND
 from torch._dynamo.utils import counters
 from torch._inductor.codegen.rocm.ck_universal_gemm_template import CKGemmTemplate
 from torch._inductor.kernel.mm_common import load_kernel_template
+from torch._prims_common import ELEMENTWISE_TYPE_PROMOTION_KIND
 
 from .. import config as inductor_config, ir, lowering as L
 from ..kernel_inputs import MMKernelInputs
@@ -101,10 +101,9 @@ def _check_bmm_out_dtype(mat1, out_dtype) -> None:
 
 def _should_enforce_bmm_input_dtypes() -> bool:
     original_aten = V.graph.current_node.meta.get("original_aten")
-    return (
-        isinstance(original_aten, torch._ops.OpOverload)
-        and original_aten._overloadpacket in (aten.bmm, aten.matmul)
-    )
+    return isinstance(
+        original_aten, torch._ops.OpOverload
+    ) and original_aten._overloadpacket in (aten.bmm, aten.matmul)
 
 
 @L.register_lowering(aten.bmm, type_promotion_kind=None)
