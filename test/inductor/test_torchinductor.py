@@ -4209,6 +4209,52 @@ class CommonTemplate:
         with self.assertRaisesRegex(RuntimeError, msg):
             torch.compile(fn)(t1, t2)
 
+    def test_bmm_mixed_dtype(self):
+        def fn(a, b):
+            return torch.bmm(a, b)
+
+        lowp_dtype = (
+            torch.float16
+            if self.is_dtype_supported(torch.float16)
+            else torch.bfloat16
+        )
+        if not self.is_dtype_supported(lowp_dtype):
+            raise unittest.SkipTest("requires float16 or bfloat16 support")
+
+        t1 = torch.randn((2, 3, 4), dtype=lowp_dtype, device=self.device)
+        t2 = torch.randn((2, 4, 5), dtype=torch.float32, device=self.device)
+
+        msg = "expected .* and .* to have the same dtype, but got: .* != .*"
+        with self.assertRaisesRegex(RuntimeError, msg):
+            fn(t1, t2)
+        if config.cpp_wrapper:
+            msg = f"({msg})|(aoti_torch_.* API call failed at .*)"
+        with self.assertRaisesRegex(RuntimeError, msg):
+            torch.compile(fn)(t1, t2)
+
+    def test_matmul_batched_mixed_dtype(self):
+        def fn(a, b):
+            return torch.matmul(a, b)
+
+        lowp_dtype = (
+            torch.float16
+            if self.is_dtype_supported(torch.float16)
+            else torch.bfloat16
+        )
+        if not self.is_dtype_supported(lowp_dtype):
+            raise unittest.SkipTest("requires float16 or bfloat16 support")
+
+        t1 = torch.randn((2, 3, 4, 5), dtype=lowp_dtype, device=self.device)
+        t2 = torch.randn((2, 3, 5, 6), dtype=torch.float32, device=self.device)
+
+        msg = "expected .* and .* to have the same dtype, but got: .* != .*"
+        with self.assertRaisesRegex(RuntimeError, msg):
+            fn(t1, t2)
+        if config.cpp_wrapper:
+            msg = f"({msg})|(aoti_torch_.* API call failed at .*)"
+        with self.assertRaisesRegex(RuntimeError, msg):
+            torch.compile(fn)(t1, t2)
+
     @xfail_if_mps_unimplemented  # linear for non-float inputs
     def test_linear_mixed_dtype(self):
         class Net(nn.Module):

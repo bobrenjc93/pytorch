@@ -69,11 +69,38 @@ aten_baddbmm = ExternKernelChoice(
 )
 
 
+def _check_bmm_dtypes(mat1, mat2, out_dtype) -> None:
+    input_dtype = mat1.get_dtype()
+    other_dtype = mat2.get_dtype()
+    torch._check(
+        other_dtype == input_dtype,
+        lambda: (
+            f"expected mat1 and mat2 to have the same dtype, but got: "
+            f"{input_dtype} != {other_dtype}"
+        ),
+    )
+    if out_dtype is not None:
+        torch._check(
+            mat1.get_device().type in ("cuda", "xpu"),
+            lambda: "out_dtype is only supported for CUDA or XPU",
+        )
+        torch._check(
+            out_dtype == input_dtype
+            or (
+                out_dtype == torch.float32
+                and input_dtype in (torch.float16, torch.bfloat16)
+            ),
+            lambda: "out_dtype must be the same as input dtype or fp32 for fp16/bf16 inputs",
+        )
+
+
 @L.register_lowering(aten.bmm)
 def tuned_bmm(mat1, mat2, out_dtype=None, *, layout=None):
     """
     Lowering for autotuning aten.bmm with different backends (Aten, Triton, CUTLASS, etc.)
     """
+    _check_bmm_dtypes(mat1, mat2, out_dtype)
+
     if all(x.get_device().type == "cpu" for x in [mat1, mat2]):
         # decompose to small ops when memory bound
         if mat1.get_size()[1] == 1 or mat2.get_size()[2] == 1:
@@ -163,9 +190,6 @@ def tuned_bmm(mat1, mat2, out_dtype=None, *, layout=None):
     aten_handler: ExternKernelChoice = aten_bmm
     aten_extra_kwargs = {}
     if out_dtype:
-        assert mat1.get_device().type in ("cuda", "xpu"), (
-            "out_dtype is only supported for CUDA or XPU"
-        )
         aten_handler = aten_bmm_dtype
         aten_extra_kwargs = {"out_dtype": out_dtype}
 
