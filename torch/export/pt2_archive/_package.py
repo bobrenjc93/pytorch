@@ -27,7 +27,7 @@ from torch._export.serde.serialize import (
 from torch._inductor.cpp_builder import normalize_path_separator
 from torch._subclasses.fake_tensor import FakeTensor
 from torch.export import ExportedProgram
-from torch.export._tree_utils import reorder_kwargs
+from torch.export._tree_utils import flatten_aoti_runtime_inputs
 from torch.export.pt2_archive._package_weights import (
     get_complete_tensor,
     group_weights,
@@ -728,8 +728,7 @@ class AOTICompiledModel:
         call_spec = self.loader.get_call_spec()
         in_spec = pytree.treespec_loads(call_spec[0])
         out_spec = pytree.treespec_loads(call_spec[1])
-        flat_inputs = pytree.tree_flatten((args, reorder_kwargs(kwargs, in_spec)))[0]
-        flat_inputs = [x for x in flat_inputs if isinstance(x, torch.Tensor)]
+        flat_inputs = flatten_aoti_runtime_inputs(args, kwargs, in_spec)
         flat_outputs = self.loader.boxed_run(flat_inputs)
         return pytree.tree_unflatten(flat_outputs, out_spec)
 

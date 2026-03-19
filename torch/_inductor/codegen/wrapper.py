@@ -1581,6 +1581,9 @@ class PythonWrapperCodegen(CodeGen):
             self.prefix.writeline(line)
 
     def codegen_specialized_graph_input_asserts(self) -> None:
+        if not V.graph.fx_wrapper:
+            return
+
         graph_input_names = set(self.get_graph_input_names())
         for name, value in self.get_specialized_graph_input_values().items():
             if name not in graph_input_names:

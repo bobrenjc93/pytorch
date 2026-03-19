@@ -1,7 +1,9 @@
 from collections.abc import Callable
 from typing import Any
 
-from torch.utils._pytree import Context, TreeSpec
+import torch
+
+from torch.utils._pytree import Context, TreeSpec, tree_flatten
 
 
 def reorder_kwargs(user_kwargs: dict[str, Any], spec: TreeSpec) -> dict[str, Any]:
@@ -36,6 +38,27 @@ def reorder_kwargs(user_kwargs: dict[str, Any], spec: TreeSpec) -> dict[str, Any
         reordered_kwargs[kw] = user_kwargs[kw]
 
     return reordered_kwargs
+
+
+def flatten_aoti_runtime_inputs(
+    args: tuple[Any, ...], user_kwargs: dict[str, Any], spec: TreeSpec
+) -> list[torch.Tensor]:
+    flat_inputs = tree_flatten((args, reorder_kwargs(user_kwargs, spec)))[0]
+    runtime_inputs: list[torch.Tensor] = []
+    for value in flat_inputs:
+        if isinstance(value, torch.Tensor):
+            runtime_inputs.append(value)
+            continue
+
+        # Keep plain Python ints filtered here: AOT wrappers still specialize
+        # some metadata ints out of the runtime ABI, so blindly tensorizing
+        # every int would misalign later tensor inputs.
+        if isinstance(
+            value, (bool, float, torch.SymInt, torch.SymFloat, torch.SymBool)
+        ):
+            runtime_inputs.append(torch.tensor(value, device="cpu"))
+
+    return runtime_inputs
 
 
 def is_equivalent(

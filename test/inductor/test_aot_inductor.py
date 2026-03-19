@@ -4451,6 +4451,33 @@ class AOTInductorTestsTemplate:
         inputs = (torch.tensor([0], dtype=torch.bool, device=self.device),)
         self.check_model(Model(), inputs)
 
+    def test_aot_load_accepts_symbool_placeholder_input(self):
+        if self.device != "cpu":
+            raise unittest.SkipTest("CPU-only SymBool AOT loader regression")
+
+        from torch.fx.experimental.symbolic_shapes import ShapeEnv
+
+        class Model(torch.nn.Module):
+            def forward(self, pred, x):
+                def true_fn(t):
+                    return t + 1
+
+                def false_fn(t):
+                    return t - 1
+
+                return torch.cond(pred, true_fn, false_fn, (x,))
+
+        shape_env = ShapeEnv()
+        pred = shape_env.create_unbacked_symbool()
+        x = torch.ones(4, device=self.device)
+
+        with torch.no_grad():
+            ep = torch.export.export(Model(), (pred, x), strict=False)
+            so_path = torch._inductor.aot_compile(ep.module(), (pred, x))
+            optimized = torch._export.aot_load(so_path, self.device)
+
+        self.assertTrue(same(ep.module()(pred, x), optimized(pred, x)))
+
     def test_symfloat_item(self):
         class Model(torch.nn.Module):
             def forward(self, tensor):
