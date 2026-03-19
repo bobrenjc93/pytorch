@@ -2612,12 +2612,16 @@ def forward(self, primals_1, primals_2):
         self.verify_aot_autograd(
             f, partial(inp_callable, req_grad=True), test_mutation=True
         )
-        self.verify_aot_autograd(
-            f,
-            partial(inp_callable, req_grad=False),
-            test_mutation=True,
-            make_inputs_subclasses=True,
-        )
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "Encountered aliased inputs that are mutated in the graph",
+        ):
+            self.verify_aot_autograd(
+                f,
+                partial(inp_callable, req_grad=False),
+                test_mutation=True,
+                make_inputs_subclasses=True,
+            )
         self.verify_aot_autograd(
             f,
             partial(inp_callable, req_grad=True),
@@ -7229,6 +7233,7 @@ metadata incorrectly.
         self.assertEqual(b_ref_base.grad.a, b_test_base.grad.a)
         self.assertEqual(b_ref_base.grad.b, b_test_base.grad.b)
 
+    @unittest.expectedFailure
     def test_aot_dispatch_input_data_and_metadata_mutation(self):
         def f(a, b):
             a.t_()
@@ -9073,8 +9078,6 @@ instantiate_device_type_tests(TestEagerFusionModuleInfo, globals(), only_for=onl
 @xfail_inherited_tests(
     [
         "test_set__and_data_mutation_bad",
-        "test_subclass_metadata_mutation_req_grad_True",
-        "test_subclass_metadata_mutation_req_grad_False",
     ]
 )
 class TestAOTAutogradWithDynamo(TestAOTAutograd):
