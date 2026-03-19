@@ -4,7 +4,8 @@ import copy
 import inspect
 import logging
 import warnings
-from collections.abc import Callable, Iterator, Mapping, MutableMapping, Sequence
+import weakref
+from collections.abc import Callable, Mapping, Sequence
 from functools import cache
 from typing import cast
 
@@ -167,7 +168,23 @@ DEFAULT_CUSTOM_OP_HANDLERS = {
 }
 
 
-class _CustomOpHandlerMap(MutableMapping[torch._ops.OpOverload, object]):
+DEFAULT_RANDOM_OPS = {
+    aten.native_dropout.default,
+    aten.normal_.default,
+    aten.rand.default,
+    aten.rand_like.default,
+    aten.randn.default,
+    aten.randn_like.default,
+    aten.randint_like.default,
+    aten.randint_like.low_dtype,
+    aten.randint_like.low_dtype_out,
+    aten.uniform_.default,
+    aten.bernoulli.default,
+    aten.bernoulli_.float,
+}
+
+
+class _CustomOpHandlerMap(dict[torch._ops.OpOverload, object]):
     _missing = object()
     _masked = object()
 
@@ -178,117 +195,102 @@ class _CustomOpHandlerMap(MutableMapping[torch._ops.OpOverload, object]):
         explicit_keys: set[torch._ops.OpOverload] | None = None,
         base_handlers: "_CustomOpHandlerMap | None" = None,
     ) -> None:
-        self._handlers: dict[torch._ops.OpOverload, object] = (
+        super().__init__()
+        self._local_handlers: dict[torch._ops.OpOverload, object] = (
             {} if initial is None else dict(initial)
         )
         self._explicit_keys: set[torch._ops.OpOverload] = (
             set() if explicit_keys is None else set(explicit_keys)
         )
+        self._base_handlers: _CustomOpHandlerMap | None = None
+        self._child_maps: weakref.WeakSet[_CustomOpHandlerMap] = weakref.WeakSet()
+        if base_handlers is not None:
+            self._set_base_handlers(base_handlers)
+        self._refresh_effective_handlers()
+
+    def _set_base_handlers(self, base_handlers: "_CustomOpHandlerMap") -> None:
+        if self._base_handlers is base_handlers:
+            return
+        if self._base_handlers is not None:
+            self._base_handlers._child_maps.discard(self)
         self._base_handlers = base_handlers
+        base_handlers._child_maps.add(self)
 
     def _resolve_from_base(self, key: torch._ops.OpOverload) -> object:
         if self._base_handlers is None:
-            return self._missing
-        return self._base_handlers._resolve(key)
-
-    def _resolve(self, key: torch._ops.OpOverload) -> object:
-        local_value = self._handlers.get(key, self._missing)
-        if local_value is self._masked:
-            return self._missing
-
-        if local_value is not self._missing:
-            default_handler = DEFAULT_CUSTOM_OP_HANDLERS.get(key)
-            if local_value is default_handler and key not in self._explicit_keys:
-                inherited_value = self._resolve_from_base(key)
-                if inherited_value is not self._missing:
-                    return inherited_value
-            return local_value
-
-        inherited_value = self._resolve_from_base(key)
-        if inherited_value is not self._missing:
-            return inherited_value
-
-        return DEFAULT_CUSTOM_OP_HANDLERS.get(key, self._missing)
+            return DEFAULT_CUSTOM_OP_HANDLERS.get(key, self._missing)
+        return self._base_handlers.get(key, self._missing)
 
     def _resolve_without_local(self, key: torch._ops.OpOverload) -> object:
         inherited_value = self._resolve_from_base(key)
-        if inherited_value is not self._missing:
-            return inherited_value
-        return DEFAULT_CUSTOM_OP_HANDLERS.get(key, self._missing)
+        return inherited_value
+
+    def _refresh_effective_handlers(self) -> None:
+        effective_handlers = dict(
+            DEFAULT_CUSTOM_OP_HANDLERS
+            if self._base_handlers is None
+            else self._base_handlers.items()
+        )
+        for key, value in self._local_handlers.items():
+            if value is self._masked:
+                effective_handlers.pop(key, None)
+                continue
+
+            default_handler = DEFAULT_CUSTOM_OP_HANDLERS.get(key)
+            if value is default_handler and key not in self._explicit_keys:
+                inherited_value = self._resolve_from_base(key)
+                if inherited_value is not self._missing:
+                    effective_handlers[key] = inherited_value
+                    continue
+
+            effective_handlers[key] = value
+
+        super().clear()
+        super().update(effective_handlers)
+
+    def _refresh_self_and_descendants(self) -> None:
+        self._refresh_effective_handlers()
+        for child in list(self._child_maps):
+            child._refresh_self_and_descendants()
 
     def rebase(self, base_handlers: "_CustomOpHandlerMap") -> None:
-        self._base_handlers = base_handlers
+        if base_handlers is self:
+            return
+        self._set_base_handlers(base_handlers)
+        self._refresh_self_and_descendants()
 
-    def __getitem__(self, key: torch._ops.OpOverload) -> object:
-        value = self._resolve(key)
-        if value is self._missing:
-            raise KeyError(key)
-        return value
-
-    def __setitem__(self, key: torch._ops.OpOverload, value: object) -> None:
+    def __setitem__(self, key: torch._ops.OpOverload, value: object) -> None:  # type: ignore[override]
         self._explicit_keys.add(key)
-        self._handlers[key] = value
+        self._local_handlers[key] = value
+        self._refresh_self_and_descendants()
 
-    def __delitem__(self, key: torch._ops.OpOverload) -> None:
+    def __delitem__(self, key: torch._ops.OpOverload) -> None:  # type: ignore[override]
         self.pop(key)
 
-    def __iter__(self) -> Iterator[torch._ops.OpOverload]:
-        seen: set[torch._ops.OpOverload] = set()
-        for key in self._handlers:
-            seen.add(key)
-            if self._resolve(key) is not self._missing:
-                yield key
+    def update(self, *args, **kwargs) -> None:  # type: ignore[override]
+        other = dict(*args, **kwargs)
+        for key, value in other.items():
+            self[key] = value
 
-        if self._base_handlers is not None:
-            for key in self._base_handlers:
-                if key in seen:
-                    continue
-                seen.add(key)
-                if self._resolve(key) is not self._missing:
-                    yield key
-
-        for key in DEFAULT_CUSTOM_OP_HANDLERS:
-            if key in seen:
-                continue
-            if self._resolve(key) is not self._missing:
-                yield key
-
-    def __len__(self) -> int:
-        return sum(1 for _ in self)
-
-    def __contains__(self, key: object) -> bool:
-        if not isinstance(key, torch._ops.OpOverload):
-            return False
-        return self._resolve(key) is not self._missing
-
-    def get(
-        self,
-        key: torch._ops.OpOverload,
-        default: object | None = None,
-    ) -> object | None:
-        value = self._resolve(key)
-        if value is self._missing:
-            return default
-        return value
-
-    def pop(self, key, default=_missing):
-        current_value = self._resolve(key)
+    def pop(self, key, default=_missing):  # type: ignore[override]
+        current_value = super().get(key, self._missing)
         if current_value is self._missing:
             if default is self._missing:
                 raise KeyError(key)
             return default
 
-        self._handlers.pop(key, None)
+        self._local_handlers.pop(key, None)
         self._explicit_keys.discard(key)
         if self._resolve_without_local(key) is not self._missing:
-            self._handlers[key] = self._masked
+            self._local_handlers[key] = self._masked
             self._explicit_keys.add(key)
+        self._refresh_self_and_descendants()
 
         return current_value
 
     def copy(self):
         return type(self)(
-            self._handlers,
+            self._local_handlers,
             explicit_keys=self._explicit_keys,
             base_handlers=self._base_handlers,
         )
@@ -299,9 +301,9 @@ class _CustomOpHandlerMap(MutableMapping[torch._ops.OpOverload, object]):
     def _snapshot_local_entry(
         self, key: torch._ops.OpOverload
     ) -> tuple[bool, object, bool]:
-        if key not in self._handlers:
+        if key not in self._local_handlers:
             return False, self._missing, False
-        return True, self._handlers[key], key in self._explicit_keys
+        return True, self._local_handlers[key], key in self._explicit_keys
 
     def _restore_local_entry(
         self,
@@ -310,15 +312,17 @@ class _CustomOpHandlerMap(MutableMapping[torch._ops.OpOverload, object]):
     ) -> None:
         present, value, explicit = entry
         if not present:
-            self._handlers.pop(key, None)
+            self._local_handlers.pop(key, None)
             self._explicit_keys.discard(key)
+            self._refresh_self_and_descendants()
             return
 
-        self._handlers[key] = value
+        self._local_handlers[key] = value
         if explicit:
             self._explicit_keys.add(key)
         else:
             self._explicit_keys.discard(key)
+        self._refresh_self_and_descendants()
 
 
 def _handler_accepts_dtensor_type_kwarg(handler: object) -> bool:
@@ -395,20 +399,7 @@ class OpDispatcher:
         self.sharding_propagator = ShardingPropagator(base_propagator)
         # NOTE: must stay in sync with is_random_op in
         # torch/csrc/autograd/python_variable.cpp
-        self._random_ops = {
-            aten.native_dropout.default,
-            aten.normal_.default,
-            aten.rand.default,
-            aten.rand_like.default,
-            aten.randn.default,
-            aten.randn_like.default,
-            aten.randint_like.default,
-            aten.randint_like.low_dtype,
-            aten.randint_like.low_dtype_out,
-            aten.uniform_.default,
-            aten.bernoulli.default,
-            aten.bernoulli_.float,
-        }
+        self._random_ops = set(DEFAULT_RANDOM_OPS)
         self._custom_op_handlers = _CustomOpHandlerMap()
 
     def clone(self) -> "OpDispatcher":
@@ -429,6 +420,11 @@ class OpDispatcher:
         if base_dispatcher is self:
             return
         self._custom_op_handlers.rebase(base_dispatcher._custom_op_handlers)
+
+    def rebase_random_ops(self, base_dispatcher: "OpDispatcher") -> None:
+        if base_dispatcher is self:
+            return
+        self._random_ops.update(base_dispatcher._random_ops)
 
     # ********************************************************************************************
     # def dispatch(...)

@@ -218,9 +218,7 @@ def argminmax_handler(
     )
     output_sharding = _get_output_sharding(op_call, args, kwargs)
     dtensor_type = (
-        type(cast(dtensor.DTensor, args[0]))
-        if dtensor_type is None
-        else dtensor_type
+        type(cast(dtensor.DTensor, args[0])) if dtensor_type is None else dtensor_type
     )
 
     expected_shape = _get_expected_shape(local_tensor, dim, keepdim)
@@ -281,9 +279,7 @@ def minmax_dim_handler(
     )
     output_sharding = _get_output_sharding(op_call, args, kwargs)
     dtensor_type = (
-        type(cast(dtensor.DTensor, args[0]))
-        if dtensor_type is None
-        else dtensor_type
+        type(cast(dtensor.DTensor, args[0])) if dtensor_type is None else dtensor_type
     )
 
     expected_shape = _get_expected_shape(local_tensor, dim, keepdim)

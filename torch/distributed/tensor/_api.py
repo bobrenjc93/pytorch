@@ -54,6 +54,18 @@ __all__ = [
 aten = torch.ops.aten
 
 
+class _DTensorMeta(type(torch.Tensor)):
+    @classmethod
+    def __prepare__(mcls, name, bases, **kwargs):
+        namespace = super().__prepare__(name, bases, **kwargs)
+        for base in bases:
+            candidate = getattr(base, "_op_dispatcher", None)
+            if isinstance(candidate, op_dispatch.OpDispatcher):
+                namespace["_op_dispatcher"] = candidate.clone()
+                break
+        return namespace
+
+
 def _normalize_placements_for_grad(
     placements: tuple[Placement, ...],
 ) -> tuple[Placement, ...]:
@@ -287,7 +299,7 @@ class _FromTorchTensor(torch.autograd.Function):
         return grad_output.to_local(), None, None, None, None, None, None
 
 
-class DTensor(torch.Tensor):
+class DTensor(torch.Tensor, metaclass=_DTensorMeta):
     """
     ``DTensor`` (Distributed Tensor) is a subclass of ``torch.Tensor`` that provides single-device like
     abstraction to program with multi-device ``torch.Tensor``. It describes the distributed tensor sharding
@@ -370,6 +382,7 @@ class DTensor(torch.Tensor):
             return
 
         if dispatcher is not base_dispatcher:
+            dispatcher.rebase_random_ops(base_dispatcher)
             dispatcher.rebase_sharding_propagator(base_dispatcher)
             dispatcher.rebase_custom_op_handlers(base_dispatcher)
 

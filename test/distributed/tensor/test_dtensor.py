@@ -26,13 +26,8 @@ from torch.distributed.tensor._dtensor_spec import (
     ShardOrderEntry,
     TensorMeta,
 )
-from torch.distributed.tensor._op_schema import (
-    OutputSharding,
-    RuntimeSchemaInfo,
-)
-from torch.distributed.tensor._ops.single_dim_strategy import (
-    _SingleDimStrategyInfo,
-)
+from torch.distributed.tensor._op_schema import OutputSharding, RuntimeSchemaInfo
+from torch.distributed.tensor._ops.single_dim_strategy import _SingleDimStrategyInfo
 from torch.distributed.tensor._redistribute import redistribute_local_tensor
 from torch.distributed.tensor.debug import CommDebugMode
 from torch.distributed.tensor.experimental import implicit_replication
@@ -509,6 +504,44 @@ class DTensorTest(DTensorTestBase):
         self.assertIs(base_dispatcher._custom_op_handlers[op], default_conv_handler)
         self.assertIs(child_dispatcher._get_custom_op_handler(op, ChildDTensor), marker)
 
+    def test_dtensor_subclass_inherited_dispatcher_is_cloned_before_class_body_mutation(
+        self,
+    ):
+        op = torch.ops.aten.convolution.default
+        marker = object()
+
+        class ParentDTensor(DTensor):
+            pass
+
+        parent_dispatcher = ParentDTensor._op_dispatcher
+
+        class ChildDTensor(ParentDTensor):
+            _op_dispatcher._custom_op_handlers[op] = marker
+
+        self.assertIsNot(ChildDTensor._op_dispatcher, parent_dispatcher)
+        self.assertIs(ChildDTensor._op_dispatcher._custom_op_handlers[op], marker)
+        self.assertIsNot(parent_dispatcher._custom_op_handlers[op], marker)
+
+    def test_dtensor_default_custom_handler_map_is_dict_backed(self):
+        self.assertIsInstance(DTensor._op_dispatcher._custom_op_handlers, dict)
+
+    def test_dtensor_subclass_inherits_parent_random_ops(self):
+        lib = torch.library.Library("dtensor_subclass_random_ops_test", "FRAGMENT")
+        lib.define("custom_random(Tensor input) -> Tensor")
+        random_op = torch.ops.dtensor_subclass_random_ops_test.custom_random.default
+
+        class ParentDTensor(DTensor):
+            _op_dispatcher = type(DTensor._op_dispatcher)()
+
+        ParentDTensor._op_dispatcher._random_ops.add(random_op)
+
+        class ChildDTensor(ParentDTensor):
+            _op_dispatcher = type(DTensor._op_dispatcher)()
+
+        self.assertIn(random_op, ParentDTensor._op_dispatcher._random_ops)
+        self.assertIn(random_op, ChildDTensor._op_dispatcher._random_ops)
+        self.assertNotIn(random_op, DTensor._op_dispatcher._random_ops)
+
     def test_dtensor_subclass_inherits_runtime_cp_custom_handlers(self):
         from torch.distributed.tensor.experimental._context_parallel import (
             _attention as cp_attention,
@@ -603,9 +636,7 @@ class DTensorTest(DTensorTestBase):
             )
 
             subclass_prop.register_sharding_prop_rule(subclass_rule_op, subclass_rule)
-            subclass_prop.register_op_strategy(
-                subclass_strategy_op, subclass_strategy
-            )
+            subclass_prop.register_op_strategy(subclass_strategy_op, subclass_strategy)
             self.assertIs(
                 subclass_prop.op_to_rules.get(subclass_rule_op), subclass_rule
             )
@@ -716,9 +747,7 @@ class DTensorTest(DTensorTestBase):
         parent_conv_handler = parent_dispatcher._custom_op_handlers[op]
         parent_handler_calls = []
 
-        def overriding_parent_conv_handler(
-            op_call, args, kwargs, *, dtensor_type=None
-        ):
+        def overriding_parent_conv_handler(op_call, args, kwargs, *, dtensor_type=None):
             parent_handler_calls.append(dtensor_type)
             return parent_conv_handler(
                 op_call,
@@ -729,6 +758,7 @@ class DTensorTest(DTensorTestBase):
 
         parent_dispatcher._custom_op_handlers[op] = overriding_parent_conv_handler
         try:
+
             class ChildDTensor(ParentDTensor):
                 _op_dispatcher = type(DTensor._op_dispatcher)()
 
@@ -765,9 +795,7 @@ class DTensorTest(DTensorTestBase):
         default_conv_handler = parent_dispatcher._custom_op_handlers[op]
         parent_handler_calls = []
 
-        def overriding_parent_conv_handler(
-            op_call, args, kwargs, *, dtensor_type=None
-        ):
+        def overriding_parent_conv_handler(op_call, args, kwargs, *, dtensor_type=None):
             parent_handler_calls.append(dtensor_type)
             return default_conv_handler(
                 op_call,
@@ -778,6 +806,7 @@ class DTensorTest(DTensorTestBase):
 
         parent_dispatcher._custom_op_handlers[op] = overriding_parent_conv_handler
         try:
+
             class ChildDTensor(ParentDTensor):
                 _op_dispatcher = type(DTensor._op_dispatcher)()
 
@@ -815,9 +844,7 @@ class DTensorTest(DTensorTestBase):
         default_conv_handler = parent_dispatcher._custom_op_handlers[op]
         parent_handler_calls = []
 
-        def overriding_parent_conv_handler(
-            op_call, args, kwargs, *, dtensor_type=None
-        ):
+        def overriding_parent_conv_handler(op_call, args, kwargs, *, dtensor_type=None):
             parent_handler_calls.append(dtensor_type)
             return default_conv_handler(
                 op_call,
@@ -828,6 +855,7 @@ class DTensorTest(DTensorTestBase):
 
         parent_dispatcher._custom_op_handlers[op] = overriding_parent_conv_handler
         try:
+
             class ChildDTensor(ParentDTensor):
                 _op_dispatcher = type(DTensor._op_dispatcher)()
 
@@ -893,15 +921,10 @@ class DTensorTest(DTensorTestBase):
     @with_comms
     def test_dtensor_subclass_rule_shadows_inherited_strategy_registration(self):
         device_mesh = self.build_device_mesh()
-        lib = torch.library.Library(
-            "dtensor_subclass_registry_shadow_test", "FRAGMENT"
-        )
+        lib = torch.library.Library("dtensor_subclass_registry_shadow_test", "FRAGMENT")
         lib.define("rule_overrides_strategy(Tensor input) -> Tensor")
         lib.impl("rule_overrides_strategy", lambda input: input.clone(), "Meta")
-        op = (
-            torch.ops.dtensor_subclass_registry_shadow_test
-            .rule_overrides_strategy.default
-        )
+        op = torch.ops.dtensor_subclass_registry_shadow_test.rule_overrides_strategy.default
 
         class ParentDTensor(DTensor):
             _op_dispatcher = type(DTensor._op_dispatcher)()
@@ -951,10 +974,7 @@ class DTensorTest(DTensorTestBase):
             "dtensor_subclass_cross_registry_schema_info_test", "FRAGMENT"
         )
         lib.define("cross_registry_schema_override(Tensor input, int dim) -> Tensor")
-        op = (
-            torch.ops.dtensor_subclass_cross_registry_schema_info_test
-            .cross_registry_schema_override.default
-        )
+        op = torch.ops.dtensor_subclass_cross_registry_schema_info_test.cross_registry_schema_override.default
 
         class ParentDTensor(DTensor):
             _op_dispatcher = type(DTensor._op_dispatcher)()
@@ -973,9 +993,7 @@ class DTensorTest(DTensorTestBase):
 
         parent_prop = ParentDTensor._op_dispatcher.sharding_propagator
         child_prop = ChildDTensor._op_dispatcher.sharding_propagator
-        parent_prop.register_op_strategy(
-            op, parent_strategy, schema_info=schema_info
-        )
+        parent_prop.register_op_strategy(op, parent_strategy, schema_info=schema_info)
         child_prop.register_single_dim_op_strategy(op, child_single_dim_strategy)
 
         base = distribute_tensor(
@@ -1030,6 +1048,7 @@ class DTensorTest(DTensorTestBase):
             overriding_grandparent_conv_handler
         )
         try:
+
             class ParentDTensor(GrandParentDTensor):
                 _op_dispatcher = type(DTensor._op_dispatcher)()
 

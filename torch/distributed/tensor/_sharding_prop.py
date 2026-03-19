@@ -418,12 +418,10 @@ class ShardingPropagator:
     _fake_mode_lock = nullcontext()
 
     def __init__(self, base_propagator: "ShardingPropagator | None" = None) -> None:
-        self._base_propagator_ref: (
-            weakref.ReferenceType[ShardingPropagator] | None
-        ) = None
-        self._child_propagators: weakref.WeakSet[ShardingPropagator] = (
-            weakref.WeakSet()
+        self._base_propagator_ref: weakref.ReferenceType[ShardingPropagator] | None = (
+            None
         )
+        self._child_propagators: weakref.WeakSet[ShardingPropagator] = weakref.WeakSet()
         op_to_rules: MutableMapping[OpOverload, Callable[[OpSchema], OutputSharding]]
         op_strategy_funcs: MutableMapping[
             OpOverload,
@@ -501,9 +499,7 @@ class ShardingPropagator:
 
     def _attach_to_base(self, base_propagator: "ShardingPropagator") -> None:
         current_base = (
-            None
-            if self._base_propagator_ref is None
-            else self._base_propagator_ref()
+            None if self._base_propagator_ref is None else self._base_propagator_ref()
         )
         if current_base is base_propagator:
             return
