@@ -2603,11 +2603,31 @@ def _check_conv_input_same_type_as_parameters(
         )
 
 
-def _is_empty_conv_input(input_tensor: torch.Tensor) -> bool:
+def _check_empty_channel_conv_input_same_device(
+    input_tensor: torch.Tensor, weight: torch.Tensor
+) -> None:
+    torch._check(
+        _conv_device_or_fake_device(input_tensor)
+        == _conv_device_or_fake_device(weight),
+        lambda: _conv_input_type_error_message(input_tensor, weight, "weight"),
+    )
+
+
+def _is_empty_batch_conv_input(input_tensor: torch.Tensor) -> bool:
     from torch.fx.experimental.symbolic_shapes import guard_or_false
 
-    return guard_or_false(input_tensor.size(0) == 0) or guard_or_false(
-        input_tensor.size(1) == 0
+    return guard_or_false(input_tensor.size(0) == 0)
+
+
+def _is_empty_channel_conv_input(input_tensor: torch.Tensor) -> bool:
+    from torch.fx.experimental.symbolic_shapes import guard_or_false
+
+    return guard_or_false(input_tensor.size(1) == 0)
+
+
+def _is_empty_conv_input(input_tensor: torch.Tensor) -> bool:
+    return _is_empty_batch_conv_input(input_tensor) or _is_empty_channel_conv_input(
+        input_tensor
     )
 
 
@@ -2637,9 +2657,18 @@ def _conv_empty_output_dtype(
     if input_tensor.is_mkldnn:
         return input_tensor.dtype
 
-    promote_args = [input_tensor, weight]
-    if bias is not None:
-        promote_args.append(bias)
+    # Eager's Empty backend uses a scalar weight/bias for zero-batch inputs but
+    # multiplies by the full weight tensor for zero-channel inputs.
+    if _is_empty_batch_conv_input(input_tensor) and not _is_empty_channel_conv_input(
+        input_tensor
+    ):
+        promote_args = [input_tensor, weight.new_empty(())]
+        if bias is not None:
+            promote_args.append(bias.new_empty(()))
+    else:
+        promote_args = [input_tensor, weight]
+        if bias is not None:
+            promote_args.append(bias)
 
     _, result_dtype = utils.elementwise_dtypes(
         *promote_args,
@@ -2722,6 +2751,9 @@ def meta_conv(
     output_channels_dim = 1
     if guard_or_false(input_tensor.size(input_channels_dim) == 0):
         shape_out[output_channels_dim] = 0
+
+    if is_transposed and _is_empty_channel_conv_input(input_tensor):
+        _check_empty_channel_conv_input_same_device(input_tensor, weight)
 
     if is_transposed and _is_empty_conv_input(input_tensor):
         return input_tensor.new_empty(

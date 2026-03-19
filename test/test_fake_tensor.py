@@ -1855,9 +1855,7 @@ class FakeTensorOperatorInvariants(TestCase):
             grad_output = torch.randn(2, 3, 4, 4, dtype=torch.float16)
             inp = torch.randn(2, 3, 4, 4, dtype=torch.float16)
             weight = torch.randn(3, 3, 1, 1, dtype=torch.float32)
-            error_regex = (
-                "should be the same|expected scalar type|primitive descriptor"
-            )
+            error_regex = "should be the same|expected scalar type|primitive descriptor"
 
             with self.assertRaisesRegex(RuntimeError, error_regex):
                 torch.ops.aten.convolution_backward(
@@ -1874,7 +1872,7 @@ class FakeTensorOperatorInvariants(TestCase):
                     [True, True, False],
                 )
 
-    def test_conv_transpose_empty_input_skips_same_type_check(self):
+    def test_conv_transpose_empty_batch_skips_same_type_check(self):
         with FakeTensorMode():
             inp = torch.randn(0, 3, 4, 4, dtype=torch.float16)
             weight = torch.randn(3, 3, 1, 1, dtype=torch.float32)
@@ -1892,9 +1890,29 @@ class FakeTensorOperatorInvariants(TestCase):
             )
 
             self.assertEqual(out.shape, (0, 3, 4, 4))
+            self.assertEqual(out.dtype, inp.dtype)
+
+    def test_conv_transpose_empty_channel_promotes_dtype(self):
+        with FakeTensorMode():
+            inp = torch.randn(2, 0, 4, 4, dtype=torch.float16)
+            weight = torch.randn(0, 3, 1, 1, dtype=torch.float32)
+
+            out = torch.ops.aten.convolution(
+                inp,
+                weight,
+                None,
+                [1, 1],
+                [0, 0],
+                [1, 1],
+                True,
+                [0, 0],
+                1,
+            )
+
+            self.assertEqual(out.shape, (2, 0, 4, 4))
             self.assertEqual(out.dtype, torch.promote_types(inp.dtype, weight.dtype))
 
-    def test_conv_transpose_backward_empty_input_skips_same_type_check(self):
+    def test_conv_transpose_backward_empty_batch_skips_same_type_check(self):
         with FakeTensorMode():
             grad_output = torch.randn(0, 3, 4, 4, dtype=torch.float16)
             inp = torch.randn(0, 3, 4, 4, dtype=torch.float16)
@@ -1926,6 +1944,25 @@ class FakeTensorOperatorInvariants(TestCase):
         with FakeTensorMode():
             inp = torch.randn(2, 3, 4, 4, device="cuda")
             weight = torch.randn(3, 3, 1, 1, device="cpu")
+
+            with self.assertRaisesRegex(RuntimeError, "should be the same"):
+                torch.ops.aten.convolution(
+                    inp,
+                    weight,
+                    None,
+                    [1, 1],
+                    [0, 0],
+                    [1, 1],
+                    True,
+                    [0, 0],
+                    1,
+                )
+
+    @unittest.skipIf(not RUN_CUDA, "requires cuda")
+    def test_conv_transpose_empty_channel_device_mismatch_errors(self):
+        with FakeTensorMode():
+            inp = torch.randn(2, 0, 4, 4, device="cuda")
+            weight = torch.randn(0, 3, 1, 1, device="cpu")
 
             with self.assertRaisesRegex(RuntimeError, "should be the same"):
                 torch.ops.aten.convolution(
