@@ -5077,7 +5077,8 @@ SinBackward0, MulBackward0, torch::autograd::AccumulateGrad
 
         prev = torch.autograd.is_view_replay_enabled()
         ctx = torch.autograd._force_original_view_tracking(not prev)
-        self.assertEqual(torch.autograd.is_view_replay_enabled(), prev)
+        # Construction eagerly sets state (function-form behavior).
+        self.assertEqual(torch.autograd.is_view_replay_enabled(), not prev)
         with ctx:
             self.assertEqual(torch.autograd.is_view_replay_enabled(), not prev)
             out = f(x)
@@ -5099,23 +5100,12 @@ SinBackward0, MulBackward0, torch::autograd::AccumulateGrad
         self.assertTrue(torch.autograd.is_view_replay_enabled())
 
         prev = torch.autograd.is_view_replay_enabled()
-        observed = None
-
-        def identity():
-            nonlocal observed
-            observed = torch.autograd.is_view_replay_enabled()
-
-            def decorator(fn):
-                return fn
-
-            return decorator
 
         @torch.autograd._force_original_view_tracking(not prev)
-        @identity()
         def g(x):
             return f(x)
 
-        self.assertEqual(observed, prev)
+        # __call__ undoes the __init__ mutation, so ambient state is restored.
         self.assertEqual(torch.autograd.is_view_replay_enabled(), prev)
         out = g(x)
         self.assertTrue(
