@@ -14,7 +14,7 @@ import warnings
 from collections.abc import Callable, Generator
 from contextlib import AbstractContextManager, contextmanager, ExitStack, nullcontext
 from dataclasses import dataclass
-from typing import Any, TypeVar
+from typing import Any, cast, TypeVar
 from unittest.mock import patch
 
 import torch
@@ -1437,11 +1437,11 @@ def aot_dispatch_subclass(
         )
 
     if is_joint_structure:
-        primals_unwrapped = args_unwrapped[0]  # type: ignore[assignment]
+        primals_unwrapped = cast(list[Any], args_unwrapped[0])
         primals_unwrapped_descs = args_descs_unwrapped[0]  # type: ignore[assignment]
         fn_to_trace = joint_fn  # type: ignore[assignment]
     else:
-        primals_unwrapped = args_unwrapped  # type: ignore[assignment]
+        primals_unwrapped = cast(list[Any], args_unwrapped)
         primals_unwrapped_descs = args_descs_unwrapped  # type: ignore[assignment]
         fn_to_trace = fw_fn  # type: ignore[assignment]
 
