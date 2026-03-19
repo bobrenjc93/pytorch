@@ -4804,8 +4804,7 @@ class TestAOTExport(AOTTestCase):
             str(gm.code).strip(),
             """\
 def forward(self, arg0_1, arg1_1):
-    clone = torch.ops.aten.clone.default(arg1_1);  arg1_1 = None
-    add = torch.ops.aten.add.Tensor(clone, 1);  clone = None
+    add = torch.ops.aten.add.Tensor(arg1_1, 1);  arg1_1 = None
     return (add,)""",
         )
 
