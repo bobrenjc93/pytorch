@@ -19,7 +19,7 @@ import traceback
 from collections import defaultdict
 from collections.abc import Callable, Generator
 from contextlib import nullcontext
-from typing import Any, TYPE_CHECKING
+from typing import Any, TYPE_CHECKING, get_args, get_origin
 
 from torch._library.fake_class_registry import FakeScriptObject
 from torch._opaque_base import OpaqueBase
@@ -44,20 +44,17 @@ from torch._dynamo.utils import (
 from torch._guards import CompileContext, TracingContext
 from torch._logging import getArtifactLogger, trace_structured
 from torch._subclasses import FakeTensor
-from torch._subclasses.fake_tensor import maybe_get_fake_mode
 from torch._subclasses.meta_utils import is_sparse_any
 from torch.fx.experimental._backward_state import BackwardState
 from torch.fx.experimental.proxy_tensor import is_sym_node
 from torch.fx.experimental.symbolic_shapes import fx_placeholder_vals, guard_or_true
 from torch.fx.graph_module import GraphModule
 from torch.fx.node import map_arg
+from torch.fx.operator_schemas import get_signature_for_torch_op
 from torch.fx.passes._tensorify_python_scalars import tensorify_python_scalars
 from torch.multiprocessing.reductions import StorageWeakRef
 from torch.types import py_sym_types
-from torch.utils._python_dispatch import (
-    is_traceable_wrapper_subclass,
-    TorchDispatchMode,
-)
+from torch.utils._python_dispatch import is_traceable_wrapper_subclass
 from torchgen.utils import dataclass_repr
 
 from .. import config
@@ -337,16 +334,6 @@ def _get_inner_meta(
     )
 
 
-class _OpTraceDispatchMode(TorchDispatchMode):
-    def __init__(self) -> None:
-        super().__init__()
-        self.traced_ops: list[torch._ops.OpOverload] = []
-
-    def __torch_dispatch__(self, func, types, args=(), kwargs=None):
-        self.traced_ops.append(func)
-        return func(*args, **(kwargs or {}))
-
-
 def _contains_python_scalar(arg: Any) -> bool:
     if isinstance(arg, numbers.Number):
         return True
@@ -357,76 +344,127 @@ def _contains_python_scalar(arg: Any) -> bool:
     return False
 
 
-def _find_fake_mode(arg: Any) -> Any | None:
-    fake_mode = maybe_get_fake_mode(arg)
-    if fake_mode is not None:
-        return fake_mode
+def _value_matches_type_hint(type_hint: Any, value: Any) -> bool:
+    origin = get_origin(type_hint)
+    if type_hint is Any:
+        return True
 
-    result = None
-    values = ()
-    if isinstance(arg, (tuple, list)):
-        values = arg
-    elif isinstance(arg, dict):
-        values = arg.values()
+    if origin in {None, type(None)}:
+        if type_hint is int and isinstance(value, torch.dtype):
+            return True
+        if type_hint is numbers.Number:
+            return isinstance(value, numbers.Number)
+        return isinstance(type_hint, type) and isinstance(value, type_hint)
 
-    for value in values:
-        value_fake_mode = _find_fake_mode(value)
-        if value_fake_mode is None:
+    if origin is list:
+        if not isinstance(value, (list, tuple)):
+            return False
+        (element_type,) = get_args(type_hint)
+        return all(_value_matches_type_hint(element_type, x) for x in value)
+
+    if origin is tuple:
+        if not isinstance(value, tuple):
+            return False
+        element_types = get_args(type_hint)
+        if len(element_types) == 2 and element_types[1] is Ellipsis:
+            return all(_value_matches_type_hint(element_types[0], x) for x in value)
+        return len(value) == len(element_types) and all(
+            _value_matches_type_hint(element_type, element_value)
+            for element_type, element_value in zip(element_types, value)
+        )
+
+    if origin is dict:
+        if not isinstance(value, dict):
+            return False
+        key_type, value_type = get_args(type_hint)
+        return all(
+            _value_matches_type_hint(key_type, key)
+            and _value_matches_type_hint(value_type, element_value)
+            for key, element_value in value.items()
+        )
+
+    if origin is set:
+        if not isinstance(value, set):
+            return False
+        (element_type,) = get_args(type_hint)
+        return all(_value_matches_type_hint(element_type, x) for x in value)
+
+    if origin is frozenset:
+        if not isinstance(value, frozenset):
+            return False
+        (element_type,) = get_args(type_hint)
+        return all(_value_matches_type_hint(element_type, x) for x in value)
+
+    if origin is type(None):
+        return value is None
+
+    if origin is not None:
+        return any(
+            _value_matches_type_hint(option, value) for option in get_args(type_hint)
+        )
+
+    return True
+
+
+def _resolve_python_scalar_packet_overload(
+    target: torch._ops.OpOverload,
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+) -> torch._ops.OpOverload:
+    signatures, schemas = get_signature_for_torch_op(
+        target.overloadpacket, return_schemas=True
+    )
+    if signatures is None or schemas is None:
+        return target
+
+    matched_overloads: list[torch._ops.OpOverload] = []
+    for candidate_signature, schema in zip(signatures, schemas):
+        try:
+            bound_args = candidate_signature.bind(*args, **kwargs)
+        except TypeError:
             continue
-        if result is None:
-            result = value_fake_mode
-        elif result is not value_fake_mode:
-            raise AssertionError("All fake tensor modes must be the same")
 
-    return result
+        if all(
+            _value_matches_type_hint(
+                candidate_signature.parameters[arg_name].annotation,
+                arg_value,
+            )
+            for arg_name, arg_value in bound_args.arguments.items()
+        ):
+            overload_name = schema.overload_name or "default"
+            matched_overloads.append(getattr(target.overloadpacket, overload_name))
+
+    if len(matched_overloads) != 1:
+        return target
+
+    return matched_overloads[0]
 
 
 # AOT graphs can inherit Tensor overloads from the Python API even when a
-# literal number would resolve to a Scalar overload through torch.ops.aten.
+# literal number should have matched a scalar overload in the original API.
 def _resolve_python_scalar_aten_overload(
     target: torch._ops.OpOverload,
     args: tuple[Any, ...],
     kwargs: dict[str, Any],
-    fake_mode: Any | None,
 ) -> torch._ops.OpOverload:
     if (
-        target._schema.overload_name not in {"Tensor", "Tensor_mode", "Tensor_Tensor"}
+        not target._schema.overload_name.startswith("Tensor")
         or not target._schema.name.startswith("aten::")
         or not torch._C._should_allow_numbers_as_tensors(target.overloadpacket.__name__)
         or not (_contains_python_scalar(args) or _contains_python_scalar(kwargs))
     ):
         return target
 
-    fake_mode = _find_fake_mode(args) or _find_fake_mode(kwargs) or fake_mode
-    if fake_mode is None:
-        return target
-
-    op_trace_dispatch_mode = _OpTraceDispatchMode()
-    try:
-        with (
-            fake_mode,
-            torch._dispatch.python.enable_python_dispatcher(),
-            op_trace_dispatch_mode,
-        ):
-            target.overloadpacket(*args, **kwargs)
-    except Exception:
-        return target
-
-    if len(op_trace_dispatch_mode.traced_ops) < 1:
-        return target
-
-    new_target = op_trace_dispatch_mode.traced_ops[0]
-    if (
-        not isinstance(new_target, torch._ops.OpOverload)
-        or new_target.overloadpacket != target.overloadpacket
-    ):
+    new_target = _resolve_python_scalar_packet_overload(target, args, kwargs)
+    if new_target.overloadpacket != target.overloadpacket:
         return target
 
     return new_target
 
 
-def _apply_python_scalar_overload_resolution(module: torch.fx.GraphModule) -> None:
-    fake_mode = detect_fake_mode()
+def _apply_python_scalar_overload_resolution_to_subgraph(
+    module: torch.fx.GraphModule,
+) -> None:
     env: dict[torch.fx.Node, Any] = {}
     updated = False
     for node in module.graph.nodes:
@@ -443,7 +481,6 @@ def _apply_python_scalar_overload_resolution(module: torch.fx.GraphModule) -> No
                     node.target,
                     args,
                     kwargs,
-                    fake_mode,
                 )
                 if new_target != node.target:
                     node.target = new_target
@@ -454,6 +491,12 @@ def _apply_python_scalar_overload_resolution(module: torch.fx.GraphModule) -> No
 
     if updated:
         module.recompile()
+
+
+def _apply_python_scalar_overload_resolution(module: torch.fx.GraphModule) -> None:
+    for submodule in module.modules():
+        if isinstance(submodule, torch.fx.GraphModule):
+            _apply_python_scalar_overload_resolution_to_subgraph(submodule)
 
 
 def _apply_tensorify_python_scalars(module: torch.fx.GraphModule) -> None:

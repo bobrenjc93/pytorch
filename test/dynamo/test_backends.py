@@ -306,20 +306,67 @@ class TestCustomBackendAPI(torch._dynamo.test_case.TestCase):
 
         traced_targets: list[torch._ops.OpOverload] | None = None
 
-        def my_compiler(gm, _example_inputs):
-            nonlocal traced_targets
-            traced_targets = [
+        def collect_targets(gm):
+            return [
                 node.target
-                for node in gm.graph.nodes
+                for submodule in gm.modules()
+                if isinstance(submodule, torch.fx.GraphModule)
+                for node in submodule.graph.nodes
                 if node.op == "call_function"
                 and isinstance(node.target, torch._ops.OpOverload)
             ]
+
+        def my_compiler(gm, _example_inputs):
+            nonlocal traced_targets
+            traced_targets = collect_targets(gm)
             return make_boxed_func(gm.forward)
 
         my_backend = aot_autograd(fw_compiler=my_compiler)
 
         def f(x):
             return x + 2, torch.div(x, 2, rounding_mode="floor")
+
+        x = torch.randn(3, 3)
+        self.assertTrue(
+            same(torch.compile(f, backend=my_backend, fullgraph=True)(x), f(x))
+        )
+        self.assertIsNotNone(traced_targets)
+        self.assertIn(torch.ops.aten.add.Scalar, traced_targets)
+        self.assertIn(torch.ops.aten.div.Scalar_mode, traced_targets)
+        self.assertNotIn(torch.ops.aten.add.Tensor, traced_targets)
+        self.assertNotIn(torch.ops.aten.div.Tensor_mode, traced_targets)
+
+    def test_aot_autograd_uses_scalar_overload_for_python_numbers_in_hops(self):
+        from functorch.compile import make_boxed_func
+        from torch._dynamo.backends.common import aot_autograd
+
+        traced_targets: list[torch._ops.OpOverload] | None = None
+
+        def collect_targets(gm):
+            return [
+                node.target
+                for submodule in gm.modules()
+                if isinstance(submodule, torch.fx.GraphModule)
+                for node in submodule.graph.nodes
+                if node.op == "call_function"
+                and isinstance(node.target, torch._ops.OpOverload)
+            ]
+
+        def my_compiler(gm, _example_inputs):
+            nonlocal traced_targets
+            traced_targets = collect_targets(gm)
+            return make_boxed_func(gm.forward)
+
+        my_backend = aot_autograd(fw_compiler=my_compiler)
+
+        def true_fn(x):
+            return x + 2, torch.div(x, 2, rounding_mode="floor")
+
+        def false_fn(x):
+            return x + 3, torch.div(x, 3, rounding_mode="floor")
+
+        def f(x):
+            return torch.cond(x.sum() > 0, true_fn, false_fn, (x,))
 
         x = torch.randn(3, 3)
         self.assertTrue(
