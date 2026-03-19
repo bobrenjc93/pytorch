@@ -100,6 +100,18 @@ def _check_bmm_out_dtype(mat1, out_dtype) -> None:
 
 
 def _should_enforce_bmm_input_dtypes() -> bool:
+    for key in ("source_fn_stack", "fwd_source_fn_stack"):
+        source_fn_stack = V.graph.current_node.meta.get(key)
+        if not source_fn_stack:
+            continue
+        source_fn = source_fn_stack[-1][1]
+        source_fn_name = (
+            source_fn
+            if isinstance(source_fn, str)
+            else getattr(source_fn, "__name__", None)
+        )
+        return source_fn_name in ("bmm", "matmul")
+
     original_aten = V.graph.current_node.meta.get("original_aten")
     return isinstance(
         original_aten, torch._ops.OpOverload
