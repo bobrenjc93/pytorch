@@ -16,6 +16,7 @@ from torch._subclasses.fake_tensor import (
 from torch._subclasses.functional_tensor import FunctionalTensor, FunctionalTensorMode
 from torch._subclasses.meta_utils import is_sparse_any
 from torch.fx.experimental.proxy_tensor import (
+    _get_proxies,
     _ProxyTracer,
     disable_proxy_modes_tracing,
     get_proxy_slot,
@@ -155,11 +156,18 @@ def _copy_tensor_proxy_metadata(src, dst, tracer: _ProxyTracer):
     return proxy.proxy
 
 
+def _get_tracked_proxy_nodes(t) -> set[object]:
+    if not isinstance(t, torch.Tensor):
+        return set()
+    return {proxy.node for proxy in _get_proxies(t)}
+
+
 def _copy_wrapper_subclass_inner_proxy_slots(
     src,
     dst,
     tracer: _ProxyTracer,
     preferred_inner_proxy: torch.fx.Proxy | None = None,
+    input_proxy_nodes: set[object] | None = None,
 ):
     if not is_traceable_wrapper_subclass(src):
         return
@@ -178,7 +186,12 @@ def _copy_wrapper_subclass_inner_proxy_slots(
             continue
 
         next_preferred_proxy = None
-        if preferred_inner_proxy is not None:
+        should_prefer_proxy = (
+            preferred_inner_proxy is not None
+            and bool(src_proxy_nodes := _get_tracked_proxy_nodes(src_inner))
+            and not src_proxy_nodes.issubset(input_proxy_nodes or set())
+        )
+        if should_prefer_proxy:
             track_tensor(
                 dst_inner,
                 preferred_inner_proxy,
@@ -196,6 +209,7 @@ def _copy_wrapper_subclass_inner_proxy_slots(
             dst_inner,
             tracer,
             next_preferred_proxy,
+            input_proxy_nodes,
         )
 
 
@@ -260,6 +274,12 @@ def trace_out_dtype(proxy_mode, func_overload, op, output_dtype, *args):
 
     if has_wrapper_subclass_arg:
         functional_mode = _detect_functional_mode()
+        input_proxy_nodes = {
+            proxy.node
+            for arg in pytree.arg_tree_leaves(*args)
+            if isinstance(arg, torch.Tensor)
+            for proxy in _get_proxies(arg)
+        }
         out = _dispatch_out_dtype_dense(op, output_dtype, *args)
         safe_out = out
         if functional_mode is None:
@@ -276,6 +296,7 @@ def trace_out_dtype(proxy_mode, func_overload, op, output_dtype, *args):
             safe_out,
             proxy_mode.tracer,
             out_proxy,
+            input_proxy_nodes,
         )
         return safe_out
 

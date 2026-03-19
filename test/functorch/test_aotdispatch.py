@@ -8010,6 +8010,79 @@ Expected a .* tangent but got a plain Tensor.""",
             "torch.ops.aten.add.Tensor"
         ).run(gm.code)
 
+    def test_make_fx_out_dtype_wrapper_subclass_preserves_non_output_inner_proxy(self):
+        class ScaledWrapperSubclass(torch.Tensor):
+            @staticmethod
+            def __new__(cls, data, scale, outer_size=None, outer_stride=None):
+                if outer_size is None:
+                    outer_size = data.size()
+                if outer_stride is None:
+                    outer_stride = data.stride()
+                return torch.Tensor._make_wrapper_subclass(
+                    cls,
+                    outer_size,
+                    strides=outer_stride,
+                    storage_offset=data.storage_offset(),
+                    dtype=data.dtype,
+                    layout=data.layout,
+                    requires_grad=data.requires_grad,
+                    device=data.device,
+                )
+
+            def __init__(self, data, scale, outer_size=None, outer_stride=None):
+                self._data = data
+                self._scale = scale
+
+            def __tensor_flatten__(self):
+                return ["_data", "_scale"], None
+
+            @staticmethod
+            def __tensor_unflatten__(inner_tensors, meta, outer_size, outer_stride):
+                if meta is not None:
+                    raise AssertionError("Expected meta to be None")
+                return ScaledWrapperSubclass(
+                    inner_tensors["_data"],
+                    inner_tensors["_scale"],
+                    outer_size,
+                    outer_stride,
+                )
+
+            @classmethod
+            def __torch_dispatch__(cls, func, types, args, kwargs=None):
+                if kwargs is None:
+                    kwargs = {}
+                scaled_tensor = args[0]
+                out = func(scaled_tensor._data, *args[1:], **kwargs)
+                out = out * scaled_tensor._scale
+                return torch.utils._python_dispatch.return_and_correct_aliasing(
+                    func,
+                    args,
+                    kwargs,
+                    ScaledWrapperSubclass(out, scaled_tensor._scale),
+                )
+
+        weight = torch.randint(-4, 5, (5, 5), dtype=torch.int8)
+        scale = torch.full((5, 5), 3, dtype=torch.int32)
+
+        def fn(x):
+            y = out_dtype(torch.ops.aten.mm.default, torch.int32, x, weight)
+            return y + 1
+
+        x = ScaledWrapperSubclass(
+            torch.randint(-4, 5, (5, 5), dtype=torch.int8),
+            scale,
+        )
+        gm = make_fx(fn, tracing_mode="symbolic")(x)
+        out = gm(x)
+        ref = fn(x)
+
+        self.assertIsInstance(out, ScaledWrapperSubclass)
+        self.assertEqual(ref._data, out._data)
+        self.assertEqual(ref._scale, out._scale)
+        FileCheck().check("torch.ops.higher_order.out_dtype").check(
+            "torch.ops.aten.add.Tensor"
+        ).check("torch.ops.aten.mul.Tensor").run(gm.code)
+
     @torch._inductor.config.patch({"freezing": True})
     def test_inductor_freezing_with_subclasses(self):
         class M(torch.nn.Module):
