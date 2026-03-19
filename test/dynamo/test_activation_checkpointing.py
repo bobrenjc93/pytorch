@@ -28,7 +28,7 @@ from torch._dynamo.testing import (
     normalize_gm,
 )
 from torch._higher_order_ops.wrap import tag_activation_checkpoint
-from torch.testing._internal.common_cuda import SM89OrLater
+from torch.testing._internal.common_cuda import PLATFORM_SUPPORTS_FP8
 from torch.testing._internal.common_device_type import instantiate_device_type_tests
 from torch.testing._internal.common_utils import IS_WINDOWS, parametrize, skipIfHpu
 from torch.testing._internal.inductor_utils import HAS_CUDA_AND_TRITON
@@ -855,8 +855,9 @@ Non-primal fwd outputs from model w/o backward hook: {mod_no_hook_fwd_outputs_no
         wrap_node = find_first_node(cnt.graphs[0], tag_activation_checkpoint)
         self.assertEqual(len(wrap_node.args), 3)
 
-    @requires_cuda_and_triton
-    @unittest.skipIf(not SM89OrLater, "requires SM89+ GPU")
+    @unittest.skipIf(
+        not PLATFORM_SUPPORTS_FP8, "requires platform with fp8 _scaled_mm support"
+    )
     @unittest.skipIf(IS_WINDOWS, "torch.compile doesn't work with windows")
     @parametrize(
         "partition_fn",
@@ -865,16 +866,14 @@ Non-primal fwd outputs from model w/o backward hook: {mod_no_hook_fwd_outputs_no
             default_partition,
         ],
     )
-    def test_compile_selective_checkpoint_scaled_mm_recomputes_inputs(
+    def test_compile_selective_checkpoint_scaled_mm_must_save(
         self, device, partition_fn
     ):
         float8_dtype = torch.float8_e4m3fn
 
         def to_float8(x):
             amax = torch.max(torch.abs(x))
-            scale = torch.finfo(float8_dtype).max / torch.clamp(
-                amax.float(), min=1e-12
-            )
+            scale = torch.finfo(float8_dtype).max / torch.clamp(amax.float(), min=1e-12)
             x_fp8 = (x.float() * scale).to(float8_dtype)
             return x_fp8, scale.reciprocal().reshape(1, 1)
 
@@ -927,19 +926,25 @@ Non-primal fwd outputs from model w/o backward hook: {mod_no_hook_fwd_outputs_no
         w = torch.randn(32, 32, requires_grad=True, device=device, dtype=torch.bfloat16)
 
         fw_graphs = []
+        bw_graphs = []
 
-        def record_graph(gm, _example_inputs):
+        def record_fw_graph(gm, _example_inputs):
             fw_graphs.append(gm)
             return gm.forward
 
+        def record_bw_graph(gm, _example_inputs):
+            bw_graphs.append(gm)
+            return gm.forward
+
         backend = aot_autograd(
-            fw_compiler=record_graph,
-            bw_compiler=nop,
+            fw_compiler=record_fw_graph,
+            bw_compiler=record_bw_graph,
             partition_fn=partition_fn,
         )
         self._validate(fn, backend, x, w)
 
         fw_graph = fw_graphs[0]
+        bw_graph = bw_graphs[0]
         scaled_mm_node = find_first_node(fw_graph, torch.ops.aten._scaled_mm.default)
         self.assertIsNotNone(scaled_mm_node)
 
@@ -963,6 +968,14 @@ Non-primal fwd outputs from model w/o backward hook: {mod_no_hook_fwd_outputs_no
                 f"saving them in the forward graph outputs, but saved "
                 f"{saved_outputs & scaled_mm_inputs}. "
                 f"Forward outputs: {saved_outputs}. _scaled_mm inputs: {scaled_mm_inputs}."
+            ),
+        )
+        self.assertIsNone(
+            find_first_node(bw_graph, torch.ops.aten._scaled_mm.default),
+            msg=(
+                "CheckpointPolicy.MUST_SAVE for _scaled_mm should keep the op out of the "
+                "backward recompute graph, but backward still contains it:\n"
+                f"{bw_graph.print_readable(print_output=False)}"
             ),
         )
 
