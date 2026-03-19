@@ -7988,6 +7988,28 @@ Expected a .* tangent but got a plain Tensor.""",
         self.assertIsInstance(out, WrapperSubclass)
         self.assertEqual(fn(x).a, out.a)
 
+    def test_make_fx_out_dtype_two_tensor_preserves_hop(self):
+        weight = torch.randint(-128, 127, (5, 5), dtype=torch.int8)
+
+        def fn(x):
+            y = out_dtype(torch.ops.aten.mm.default, torch.int32, x, weight)
+            return y + 1
+
+        x = TwoTensor(
+            torch.randint(-128, 127, (5, 5), dtype=torch.int8),
+            torch.randint(-128, 127, (5, 5), dtype=torch.int8),
+        )
+        gm = make_fx(fn, tracing_mode="symbolic")(x)
+        out = gm(x)
+        ref = fn(x)
+
+        self.assertIsInstance(out, TwoTensor)
+        self.assertEqual(ref.a, out.a)
+        self.assertEqual(ref.b, out.b)
+        FileCheck().check("torch.ops.higher_order.out_dtype").check(
+            "torch.ops.aten.add.Tensor"
+        ).run(gm.code)
+
     @torch._inductor.config.patch({"freezing": True})
     def test_inductor_freezing_with_subclasses(self):
         class M(torch.nn.Module):

@@ -14,6 +14,7 @@ from torch._subclasses.fake_tensor import (
     maybe_get_fake_mode,
 )
 from torch._subclasses.functional_tensor import FunctionalTensor, FunctionalTensorMode
+from torch._subclasses.meta_utils import is_sparse_any
 from torch.fx.experimental.proxy_tensor import (
     _ProxyTracer,
     disable_proxy_modes_tracing,
@@ -21,6 +22,7 @@ from torch.fx.experimental.proxy_tensor import (
     maybe_handle_decomp,
     ProxyTorchDispatchMode,
     set_proxy_slot,
+    track_tensor,
     track_tensor_tree,
 )
 from torch.utils._python_dispatch import (
@@ -140,12 +142,12 @@ def _copy_tensor_proxy_metadata(src, dst, tracer: _ProxyTracer):
     for src_dim, dst_dim in zip(src.shape, dst.shape):
         _copy_symbolic_int_proxy_slot(src_dim, dst_dim, tracer)
 
-    if not src.is_sparse:
+    if not is_sparse_any(src):
         for src_stride, dst_stride in zip(src.stride(), dst.stride()):
             _copy_symbolic_int_proxy_slot(src_stride, dst_stride, tracer)
 
     _copy_symbolic_int_proxy_slot(src.numel(), dst.numel(), tracer)
-    if not src.is_sparse:
+    if not is_sparse_any(src):
         _copy_symbolic_int_proxy_slot(
             src.storage_offset(), dst.storage_offset(), tracer
         )
@@ -169,11 +171,6 @@ def _copy_wrapper_subclass_inner_proxy_slots(
     if src_attrs != dst_attrs:
         raise AssertionError("expected matching subclass attrs")
 
-    tensor_attrs = [
-        attr for attr in src_attrs if isinstance(getattr(src, attr), torch.Tensor)
-    ]
-    use_preferred_proxy = preferred_inner_proxy is not None and len(tensor_attrs) == 1
-
     for attr in src_attrs:
         src_inner = getattr(src, attr)
         dst_inner = getattr(dst, attr)
@@ -181,8 +178,8 @@ def _copy_wrapper_subclass_inner_proxy_slots(
             continue
 
         next_preferred_proxy = None
-        if use_preferred_proxy:
-            track_tensor_tree(
+        if preferred_inner_proxy is not None:
+            track_tensor(
                 dst_inner,
                 preferred_inner_proxy,
                 constant=None,
@@ -274,13 +271,12 @@ def trace_out_dtype(proxy_mode, func_overload, op, output_dtype, *args):
             constant=None,
             tracer=proxy_mode.tracer,
         )
-        if functional_mode is None:
-            _copy_wrapper_subclass_inner_proxy_slots(
-                out,
-                safe_out,
-                proxy_mode.tracer,
-                out_proxy,
-            )
+        _copy_wrapper_subclass_inner_proxy_slots(
+            out,
+            safe_out,
+            proxy_mode.tracer,
+            out_proxy,
+        )
         return safe_out
 
     with disable_proxy_modes_tracing():

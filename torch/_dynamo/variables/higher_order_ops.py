@@ -3701,8 +3701,10 @@ class OutDtypeHigherOrderVariable(TorchHigherOrderOperatorVariable):
         args: Sequence[VariableTracker],
         kwargs: dict[str, VariableTracker],
     ) -> VariableTracker:
-        from torch._higher_order_ops.out_dtype import traceable_out_dtype_dense
-        from torch._higher_order_ops.out_dtype import validate_out_dtype_args
+        from torch._higher_order_ops.out_dtype import (
+            traceable_out_dtype_dense,
+            validate_out_dtype_args,
+        )
         from torch.utils._python_dispatch import is_traceable_wrapper_subclass
 
         from .builder import wrap_fx_proxy
