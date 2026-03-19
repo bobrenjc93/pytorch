@@ -6,7 +6,6 @@ import torch
 from torch._dynamo.utils import counters
 from torch._inductor.codegen.rocm.ck_universal_gemm_template import CKGemmTemplate
 from torch._inductor.kernel.mm_common import load_kernel_template
-from torch._prims_common import ELEMENTWISE_TYPE_PROMOTION_KIND
 
 from .. import config as inductor_config, ir, lowering as L
 from ..kernel_inputs import MMKernelInputs
@@ -70,73 +69,11 @@ aten_baddbmm = ExternKernelChoice(
 )
 
 
-def _check_bmm_input_dtypes(mat1, mat2) -> None:
-    input_dtype = mat1.get_dtype()
-    other_dtype = mat2.get_dtype()
-    torch._check(
-        other_dtype == input_dtype,
-        lambda: (
-            f"expected mat1 and mat2 to have the same dtype, but got: "
-            f"{input_dtype} != {other_dtype}"
-        ),
-    )
-
-
-def _check_bmm_out_dtype(mat1, out_dtype) -> None:
-    if out_dtype is not None:
-        input_dtype = mat1.get_dtype()
-        torch._check(
-            mat1.get_device().type in ("cuda", "xpu"),
-            lambda: "out_dtype is only supported for CUDA or XPU",
-        )
-        torch._check(
-            out_dtype == input_dtype
-            or (
-                out_dtype == torch.float32
-                and input_dtype in (torch.float16, torch.bfloat16)
-            ),
-            lambda: "out_dtype must be the same as input dtype or fp32 for fp16/bf16 inputs",
-        )
-
-
-def _should_enforce_bmm_input_dtypes() -> bool:
-    for key in ("source_fn_stack", "fwd_source_fn_stack"):
-        source_fn_stack = V.graph.current_node.meta.get(key)
-        if not source_fn_stack:
-            continue
-        source_fn = source_fn_stack[-1][1]
-        source_fn_name = (
-            source_fn
-            if isinstance(source_fn, str)
-            else getattr(source_fn, "__name__", None)
-        )
-        return source_fn_name in ("bmm", "matmul")
-
-    original_aten = V.graph.current_node.meta.get("original_aten")
-    return isinstance(
-        original_aten, torch._ops.OpOverload
-    ) and original_aten._overloadpacket in (aten.bmm, aten.matmul)
-
-
-@L.register_lowering(aten.bmm, type_promotion_kind=None)
+@L.register_lowering(aten.bmm)
 def tuned_bmm(mat1, mat2, out_dtype=None, *, layout=None):
     """
     Lowering for autotuning aten.bmm with different backends (Aten, Triton, CUTLASS, etc.)
     """
-    if _should_enforce_bmm_input_dtypes():
-        _check_bmm_input_dtypes(mat1, mat2)
-    else:
-        # Preserve eager promotion for higher-level ops like einsum that decompose through bmm.
-        args, _ = transform_args(
-            args=[mat1, mat2],
-            kwargs={},
-            broadcast=False,
-            type_promotion_kind=ELEMENTWISE_TYPE_PROMOTION_KIND.DEFAULT,
-            convert_input_to_bool=False,
-        )
-        mat1, mat2 = args
-    _check_bmm_out_dtype(mat1, out_dtype)
-
     if all(x.get_device().type == "cpu" for x in [mat1, mat2]):
         # decompose to small ops when memory bound
         if mat1.get_size()[1] == 1 or mat2.get_size()[2] == 1:
@@ -226,6 +163,9 @@ def tuned_bmm(mat1, mat2, out_dtype=None, *, layout=None):
     aten_handler: ExternKernelChoice = aten_bmm
     aten_extra_kwargs = {}
     if out_dtype:
+        assert mat1.get_device().type in ("cuda", "xpu"), (
+            "out_dtype is only supported for CUDA or XPU"
+        )
         aten_handler = aten_bmm_dtype
         aten_extra_kwargs = {"out_dtype": out_dtype}
 

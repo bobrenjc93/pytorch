@@ -8,6 +8,7 @@ from typing_extensions import ParamSpec
 
 import torch
 import torch._prims_common as utils
+import torch.fx.traceback as fx_traceback
 from torch import SymBool, SymFloat, Tensor
 from torch._decomp import (
     _add_op_to_registry,
@@ -4582,6 +4583,35 @@ def meta_index_put_(self, indices, values, accumulate=False):
     return self
 
 
+def _should_enforce_bmm_input_dtypes() -> bool:
+    current_meta = fx_traceback.get_current_meta()
+    for key in ("source_fn_stack", "fwd_source_fn_stack"):
+        source_fn_stack = current_meta.get(key)
+        if not source_fn_stack:
+            continue
+        source_fn = source_fn_stack[-1][1]
+        source_fn_name = (
+            source_fn if isinstance(source_fn, str) else getattr(source_fn, "__name__", None)
+        )
+        return source_fn_name in ("bmm", "matmul")
+
+    original_aten = current_meta.get("original_aten")
+    if isinstance(original_aten, OpOverload):
+        return original_aten._overloadpacket in (aten.bmm, aten.matmul)
+
+    return True
+
+
+def _check_bmm_input_dtypes(batch1, batch2) -> None:
+    torch._check(
+        batch2.dtype == batch1.dtype,
+        lambda: (
+            f"expected mat1 and mat2 to have the same dtype, but got: "
+            f"{batch1.dtype} != {batch2.dtype}"
+        ),
+    )
+
+
 def common_meta_baddbmm_bmm(batch1, batch2, is_bmm, self_baddbmm=None, out_dtype=None):
     from torch.fx.experimental.symbolic_shapes import sym_and, sym_eq
 
@@ -4602,6 +4632,16 @@ def common_meta_baddbmm_bmm(batch1, batch2, is_bmm, self_baddbmm=None, out_dtype
         lambda: f"Expected size for first two dimensions of batch2 tensor to be: [{bs}"
         f", {contraction_size}] but got: [{batch2_sizes[0]}, {batch2_sizes[1]}].",
     )
+    result_dtype = batch2.dtype
+    if is_bmm and batch1.dtype != batch2.dtype:
+        if _should_enforce_bmm_input_dtypes():
+            _check_bmm_input_dtypes(batch1, batch2)
+        else:
+            _, result_dtype = utils.elementwise_dtypes(
+                batch1,
+                batch2,
+                type_promotion_kind=ELEMENTWISE_TYPE_PROMOTION_KIND.DEFAULT,
+            )
     if out_dtype:
         supported_out_dtype = (
             batch1.dtype == torch.float16 or batch1.dtype == torch.bfloat16
@@ -4613,7 +4653,7 @@ def common_meta_baddbmm_bmm(batch1, batch2, is_bmm, self_baddbmm=None, out_dtype
         output = batch2.new_empty(output_size).to(out_dtype)
     else:
         # TODO: handle out
-        output = batch2.new_empty(output_size)
+        output = batch2.new_empty(output_size).to(result_dtype)
 
     if not is_bmm and self_baddbmm is not None:
         torch._check(self_baddbmm.dim() == 3, lambda: "self must be a 3D tensor")
