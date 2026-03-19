@@ -15,6 +15,7 @@ from torch._subclasses.fake_tensor import (
 )
 from torch._subclasses.functional_tensor import FunctionalTensor, FunctionalTensorMode
 from torch.fx.experimental.proxy_tensor import (
+    _ProxyTracer,
     disable_proxy_modes_tracing,
     get_proxy_slot,
     maybe_handle_decomp,
@@ -76,9 +77,7 @@ def validate_out_dtype_args(op):
     if not isinstance(op, torch._ops.OpOverload):
         raise ValueError("out_dtype's first argument must be an OpOverload")
     if op._schema.is_mutable:
-        raise ValueError(
-            "out_dtype's first argument needs to be a functional operator"
-        )
+        raise ValueError("out_dtype's first argument needs to be a functional operator")
     if not (
         len(op._schema.returns) == 1
         and isinstance(op._schema.returns[0].type, torch.TensorType)
@@ -119,35 +118,47 @@ def _unwrap_temporary_functional_result(out):
     return torch._from_functional_tensor(out.elem)
 
 
-def _copy_tracked_tensor_tree(src, dst, tracer):
-    if isinstance(src, torch.Tensor):
-        if not isinstance(dst, torch.Tensor):
-            raise AssertionError(f"expected tensor output, got {type(dst)}")
-        set_proxy_slot(dst, tracer, get_proxy_slot(src, tracer))
+def _copy_symbolic_int_proxy_slot(src, dst, tracer: _ProxyTracer):
+    if not isinstance(src, torch.SymInt) or not isinstance(dst, torch.SymInt):
         return
 
-    if isinstance(src, tuple):
-        if not isinstance(dst, tuple) or len(src) != len(dst):
-            raise AssertionError("expected matching tuple outputs")
-        for src_item, dst_item in zip(src, dst):
-            _copy_tracked_tensor_tree(src_item, dst_item, tracer)
-        return
-
-    if isinstance(src, list):
-        if not isinstance(dst, list) or len(src) != len(dst):
-            raise AssertionError("expected matching list outputs")
-        for src_item, dst_item in zip(src, dst):
-            _copy_tracked_tensor_tree(src_item, dst_item, tracer)
-        return
-
-    if isinstance(src, dict):
-        if not isinstance(dst, dict) or src.keys() != dst.keys():
-            raise AssertionError("expected matching dict outputs")
-        for key in src:
-            _copy_tracked_tensor_tree(src[key], dst[key], tracer)
+    proxy = get_proxy_slot(src, tracer, None)
+    if proxy is not None:
+        set_proxy_slot(dst, tracer, proxy)
 
 
-def _copy_wrapper_subclass_inner_proxy_slots(src, dst, tracer):
+def _copy_tensor_proxy_metadata(src, dst, tracer: _ProxyTracer):
+    if not isinstance(src, torch.Tensor) or not isinstance(dst, torch.Tensor):
+        raise AssertionError("expected tensor outputs")
+
+    proxy = get_proxy_slot(src, tracer, None)
+    if proxy is None:
+        return None
+
+    set_proxy_slot(dst, tracer, proxy)
+
+    for src_dim, dst_dim in zip(src.shape, dst.shape):
+        _copy_symbolic_int_proxy_slot(src_dim, dst_dim, tracer)
+
+    if not src.is_sparse:
+        for src_stride, dst_stride in zip(src.stride(), dst.stride()):
+            _copy_symbolic_int_proxy_slot(src_stride, dst_stride, tracer)
+
+    _copy_symbolic_int_proxy_slot(src.numel(), dst.numel(), tracer)
+    if not src.is_sparse:
+        _copy_symbolic_int_proxy_slot(
+            src.storage_offset(), dst.storage_offset(), tracer
+        )
+
+    return proxy.proxy
+
+
+def _copy_wrapper_subclass_inner_proxy_slots(
+    src,
+    dst,
+    tracer: _ProxyTracer,
+    preferred_inner_proxy: torch.fx.Proxy | None = None,
+):
     if not is_traceable_wrapper_subclass(src):
         return
     if not is_traceable_wrapper_subclass(dst):
@@ -161,9 +172,7 @@ def _copy_wrapper_subclass_inner_proxy_slots(src, dst, tracer):
     tensor_attrs = [
         attr for attr in src_attrs if isinstance(getattr(src, attr), torch.Tensor)
     ]
-    fallback_proxy = (
-        get_proxy_slot(src, tracer, None) if len(tensor_attrs) == 1 else None
-    )
+    use_preferred_proxy = preferred_inner_proxy is not None and len(tensor_attrs) == 1
 
     for attr in src_attrs:
         src_inner = getattr(src, attr)
@@ -171,13 +180,26 @@ def _copy_wrapper_subclass_inner_proxy_slots(src, dst, tracer):
         if not isinstance(dst_inner, torch.Tensor):
             continue
 
-        proxy = get_proxy_slot(src_inner, tracer, None)
-        if proxy is None:
-            proxy = fallback_proxy
-        if proxy is not None:
-            set_proxy_slot(dst_inner, tracer, proxy)
+        next_preferred_proxy = None
+        if use_preferred_proxy:
+            track_tensor_tree(
+                dst_inner,
+                preferred_inner_proxy,
+                constant=None,
+                tracer=tracer,
+            )
+            next_preferred_proxy = preferred_inner_proxy
+        else:
+            next_preferred_proxy = _copy_tensor_proxy_metadata(
+                src_inner, dst_inner, tracer
+            )
 
-        _copy_wrapper_subclass_inner_proxy_slots(src_inner, dst_inner, tracer)
+        _copy_wrapper_subclass_inner_proxy_slots(
+            src_inner,
+            dst_inner,
+            tracer,
+            next_preferred_proxy,
+        )
 
 
 def _dispatch_out_dtype_dense(
@@ -233,25 +255,37 @@ def trace_out_dtype(proxy_mode, func_overload, op, output_dtype, *args):
         isinstance(arg, torch.Tensor) and is_traceable_wrapper_subclass(arg)
         for arg in pytree.arg_tree_leaves(*args)
     )
-    if has_wrapper_subclass_arg:
-        functional_mode = _detect_functional_mode()
-        out = _dispatch_out_dtype_dense(op, output_dtype, *args)
-        if functional_mode is not None:
-            return out
-
-        safe_out = pytree.tree_map(_unwrap_temporary_functional_result, out)
-        _copy_tracked_tensor_tree(out, safe_out, proxy_mode.tracer)
-        _copy_wrapper_subclass_inner_proxy_slots(out, safe_out, proxy_mode.tracer)
-        return safe_out
-
-    with disable_proxy_modes_tracing():
-        out = traceable_out_dtype_dense(op, output_dtype, *args)
-
     node_args = (op, output_dtype, *args)
     proxy_args = pytree.tree_map(proxy_mode.tracer.unwrap_proxy, node_args)
     out_proxy = proxy_mode.tracer.create_proxy(
         "call_function", func_overload, proxy_args, {}, name="out_dtype"
     )
+
+    if has_wrapper_subclass_arg:
+        functional_mode = _detect_functional_mode()
+        out = _dispatch_out_dtype_dense(op, output_dtype, *args)
+        safe_out = out
+        if functional_mode is None:
+            safe_out = pytree.tree_map(_unwrap_temporary_functional_result, out)
+
+        track_tensor_tree(
+            safe_out,
+            out_proxy,
+            constant=None,
+            tracer=proxy_mode.tracer,
+        )
+        if functional_mode is None:
+            _copy_wrapper_subclass_inner_proxy_slots(
+                out,
+                safe_out,
+                proxy_mode.tracer,
+                out_proxy,
+            )
+        return safe_out
+
+    with disable_proxy_modes_tracing():
+        out = traceable_out_dtype_dense(op, output_dtype, *args)
+
     return track_tensor_tree(out, out_proxy, constant=None, tracer=proxy_mode.tracer)
 
 

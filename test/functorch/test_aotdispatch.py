@@ -7957,6 +7957,37 @@ Expected a .* tangent but got a plain Tensor.""",
         self.assertIsInstance(out_test, WrapperSubclass)
         self.assertEqual(out_ref, out_test.a)
 
+    def test_make_fx_out_dtype_wrapper_subclass_preserves_hop(self):
+        weight = torch.randint(-128, 127, (5, 5), dtype=torch.int8)
+
+        def fn(x):
+            y = out_dtype(torch.ops.aten.mm.default, torch.int32, x, weight)
+            return y + 1
+
+        x = WrapperSubclass(torch.randint(-128, 127, (5, 5), dtype=torch.int8))
+        gm = make_fx(fn, tracing_mode="symbolic")(x)
+        out = gm(x)
+
+        self.assertIsInstance(out, WrapperSubclass)
+        self.assertEqual(fn(x).a, out.a)
+        FileCheck().check("torch.ops.higher_order.out_dtype").check(
+            "torch.ops.aten.add.Tensor"
+        ).run(gm.code)
+
+    def test_make_fx_out_dtype_wrapper_subclass_symbolic_metadata(self):
+        weight = torch.randint(-128, 127, (5, 5), dtype=torch.int8)
+
+        def fn(x):
+            y = out_dtype(torch.ops.aten.mm.default, torch.int32, x, weight)
+            return y.view(y.size(0), -1)
+
+        x = WrapperSubclass(torch.randint(-128, 127, (5, 5), dtype=torch.int8))
+        gm = make_fx(fn, tracing_mode="symbolic")(x)
+        out = gm(x)
+
+        self.assertIsInstance(out, WrapperSubclass)
+        self.assertEqual(fn(x).a, out.a)
+
     @torch._inductor.config.patch({"freezing": True})
     def test_inductor_freezing_with_subclasses(self):
         class M(torch.nn.Module):
