@@ -3103,6 +3103,20 @@ class CPUReproTests(TestCase):
         self.common(fn, (input, eps))
 
     @requires_vectorization
+    def test_torch_logit_non_contiguous_large_eps(self):
+        # Fix https://github.com/pytorch/pytorch/issues/177839
+        def fn(x):
+            return torch.special.logit(x, eps=0.51)
+
+        expected_input = torch.full((2, 18), 0.3)[:, :16]
+        expected = fn(expected_input)
+
+        for backend in ("eager", "aot_eager", "inductor"):
+            torch._dynamo.reset()
+            actual = torch.compile(fn, backend=backend)(expected_input.clone())
+            self.assertEqual(expected, actual)
+
+    @requires_vectorization
     @patch("torch.cuda.is_available", lambda: False)
     def test_vec_compare_op_cpu_only(self):
         def fn(x):
