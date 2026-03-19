@@ -2418,7 +2418,9 @@ def _cache_autograd_info(
             return None
 
         if compiled_bw_func is not None:
-            # If we already compiled the backward, we save its cache entry now
+            # If we already compiled the backward, try to save its cache entry now.
+            # Keep the save hook around if that write does not produce an entry so
+            # the first backward can retry with the already-compiled backward.
             if bw_module is None:
                 raise AssertionError(
                     "bw_module must not be None when compiled_bw_func is not None"
@@ -2429,7 +2431,8 @@ def _cache_autograd_info(
                 fw_metadata,
                 aot_config,  # type: ignore[arg-type]
             )
-            try_save_cache_entry = None
+            if entry is not None:
+                try_save_cache_entry = None
 
     return try_save_cache_entry, entry  # type: ignore[return-value]
 

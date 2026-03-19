@@ -2554,6 +2554,7 @@ Your tensor subclass must implement __coerce_same_metadata_as_tangent__."""
             num_symints_saved_for_bw = num_symints_saved_for_bw_
             _aot_id = aot_config.aot_id
             _lazy_backward_info = lazy_backward_info
+            _try_save_cache_entry = try_save_cache_entry
 
             @staticmethod
             def _compiled_autograd_key(ctx: Any) -> tuple[Any, ...]:
@@ -2890,6 +2891,44 @@ Your tensor subclass must implement __coerce_same_metadata_as_tangent__."""
                     not torch._C._autograd._get_current_graph_task_keep_graph()
                 )
 
+                def maybe_save_cache_entry() -> None:
+                    current_try_save_cache_entry = (
+                        CompiledFunction._try_save_cache_entry
+                    )
+                    if current_try_save_cache_entry is None:
+                        return
+                    compiled_bw = CompiledFunction.compiled_bw
+                    if compiled_bw is None:
+                        raise AssertionError("compiled_bw must not be None")
+                    current_lazy_backward_info = CompiledFunction._lazy_backward_info
+                    if current_lazy_backward_info is None:
+                        raise AssertionError("lazy_backward_info must not be None")
+                    if not isinstance(
+                        current_lazy_backward_info, AutogradLazyBackwardCompileInfo
+                    ):
+                        CompiledFunction._try_save_cache_entry = None
+                        return
+
+                    saved_entry = current_try_save_cache_entry(
+                        compiled_bw,
+                        current_lazy_backward_info.bw_module,
+                        fw_metadata,
+                        aot_config,
+                    )
+                    CompiledFunction._try_save_cache_entry = None
+                    if (
+                        saved_entry is not None
+                        and saved_entry.serialized_bw_module is not None
+                    ):
+                        # Compiled autograd can retrace from the serialized
+                        # copy once the cache entry exists, so drop the
+                        # long-lived reference to the live backward graph.
+                        CompiledFunction._lazy_backward_info = (
+                            CachedAutogradLazyBackwardCompileInfo(
+                                saved_entry.serialized_bw_module.deserialize
+                            )
+                        )
+
                 if CompiledFunction.compiled_bw is None:
                     current_lazy_backward_info = CompiledFunction._lazy_backward_info
                     if current_lazy_backward_info is None:
@@ -3004,26 +3043,9 @@ Your tensor subclass must implement __coerce_same_metadata_as_tangent__."""
                         CompiledFunction.compiled_bw = aot_config.bw_compiler(
                             copy.deepcopy(bw_module), placeholder_list
                         )
-                        # Maybe save cache entry
-                        if try_save_cache_entry is not None:
-                            saved_entry = try_save_cache_entry(
-                                CompiledFunction.compiled_bw,
-                                bw_module,
-                                fw_metadata,
-                                aot_config,
-                            )
-                            if (
-                                saved_entry is not None
-                                and saved_entry.serialized_bw_module is not None
-                            ):
-                                # Compiled autograd can retrace from the serialized
-                                # copy once the cache entry exists, so drop the
-                                # long-lived reference to the live backward graph.
-                                CompiledFunction._lazy_backward_info = (
-                                    CachedAutogradLazyBackwardCompileInfo(
-                                        saved_entry.serialized_bw_module.deserialize
-                                    )
-                                )
+                        maybe_save_cache_entry()
+                else:
+                    maybe_save_cache_entry()
 
                 if (
                     torch._functorch.config.donated_buffer
