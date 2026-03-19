@@ -2891,26 +2891,31 @@ Your tensor subclass must implement __coerce_same_metadata_as_tangent__."""
                 )
 
                 if CompiledFunction.compiled_bw is None:
-                    if lazy_backward_info is None:
+                    current_lazy_backward_info = CompiledFunction._lazy_backward_info
+                    if current_lazy_backward_info is None:
                         raise AssertionError("lazy_backward_info must not be None")
                     if not isinstance(
-                        lazy_backward_info, AutogradLazyBackwardCompileInfo
+                        current_lazy_backward_info, AutogradLazyBackwardCompileInfo
                     ):
                         raise AssertionError(
-                            f"expected AutogradLazyBackwardCompileInfo, got {type(lazy_backward_info)}"
+                            "expected AutogradLazyBackwardCompileInfo, "
+                            f"got {type(current_lazy_backward_info)}"
                         )
 
                     if (
-                        hasattr(lazy_backward_info, "saved_context")
-                        and lazy_backward_info.saved_context is not None
+                        hasattr(current_lazy_backward_info, "saved_context")
+                        and current_lazy_backward_info.saved_context is not None
                     ):
                         if not isinstance(
-                            lazy_backward_info.saved_context, TracingContext
+                            current_lazy_backward_info.saved_context, TracingContext
                         ):
                             raise AssertionError(
-                                f"expected TracingContext, got {type(lazy_backward_info.saved_context)}"
+                                "expected TracingContext, "
+                                f"got {type(current_lazy_backward_info.saved_context)}"
                             )
-                        ddp_ctx = lazy_backward_info.saved_context.ddp_optimizer_ctx
+                        ddp_ctx = (
+                            current_lazy_backward_info.saved_context.ddp_optimizer_ctx
+                        )
                         if ddp_ctx is not None:
                             if ddp_ctx.curr_bucket < 0:
                                 raise AssertionError(
@@ -2940,28 +2945,34 @@ Your tensor subclass must implement __coerce_same_metadata_as_tangent__."""
                             # - the metadata of all N graphs
                             # - the graph we are currently compiling in our DDPOptimizer region.
                             ddp_ctx.curr_bucket -= 1
-                            lazy_backward_info.saved_context.fw_metadata = curr_fw_meta
+                            current_lazy_backward_info.saved_context.fw_metadata = (
+                                curr_fw_meta
+                            )
 
                     if not saved_tensors_use_once:
                         fw_metadata.bw_donated_idxs = []
                         # Update bw_donated_idxs if using lazy_backward_info from `aot_dispatch_autograd`
                         if (
-                            hasattr(lazy_backward_info, "saved_context")
-                            and hasattr(lazy_backward_info.saved_context, "fw_metadata")
+                            hasattr(current_lazy_backward_info, "saved_context")
                             and hasattr(
-                                lazy_backward_info.saved_context.fw_metadata,  # type: ignore[union-attr]
+                                current_lazy_backward_info.saved_context, "fw_metadata"
+                            )
+                            and hasattr(
+                                current_lazy_backward_info.saved_context.fw_metadata,  # type: ignore[union-attr]
                                 "bw_donated_idxs",
                             )
                         ):
-                            lazy_backward_info.saved_context.fw_metadata.bw_donated_idxs = (  # type: ignore[union-attr]
+                            current_lazy_backward_info.saved_context.fw_metadata.bw_donated_idxs = (  # type: ignore[union-attr]
                                 # pyrefly: ignore [implicit-any]
                                 []
                             )
 
-                    bw_module = lazy_backward_info.bw_module
-                    placeholder_list = lazy_backward_info.placeholder_list
-                    saved_context = lazy_backward_info.saved_context
-                    saved_compile_context = lazy_backward_info.saved_compile_context
+                    bw_module = current_lazy_backward_info.bw_module
+                    placeholder_list = current_lazy_backward_info.placeholder_list
+                    saved_context = current_lazy_backward_info.saved_context
+                    saved_compile_context = (
+                        current_lazy_backward_info.saved_compile_context
+                    )
 
                     context = torch._C._DisableAutocast if disable_amp else nullcontext
                     metrics_context = get_metrics_context()
@@ -2995,12 +3006,24 @@ Your tensor subclass must implement __coerce_same_metadata_as_tangent__."""
                         )
                         # Maybe save cache entry
                         if try_save_cache_entry is not None:
-                            try_save_cache_entry(
+                            saved_entry = try_save_cache_entry(
                                 CompiledFunction.compiled_bw,
                                 bw_module,
                                 fw_metadata,
                                 aot_config,
                             )
+                            if (
+                                saved_entry is not None
+                                and saved_entry.serialized_bw_module is not None
+                            ):
+                                # Compiled autograd can retrace from the serialized
+                                # copy once the cache entry exists, so drop the
+                                # long-lived reference to the live backward graph.
+                                CompiledFunction._lazy_backward_info = (
+                                    CachedAutogradLazyBackwardCompileInfo(
+                                        saved_entry.serialized_bw_module.deserialize
+                                    )
+                                )
 
                 if (
                     torch._functorch.config.donated_buffer

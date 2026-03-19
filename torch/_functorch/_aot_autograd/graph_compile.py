@@ -2001,6 +2001,7 @@ def _aot_stage2b_bw_compile(
     maybe_subclass_meta: SubclassMeta | None,
     fw_metadata: ViewAndMutationMeta,
     fwd_output_strides: list[tuple[int, ...] | None] | None,
+    num_fw_outs_saved_for_bw: int,
     num_symints_saved_for_bw: int,
     aot_config: AOTConfig,
     # pyrefly: ignore [implicit-any]
@@ -2089,9 +2090,22 @@ def _aot_stage2b_bw_compile(
 
                     placeholder_list[i] = ph_arg.as_strided(ph_size, real_stride)
             compiled_bw_func = None
+            should_materialize_stateless_cache_backward = (
+                aot_config.cache_info is not None
+                and num_fw_outs_saved_for_bw == 0
+                and fw_metadata.num_mutated_inp_runtime_indices == 0
+                and fw_metadata.num_outputs_aliased == 0
+                and fw_metadata.num_intermediate_bases == 0
+                and not fw_metadata.bw_donated_idxs
+                and not torch._dynamo.compiled_autograd.in_compiled_autograd_region
+            )
             if (
                 num_symints_saved_for_bw > 0
                 or aot_config.force_non_lazy_backward_lowering
+                # Fully stateless backwards cannot populate a reusable cache
+                # entry from the runtime lazy-compile path, so materialize the
+                # backward while this cache miss is already preparing to save.
+                or should_materialize_stateless_cache_backward
             ):
                 try:
                     # See Note: [Backward graph lazy lowering]
@@ -2211,6 +2225,7 @@ def aot_stage2_autograd(
         maybe_subclass_meta,
         fw_metadata,
         fwd_output_strides,
+        num_fw_outs_saved_for_bw,
         num_symints_saved_for_bw,
         aot_config,
     )

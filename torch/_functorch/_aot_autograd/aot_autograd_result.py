@@ -310,8 +310,9 @@ class SerializedGraphModule:
 
 
 def serialize_graph_module(gm: torch.fx.GraphModule) -> SerializedGraphModule:
-    # Serialize a sanitized view of the graph, then restore the live metadata so
-    # compiled autograd and later lazy-backward work can keep using the original graph.
+    # Serialize a sanitized view of the graph, then restore the live metadata for
+    # the in-flight compile. The lazy-backward cache save path swaps any long-lived
+    # references over to the serialized copy once the cache entry is written.
     nodes = list(gm.graph.nodes)
     original_gm_meta = gm.meta
     original_node_metas = [node.meta for node in nodes]
