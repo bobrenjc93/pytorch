@@ -25,6 +25,7 @@
 #include <ATen/TracerMode.h>
 #include <ATen/core/LegacyTypeDispatch.h>
 #include <c10/core/TensorOptions.h>
+#include <c10/core/impl/LocalDispatchKeySet.h>
 #include <c10/core/impl/TorchDispatchModeTLS.h>
 #include <c10/util/Exception.h>
 #include <c10/util/irange.h>
@@ -211,10 +212,79 @@ static void recordSelectTrace(const Tensor& index_tensor) {
       std::string("index"), 1, index_tensor, torch::jit::IntType::get());
 }
 
+static PyObject* THPVariable_get_dispatch_mode_pre_dispatch = nullptr;
+static PyObject* THPVariable_proxy_mode_key = nullptr;
+
+static PyObject* get_dispatch_mode_pre_dispatch() {
+  if (THPVariable_get_dispatch_mode_pre_dispatch != nullptr) {
+    return THPVariable_get_dispatch_mode_pre_dispatch;
+  }
+
+  auto torch_ops = THPObjectPtr(PyImport_ImportModule("torch._ops"));
+  if (!torch_ops) {
+    throw python_error();
+  }
+
+  auto get_dispatch_mode_pre_dispatch =
+      PyObject_GetAttrString(torch_ops.get(), "_get_dispatch_mode_pre_dispatch");
+  if (!get_dispatch_mode_pre_dispatch) {
+    throw python_error();
+  }
+
+  THPVariable_get_dispatch_mode_pre_dispatch =
+      get_dispatch_mode_pre_dispatch;
+  return THPVariable_get_dispatch_mode_pre_dispatch;
+}
+
+static PyObject* get_proxy_mode_key() {
+  if (THPVariable_proxy_mode_key != nullptr) {
+    return THPVariable_proxy_mode_key;
+  }
+
+  auto torch_C = THPObjectPtr(PyImport_ImportModule("torch._C"));
+  if (!torch_C) {
+    throw python_error();
+  }
+
+  auto torch_dispatch_mode_key =
+      THPObjectPtr(PyObject_GetAttrString(torch_C.get(), "_TorchDispatchModeKey"));
+  if (!torch_dispatch_mode_key) {
+    throw python_error();
+  }
+
+  auto proxy_mode_key =
+      PyObject_GetAttrString(torch_dispatch_mode_key.get(), "PROXY");
+  if (!proxy_mode_key) {
+    throw python_error();
+  }
+
+  THPVariable_proxy_mode_key = proxy_mode_key;
+  return THPVariable_proxy_mode_key;
+}
+
+static bool isPreDispatchProxyTracingModeActive() {
+  auto get_mode_pre_dispatch = get_dispatch_mode_pre_dispatch();
+  auto proxy_mode_key = get_proxy_mode_key();
+  THPObjectPtr maybe_mode(
+      PyObject_CallOneArg(get_mode_pre_dispatch, proxy_mode_key));
+  if (!maybe_mode) {
+    throw python_error();
+  }
+  return maybe_mode.get() != Py_None;
+}
+
 static bool isProxyTracingModeActive() {
-  return c10::impl::TorchDispatchModeTLS::get_mode(
-             c10::impl::TorchDispatchModeKey::PROXY)
-      .has_value();
+  if (c10::impl::TorchDispatchModeTLS::get_mode(
+          c10::impl::TorchDispatchModeKey::PROXY)
+          .has_value()) {
+    return true;
+  }
+
+  if (!c10::impl::tls_is_dispatch_key_included(c10::DispatchKey::PreDispatch)) {
+    return false;
+  }
+
+  return isPreDispatchProxyTracingModeActive();
 }
 
 static Variable applySlicing(
