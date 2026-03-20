@@ -1641,6 +1641,7 @@ def wrap_key(
 
 # TODO: Make downstream users of this work with OperatorBase
 ORIGINAL_ATEN: object | None = None
+ORIGINAL_TORCH_FN: object | None = None
 
 
 @contextmanager
@@ -1664,6 +1665,20 @@ def set_original_aten_op(
             fx_traceback.current_meta["original_aten"] = None
 
 
+@contextmanager
+def set_original_torch_fn(func: object) -> Generator[None, None, None]:
+    global ORIGINAL_TORCH_FN
+    if ORIGINAL_TORCH_FN is not None:
+        yield
+        return
+
+    ORIGINAL_TORCH_FN = func
+    try:
+        yield
+    finally:
+        ORIGINAL_TORCH_FN = None
+
+
 class TorchFunctionMetadataMode(TorchFunctionMode):
     def __init__(self, tracer: _ProxyTracer) -> None:
         self.tracer = tracer
@@ -1675,11 +1690,14 @@ class TorchFunctionMetadataMode(TorchFunctionMode):
         args: tuple[object, ...] = (),
         kwargs: dict[str, object] | None = None,
     ) -> object:
-        kwargs = kwargs or {}
-        # pyrefly: ignore [bad-assignment]
-        self.tracer.torch_fn_metadata = func
-        self.tracer.torch_fn_counts[func] = self.tracer.torch_fn_counts.get(func, 0) + 1
-        return func(*args, **kwargs)
+        with set_original_torch_fn(func):
+            kwargs = kwargs or {}
+            # pyrefly: ignore [bad-assignment]
+            self.tracer.torch_fn_metadata = func
+            self.tracer.torch_fn_counts[func] = (
+                self.tracer.torch_fn_counts.get(func, 0) + 1
+            )
+            return func(*args, **kwargs)
 
 
 _temp_remove_metadata_torch_function_mode = _make_temp_remove_mode_context_manager(

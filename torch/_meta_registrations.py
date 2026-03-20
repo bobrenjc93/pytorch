@@ -4590,13 +4590,20 @@ def _get_source_fn_name(source_fn) -> str | None:
 
 
 def _get_torch_fn_name(current_meta: dict[str, object]) -> str | None:
+    # Dynamo's top-level frame trace does not preserve FX node metadata yet, but
+    # proxy tensor still tracks the outermost torch function being decomposed.
+    from torch.fx.experimental import proxy_tensor
+
+    torch_fn_name = _get_source_fn_name(proxy_tensor.ORIGINAL_TORCH_FN)
+    if torch_fn_name is not None:
+        return torch_fn_name
+
     torch_fn = current_meta.get("torch_fn")
-    if not isinstance(torch_fn, tuple) or len(torch_fn) != 2:
-        return None
-    source_fn = torch_fn[1]
-    if not isinstance(source_fn, str):
-        return None
-    return source_fn.rsplit(".", 1)[-1]
+    if isinstance(torch_fn, tuple) and len(torch_fn) == 2:
+        source_fn = torch_fn[1]
+        if isinstance(source_fn, str):
+            return source_fn.rsplit(".", 1)[-1]
+    return None
 
 
 def _iter_source_fn_entries(
@@ -4669,15 +4676,12 @@ def _should_enforce_bmm_input_dtypes() -> bool:
     torch_fn_name = _get_torch_fn_name(current_meta)
     from_node_targets = tuple(_iter_from_node_targets(current_meta))
 
-    if not preserve_node_meta and original_aten is None:
+    if not preserve_node_meta and original_aten is None and torch_fn_name is None:
         return True
 
     # Preserve promotion for einsum decompositions even when they route through
     # intermediate matmul/bmm nodes that also leave provenance behind.
-    if (
-        original_aten is not None
-        and original_aten._overloadpacket is aten.einsum
-    ) or (
+    if (original_aten is not None and original_aten._overloadpacket is aten.einsum) or (
         torch_fn_name == "einsum"
         or "einsum" in source_fn_names
         or any("einsum" in target for target in from_node_targets)
