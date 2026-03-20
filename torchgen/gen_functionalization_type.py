@@ -37,6 +37,7 @@ from torchgen.model import (
     NativeFunction,
     NativeFunctionsGroup,
     NativeFunctionsViewGroup,
+    OperatorName,
     Return,
     SchemaKind,
     SelfArgument,
@@ -80,10 +81,10 @@ MUTABLE_OPS_NOT_USING_FUNCTIONALIZATION = (
 # Functionalization normally lowers mutable ops through their functional variants,
 # so these need to thread the out dtype explicitly to preserve eager semantics.
 CUMULATIVE_OUT_OPS_PRESERVING_OUT_DTYPE = {
-    "cumsum.out",
-    "cumprod.out",
-    "cumsum.dimname_out",
-    "cumprod.dimname_out",
+    OperatorName.parse("cumsum.out"),
+    OperatorName.parse("cumprod.out"),
+    OperatorName.parse("cumsum.dimname_out"),
+    OperatorName.parse("cumprod.dimname_out"),
 }
 
 # This file contains codegen that relates to the functionalization pass.
@@ -624,7 +625,7 @@ def maybe_replace_cumulative_out_dtype_exprs(
 ) -> list[str]:
     if (
         f.func.kind() != SchemaKind.out
-        or str(f.func.name) not in CUMULATIVE_OUT_OPS_PRESERVING_OUT_DTYPE
+        or f.func.name not in CUMULATIVE_OUT_OPS_PRESERVING_OUT_DTYPE
     ):
         return functional_exprs
 
