@@ -4718,11 +4718,12 @@ def _should_enforce_bmm_input_dtypes() -> bool:
         return False
 
     if (
-        original_aten is not None
-        and original_aten._overloadpacket in (aten.bmm, aten.matmul)
-    ) or torch_fn_name in ("bmm", "matmul") or dynamo_target_name in (
-        "bmm",
-        "matmul",
+        (
+            original_aten is not None
+            and original_aten._overloadpacket in (aten.bmm, aten.matmul)
+        )
+        or torch_fn_name in ("bmm", "matmul")
+        or dynamo_target_name in ("bmm", "matmul")
     ):
         return True
 
