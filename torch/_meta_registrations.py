@@ -4668,6 +4668,25 @@ def _get_current_original_aten(current_meta: dict[str, object]) -> OpOverload | 
     return None
 
 
+def _get_current_dynamo_target_name() -> str | None:
+    try:
+        from torch._dynamo.utils import get_current_node
+    except ImportError:
+        return None
+
+    current_node = get_current_node()
+    if current_node is None:
+        return None
+
+    if current_node.op == "call_method" and isinstance(current_node.target, str):
+        return current_node.target
+
+    if current_node.op != "call_function":
+        return None
+
+    return _get_source_fn_name(current_node.target)
+
+
 def _should_enforce_bmm_input_dtypes() -> bool:
     preserve_node_meta = fx_traceback.has_preserved_node_meta()
     current_meta = fx_traceback.get_current_meta() if preserve_node_meta else {}
@@ -4675,14 +4694,23 @@ def _should_enforce_bmm_input_dtypes() -> bool:
     source_fn_names = tuple(_iter_source_fn_names(current_meta))
     torch_fn_name = _get_torch_fn_name(current_meta)
     from_node_targets = tuple(_iter_from_node_targets(current_meta))
+    dynamo_target_name = (
+        _get_current_dynamo_target_name() if not preserve_node_meta else None
+    )
 
-    if not preserve_node_meta and original_aten is None and torch_fn_name is None:
+    if (
+        not preserve_node_meta
+        and original_aten is None
+        and torch_fn_name is None
+        and dynamo_target_name is None
+    ):
         return True
 
     # Preserve promotion for einsum decompositions even when they route through
     # intermediate matmul/bmm nodes that also leave provenance behind.
     if (original_aten is not None and original_aten._overloadpacket is aten.einsum) or (
         torch_fn_name == "einsum"
+        or dynamo_target_name == "einsum"
         or "einsum" in source_fn_names
         or any("einsum" in target for target in from_node_targets)
         or _stack_trace_mentions(current_meta, "einsum")
@@ -4692,7 +4720,10 @@ def _should_enforce_bmm_input_dtypes() -> bool:
     if (
         original_aten is not None
         and original_aten._overloadpacket in (aten.bmm, aten.matmul)
-    ) or torch_fn_name in ("bmm", "matmul"):
+    ) or torch_fn_name in ("bmm", "matmul") or dynamo_target_name in (
+        "bmm",
+        "matmul",
+    ):
         return True
 
     if any(source_fn_name in ("bmm", "matmul") for source_fn_name in source_fn_names):

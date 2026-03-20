@@ -1666,7 +1666,7 @@ def set_original_aten_op(
 
 
 @contextmanager
-def set_original_torch_fn(func: object) -> Generator[None, None, None]:
+def _set_original_torch_fn(func: object) -> Generator[None, None, None]:
     global ORIGINAL_TORCH_FN
     if ORIGINAL_TORCH_FN is not None:
         yield
@@ -1690,7 +1690,7 @@ class TorchFunctionMetadataMode(TorchFunctionMode):
         args: tuple[object, ...] = (),
         kwargs: dict[str, object] | None = None,
     ) -> object:
-        with set_original_torch_fn(func):
+        with _set_original_torch_fn(func):
             kwargs = kwargs or {}
             # pyrefly: ignore [bad-assignment]
             self.tracer.torch_fn_metadata = func
