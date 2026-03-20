@@ -4628,6 +4628,8 @@ def _iter_from_node_sources(
     worklist = list(from_node)
     while worklist:
         node_source = worklist.pop()
+        if isinstance(node_source, dict):
+            node_source = fx_traceback.NodeSource._from_dict(node_source)
         if not isinstance(node_source, fx_traceback.NodeSource):
             continue
         yield node_source
@@ -4638,6 +4640,11 @@ def _iter_from_node_targets(current_meta: dict[str, object]) -> Iterator[str]:
     for node_source in _iter_from_node_sources(current_meta):
         if node_source.target:
             yield node_source.target
+
+
+def _stack_trace_mentions(current_meta: dict[str, object], op_name: str) -> bool:
+    stack_trace = current_meta.get("stack_trace")
+    return isinstance(stack_trace, str) and f"{op_name}(" in stack_trace
 
 
 def _should_enforce_bmm_input_dtypes() -> bool:
@@ -4656,6 +4663,7 @@ def _should_enforce_bmm_input_dtypes() -> bool:
         torch_fn_name == "einsum"
         or "einsum" in source_fn_names
         or any("einsum" in target for target in from_node_targets)
+        or _stack_trace_mentions(current_meta, "einsum")
     ):
         return False
 
