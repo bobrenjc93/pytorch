@@ -4589,20 +4589,49 @@ def _get_source_fn_name(source_fn) -> str | None:
     return getattr(source_fn, "__name__", None)
 
 
-def _should_enforce_bmm_input_dtypes() -> bool:
-    current_meta = fx_traceback.get_current_meta()
-    original_aten = current_meta.get("original_aten")
-    if isinstance(original_aten, OpOverload):
-        return original_aten._overloadpacket in (aten.bmm, aten.matmul)
+def _get_torch_fn_name(current_meta: dict[str, object]) -> str | None:
+    torch_fn = current_meta.get("torch_fn")
+    if not isinstance(torch_fn, tuple) or len(torch_fn) != 2:
+        return None
+    source_fn = torch_fn[1]
+    if not isinstance(source_fn, str):
+        return None
+    return source_fn.rsplit(".", 1)[-1]
 
+
+def _iter_source_fn_names(current_meta: dict[str, object]):
     for key in ("source_fn_stack", "fwd_source_fn_stack"):
         source_fn_stack = current_meta.get(key)
         if not source_fn_stack:
             continue
         for _, source_fn in source_fn_stack:
             source_fn_name = _get_source_fn_name(source_fn)
-            if source_fn_name in ("bmm", "matmul", "einsum"):
-                return source_fn_name in ("bmm", "matmul")
+            if source_fn_name is not None:
+                yield source_fn_name
+
+
+def _should_enforce_bmm_input_dtypes() -> bool:
+    current_meta = fx_traceback.get_current_meta()
+    original_aten = current_meta.get("original_aten")
+    source_fn_names = tuple(_iter_source_fn_names(current_meta))
+    torch_fn_name = _get_torch_fn_name(current_meta)
+
+    # Preserve promotion for einsum decompositions even when they route through
+    # intermediate matmul/bmm nodes that also leave provenance behind.
+    if (
+        isinstance(original_aten, OpOverload)
+        and original_aten._overloadpacket is aten.einsum
+    ) or torch_fn_name == "einsum" or "einsum" in source_fn_names:
+        return False
+
+    if (
+        isinstance(original_aten, OpOverload)
+        and original_aten._overloadpacket in (aten.bmm, aten.matmul)
+    ) or torch_fn_name in ("bmm", "matmul"):
+        return True
+
+    if any(source_fn_name in ("bmm", "matmul") for source_fn_name in source_fn_names):
+        return True
 
     return True
 
