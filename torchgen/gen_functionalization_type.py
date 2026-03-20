@@ -631,7 +631,7 @@ def maybe_replace_cumulative_out_dtype_exprs(
 
     if len(f.func.arguments.out) != 1:
         raise AssertionError(
-            f"Expected a single out argument for cumulative out op: {f.func}"
+            f"Expected a single out argument for cumulative out op: {f.func.name}"
         )
 
     dtype_arg_idx = next(
@@ -639,7 +639,7 @@ def maybe_replace_cumulative_out_dtype_exprs(
         None,
     )
     if dtype_arg_idx is None:
-        raise AssertionError(f"Expected dtype argument for cumulative out op: {f.func}")
+        raise AssertionError(f"Expected dtype argument for cumulative out op: {f.func.name}")
 
     adjusted_exprs = functional_exprs.copy()
     dtype_expr = adjusted_exprs[dtype_arg_idx]
