@@ -4647,20 +4647,35 @@ def _stack_trace_mentions(current_meta: dict[str, object], op_name: str) -> bool
     return isinstance(stack_trace, str) and f"{op_name}(" in stack_trace
 
 
-def _should_enforce_bmm_input_dtypes() -> bool:
-    if not fx_traceback.has_preserved_node_meta():
-        return True
-
-    current_meta = fx_traceback.get_current_meta()
+def _get_current_original_aten(current_meta: dict[str, object]) -> OpOverload | None:
     original_aten = current_meta.get("original_aten")
+    if isinstance(original_aten, OpOverload):
+        return original_aten
+
+    # Dynamo's top-level frame trace does not preserve FX node metadata yet, but
+    # proxy tensor still tracks the outermost aten op being decomposed.
+    from torch.fx.experimental import proxy_tensor
+
+    if isinstance(proxy_tensor.ORIGINAL_ATEN, OpOverload):
+        return proxy_tensor.ORIGINAL_ATEN
+    return None
+
+
+def _should_enforce_bmm_input_dtypes() -> bool:
+    preserve_node_meta = fx_traceback.has_preserved_node_meta()
+    current_meta = fx_traceback.get_current_meta() if preserve_node_meta else {}
+    original_aten = _get_current_original_aten(current_meta)
     source_fn_names = tuple(_iter_source_fn_names(current_meta))
     torch_fn_name = _get_torch_fn_name(current_meta)
     from_node_targets = tuple(_iter_from_node_targets(current_meta))
 
+    if not preserve_node_meta and original_aten is None:
+        return True
+
     # Preserve promotion for einsum decompositions even when they route through
     # intermediate matmul/bmm nodes that also leave provenance behind.
     if (
-        isinstance(original_aten, OpOverload)
+        original_aten is not None
         and original_aten._overloadpacket is aten.einsum
     ) or (
         torch_fn_name == "einsum"
@@ -4671,7 +4686,7 @@ def _should_enforce_bmm_input_dtypes() -> bool:
         return False
 
     if (
-        isinstance(original_aten, OpOverload)
+        original_aten is not None
         and original_aten._overloadpacket in (aten.bmm, aten.matmul)
     ) or torch_fn_name in ("bmm", "matmul"):
         return True
