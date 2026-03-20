@@ -1,6 +1,6 @@
 # mypy: allow-untyped-defs
 import math
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from enum import Enum
 from functools import wraps
 from typing import TypeVar
@@ -4599,15 +4599,45 @@ def _get_torch_fn_name(current_meta: dict[str, object]) -> str | None:
     return source_fn.rsplit(".", 1)[-1]
 
 
-def _iter_source_fn_names(current_meta: dict[str, object]):
+def _iter_source_fn_entries(
+    current_meta: dict[str, object],
+) -> Iterator[tuple[object, object]]:
     for key in ("source_fn_stack", "fwd_source_fn_stack"):
         source_fn_stack = current_meta.get(key)
-        if not source_fn_stack:
+        if not isinstance(source_fn_stack, (list, tuple)):
             continue
-        for _, source_fn in source_fn_stack:
-            source_fn_name = _get_source_fn_name(source_fn)
-            if source_fn_name is not None:
-                yield source_fn_name
+        for source_fn_entry in source_fn_stack:
+            if isinstance(source_fn_entry, tuple) and len(source_fn_entry) == 2:
+                yield source_fn_entry
+
+
+def _iter_source_fn_names(current_meta: dict[str, object]) -> Iterator[str]:
+    for _, source_fn in _iter_source_fn_entries(current_meta):
+        source_fn_name = _get_source_fn_name(source_fn)
+        if source_fn_name is not None:
+            yield source_fn_name
+
+
+def _iter_from_node_sources(
+    current_meta: dict[str, object],
+) -> Iterator[fx_traceback.NodeSource]:
+    from_node = current_meta.get("from_node")
+    if not isinstance(from_node, (list, tuple)):
+        return
+
+    worklist = list(from_node)
+    while worklist:
+        node_source = worklist.pop()
+        if not isinstance(node_source, fx_traceback.NodeSource):
+            continue
+        yield node_source
+        worklist.extend(node_source.from_node)
+
+
+def _iter_from_node_targets(current_meta: dict[str, object]) -> Iterator[str]:
+    for node_source in _iter_from_node_sources(current_meta):
+        if node_source.target:
+            yield node_source.target
 
 
 def _should_enforce_bmm_input_dtypes() -> bool:
@@ -4615,13 +4645,18 @@ def _should_enforce_bmm_input_dtypes() -> bool:
     original_aten = current_meta.get("original_aten")
     source_fn_names = tuple(_iter_source_fn_names(current_meta))
     torch_fn_name = _get_torch_fn_name(current_meta)
+    from_node_targets = tuple(_iter_from_node_targets(current_meta))
 
     # Preserve promotion for einsum decompositions even when they route through
     # intermediate matmul/bmm nodes that also leave provenance behind.
     if (
         isinstance(original_aten, OpOverload)
         and original_aten._overloadpacket is aten.einsum
-    ) or torch_fn_name == "einsum" or "einsum" in source_fn_names:
+    ) or (
+        torch_fn_name == "einsum"
+        or "einsum" in source_fn_names
+        or any("einsum" in target for target in from_node_targets)
+    ):
         return False
 
     if (
