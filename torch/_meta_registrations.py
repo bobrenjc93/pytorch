@@ -4648,6 +4648,9 @@ def _stack_trace_mentions(current_meta: dict[str, object], op_name: str) -> bool
 
 
 def _should_enforce_bmm_input_dtypes() -> bool:
+    if not fx_traceback.has_preserved_node_meta():
+        return True
+
     current_meta = fx_traceback.get_current_meta()
     original_aten = current_meta.get("original_aten")
     source_fn_names = tuple(_iter_source_fn_names(current_meta))
@@ -4676,7 +4679,11 @@ def _should_enforce_bmm_input_dtypes() -> bool:
     if any(source_fn_name in ("bmm", "matmul") for source_fn_name in source_fn_names):
         return True
 
-    return True
+    # Traced higher-level ops like einsum can lose structured provenance as they
+    # decompose through intermediate bmm nodes. If we cannot positively
+    # attribute the traced call to user-visible bmm/matmul, preserve the
+    # promoted result instead of manufacturing a direct bmm dtype error.
+    return False
 
 
 def _check_bmm_input_dtypes(batch1, batch2) -> None:
