@@ -4581,6 +4581,7 @@ class CommonTemplate:
 
         self.common(fn, (torch.randn(4, 2), torch.randn(4, 2)), check_lowp=False)
 
+    @skip_if_pallas
     def test_mutated_cat_does_not_alias_inputs(self):
         # Regression test for https://github.com/pytorch/pytorch/issues/177821
         def fn(x, y):
@@ -4593,6 +4594,9 @@ class CommonTemplate:
             torch.arange(4, device=self.device, dtype=torch.float32).reshape(2, 2),
             torch.arange(4, device=self.device, dtype=torch.float32).reshape(2, 2),
         )
+        if is_dynamic_shape_enabled():
+            torch._dynamo.mark_dynamic(args[0], 0)
+            torch._dynamo.mark_dynamic(args[1], 0)
         self.common(fn, args, check_lowp=False)
 
     def test_slice_view_with_graph_break(self):

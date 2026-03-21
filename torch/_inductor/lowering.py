@@ -145,7 +145,7 @@ def current_node_has_downstream_mutation() -> bool:
         return False
 
     worklist = [node]
-    seen = {node}
+    seen = OrderedSet([node])
     while worklist:
         current = worklist.pop()
         for user in current.users:
