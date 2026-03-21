@@ -1995,7 +1995,9 @@ def cat(inputs, dim=0):
 
         return any(
             hasattr(arg, "users")
-            and any(user in downstream_nodes for user in arg.users if user is not cat_node)
+            and any(
+                user in downstream_nodes for user in arg.users if user is not cat_node
+            )
             for arg in fx_args
         )
 
