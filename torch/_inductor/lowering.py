@@ -1979,9 +1979,30 @@ def cat(inputs, dim=0):
     )
     inputs = [to_dtype(inp, dtype) for inp in inputs]
 
-    if current_node_has_downstream_mutation():
+    def any_cat_input_has_downstream_users() -> bool:
+        cat_node = V.current_node
+        if cat_node is None:
+            return False
+        fx_args = cat_node.args[0]  # aten.cat format: cat(input_list, dim)
+        if not isinstance(fx_args, (list, tuple)):
+            return False
+
+        downstream_nodes = OrderedSet()
+        current = cat_node.next
+        while current.op != "root":
+            downstream_nodes.add(current)
+            current = current.next
+
+        return any(
+            hasattr(arg, "users")
+            and any(user in downstream_nodes for user in arg.users if user is not cat_node)
+            for arg in fx_args
+        )
+
+    if any_cat_input_has_downstream_users() and current_node_has_downstream_mutation():
         # ConcatKernel rewires cat inputs into views of the concat output.
-        # That is only valid while the concat result stays immutable.
+        # That is only valid while downstream mutations cannot be observed
+        # through later reads of the original cat inputs.
         return fallback_handler(aten.cat.default)(inputs, dim)
 
     def unwrap_tensor(x: TensorBox | ir.StorageBox) -> ir.IRNode:
