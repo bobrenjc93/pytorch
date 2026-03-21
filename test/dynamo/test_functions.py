@@ -4832,10 +4832,15 @@ class DefaultsTests(torch._dynamo.test_case.TestCaseWithNestedGraphBreaks):
         self.assertTrue(same(fn(x, y), compiled_fn(x, y)))
         self.assertEqual(cnts.frame_count, 0)
         self.assertEqual(cnts.op_count, 0)
-        self.assertEqual(len(counters["graph_break"]), 1)
-        self.assertIn(
-            "Pydantic dataclass constructor",
-            next(iter(counters["graph_break"])),
+        # Skipping the whole frame records a second follow-on graph break, so
+        # assert on the specific pydantic entry rather than the raw count.
+        self.assertEqual(
+            [
+                count
+                for msg, count in counters["graph_break"].items()
+                if "Pydantic dataclass constructor" in msg
+            ],
+            [1],
         )
 
     def test_listlike_of_tensors_contains_constant(self):
