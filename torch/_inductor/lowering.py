@@ -139,6 +139,34 @@ def cur_node_has_non_foreach_users() -> bool:
     return False
 
 
+def current_node_has_downstream_mutation() -> bool:
+    node = V.current_node
+    if node is None:
+        return False
+
+    worklist = [node]
+    seen = {node}
+    while worklist:
+        current = worklist.pop()
+        for user in current.users:
+            if user in seen or user.op != "call_function":
+                continue
+            seen.add(user)
+
+            target = user.target
+            if isinstance(target, torch._ops.OpOverload):
+                if target._schema.is_mutable:
+                    return True
+                if is_view(target):
+                    worklist.append(user)
+            elif target is triton_kernel_wrapper_mutation:
+                return True
+            elif target is operator.getitem:
+                worklist.append(user)
+
+    return False
+
+
 # group by device, whether any of the inputs are dynamic
 # note arg_pairs may or may not be a pair
 # foreach_map for example just passes output buffers here
@@ -1950,6 +1978,11 @@ def cat(inputs, dim=0):
         *inputs, type_promotion_kind=ELEMENTWISE_TYPE_PROMOTION_KIND.DEFAULT
     )
     inputs = [to_dtype(inp, dtype) for inp in inputs]
+
+    if current_node_has_downstream_mutation():
+        # ConcatKernel rewires cat inputs into views of the concat output.
+        # That is only valid while the concat result stays immutable.
+        return fallback_handler(aten.cat.default)(inputs, dim)
 
     def unwrap_tensor(x: TensorBox | ir.StorageBox) -> ir.IRNode:
         if isinstance(x, TensorBox):

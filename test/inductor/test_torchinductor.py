@@ -4581,6 +4581,20 @@ class CommonTemplate:
 
         self.common(fn, (torch.randn(4, 2), torch.randn(4, 2)), check_lowp=False)
 
+    def test_mutated_cat_does_not_alias_inputs(self):
+        # Regression test for https://github.com/pytorch/pytorch/issues/177821
+        def fn(x, y):
+            x = 2 * x
+            c = torch.cat([x, y], dim=1)
+            c[:, [1, 0]] = c[:, [0, 1]]
+            return c[:, :2] + x
+
+        args = (
+            torch.arange(4, device=self.device, dtype=torch.float32).reshape(2, 2),
+            torch.arange(4, device=self.device, dtype=torch.float32).reshape(2, 2),
+        )
+        self.common(fn, args, check_lowp=False)
+
     def test_slice_view_with_graph_break(self):
         def fn():
             a = torch.tensor([1], device=self.device)
