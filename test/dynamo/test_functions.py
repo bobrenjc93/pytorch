@@ -31,7 +31,7 @@ from torch._dynamo.testing import (
     EagerAndRecordGraphs,
     normalize_gm,
 )
-from torch._dynamo.utils import ifdynstaticdefault, range_iterator, same
+from torch._dynamo.utils import counters, ifdynstaticdefault, range_iterator, same
 from torch._dynamo.variables import ConstantVariable, SkipFunctionVariable
 from torch._dynamo.variables.lists import RangeVariable
 from torch.nn import functional as F
@@ -4822,14 +4822,21 @@ class DefaultsTests(torch._dynamo.test_case.TestCaseWithNestedGraphBreaks):
             p = Point(x=x, y=y)
             return p.x + p.y
 
+        torch._dynamo.reset()
+        counters.clear()
         cnts = torch._dynamo.testing.CompileCounter()
         compiled_fn = torch.compile(fn, backend=cnts)
         x = torch.randn(4)
         y = torch.randn(4)
 
         self.assertTrue(same(fn(x, y), compiled_fn(x, y)))
-        self.assertEqual(cnts.frame_count, 1)
-        self.assertEqual(cnts.op_count, 1)
+        self.assertEqual(cnts.frame_count, 0)
+        self.assertEqual(cnts.op_count, 0)
+        self.assertEqual(len(counters["graph_break"]), 1)
+        self.assertIn(
+            "Pydantic dataclass constructor",
+            next(iter(counters["graph_break"])),
+        )
 
     def test_listlike_of_tensors_contains_constant(self):
         for listlike in [set, list]:

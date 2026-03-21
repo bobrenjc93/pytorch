@@ -872,8 +872,8 @@ class UserDefinedClassVariable(UserDefinedVariable):
                 gb_type="Pydantic dataclass constructor",
                 context=f"{self.value}",
                 explanation="Dynamo graph breaks on pydantic dataclass constructors "
-                "and resumes tracing after the validated object is created.",
-                hints=[*graph_break_hints.SUPPORTABLE],
+                "because validation mutates the instance outside traced bytecode.",
+                hints=graph_break_hints.SUPPORTABLE,
             )
         elif is_frozen_dataclass(self.value) and self.is_standard_new():
             fields = dataclasses.fields(self.value)  # type: ignore[arg-type]
