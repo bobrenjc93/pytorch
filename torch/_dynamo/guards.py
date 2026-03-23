@@ -202,6 +202,7 @@ if TYPE_CHECKING:
 
 
 guard_manager_testing_hook_fn: Callable[[Any, Any, Any], Any] | None = None
+_COUNT_ITERATOR_TYPE = type(itertools.count())
 
 try:
     import numpy as np
@@ -4015,7 +4016,7 @@ class GuardsStatePickler(pickle.Pickler):
         elif isinstance(obj, types.MappingProxyType):
             return type(self)._unpickle_mapping_proxy, (obj.copy(),)
 
-        elif type(obj) is type(itertools.count()):
+        elif type(obj) is _COUNT_ITERATOR_TYPE:
             item, step = normalize_count_iter(obj)
             if item is not NotImplemented and step is not NotImplemented:
                 return type(self)._unpickle_count_iter, (item, step)
