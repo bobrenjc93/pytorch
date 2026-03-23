@@ -1874,7 +1874,7 @@ class TensorVariable(VariableTracker):
                     )
         return self
 
-    def method_detach_(self, tx: "InstructionTranslator") -> VariableTracker:
+    def method_detach_(self, tx: "InstructionTranslator") -> "TensorVariable":
         from .builder import wrap_fx_proxy
 
         proxy = tx.output.create_proxy(
