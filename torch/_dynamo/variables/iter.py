@@ -346,6 +346,8 @@ class RepeatIteratorVariable(IteratorVariable):
 
 
 class CountIteratorVariable(IteratorVariable):
+    # advance_count tracks how many next() calls were made during tracing,
+    # used by side_effects.py to replay them on the real iterator post-execution.
     _nonvar_fields = {
         "advance_count",
         *IteratorVariable._nonvar_fields,
