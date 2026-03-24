@@ -68,6 +68,7 @@ from torch.fx.experimental.symbolic_shapes import ShapeEnv
 from torch.testing import FileCheck
 from torch.testing._internal.common_cuda import (
     PLATFORM_SUPPORTS_FLASH_ATTENTION,
+    PLATFORM_SUPPORTS_MEM_EFF_ATTENTION,
     xfailIfDistributedNotSupported,
 )
 from torch.testing._internal.common_utils import (
@@ -17679,6 +17680,44 @@ def forward(self, q, k, v):
                 ep.graph_module.code.strip(),
                 code_str,
             )
+
+    @skipIfCrossRef
+    @unittest.skipIf(
+        not PLATFORM_SUPPORTS_MEM_EFF_ATTENTION,
+        "Can't run efficient SDPA on this platform",
+    )
+    def test_scaled_dot_product_attention_cuda_dynamic_shapes_with_mask(self):
+        class ScaledDotProductAttention(torch.nn.Module):
+            def forward(self, q, k, v, attn_mask):
+                return F.scaled_dot_product_attention(
+                    q, k, v, attn_mask=attn_mask, dropout_p=0.0
+                )
+
+        seq_len = Dim("seq_len", min=1, max=32)
+        q = torch.randn(2, 4, 8, 64, dtype=torch.float16, device="cuda")
+        k = torch.randn(2, 4, 8, 64, dtype=torch.float16, device="cuda")
+        v = torch.randn(2, 4, 8, 64, dtype=torch.float16, device="cuda")
+        attn_mask = torch.zeros(2, 1, 8, 8, dtype=torch.float16, device="cuda")
+
+        with torch.nn.attention.sdpa_kernel(
+            [torch.nn.attention.SDPBackend.EFFICIENT_ATTENTION]
+        ):
+            ep = torch.export.export(
+                ScaledDotProductAttention(),
+                (q, k, v, attn_mask),
+                dynamic_shapes=(
+                    {2: seq_len},
+                    {2: seq_len},
+                    {2: seq_len},
+                    {2: seq_len, 3: seq_len},
+                ),
+            ).run_decompositions()
+
+        ops = {node.target for node in ep.graph.nodes if node.op == "call_function"}
+        self.assertIn(
+            torch.ops.aten._scaled_dot_product_efficient_attention.default,
+            ops,
+        )
 
     def test_int_list_output(self):
         class M(torch.nn.Module):

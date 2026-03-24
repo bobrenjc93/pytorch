@@ -59,6 +59,7 @@
 #include <ATen/ops/cat.h>
 #include <ATen/ops/chunk_native.h>
 #include <ATen/ops/dropout.h>
+#include <ATen/ops/empty_strided.h>
 #include <ATen/ops/linear_native.h>
 #include <ATen/ops/matmul.h>
 #include <ATen/ops/matmul_native.h>
@@ -548,18 +549,21 @@ std::optional<Tensor> convert_boolean_attn_mask(const std::optional<Tensor>& att
   return attn_mask;
 }
 
-// Memory Efficient Attention requires a padded attn mask bias
-// This function pads the attn_mask bias to be a multiple of 16
-// Then slices the padded bias to the original size
-// We apply this function to the top level SDPA so that
-// if padding is done it will be tracked for backward automatically
+// Memory Efficient Attention requires aligned non-last strides for its bias.
+// We preserve the visible mask shape and copy it into fresh storage whose row
+// stride is rounded up to the requested alignment.
+
+template <int alignment>
+c10::SymInt round_up_to_multiple(const c10::SymInt& size) {
+  return ((size + (alignment - 1)) / alignment) * alignment;
+}
 
 template<int alignment>
 bool aligned_tensor(const at::Tensor& tensor){
   for(const auto i : c10::irange(tensor.dim() - 1)){
     auto stride = tensor.sym_stride(i).maybe_as_int();
-    // If the stride is unknown at compilation time, assume it is unaligned
-    // and always pad it. This is helpful to avoid unnecessary guards.
+    // If the stride is unknown at compilation time, route through the
+    // aligned-copy path instead of guarding on the concrete alignment.
     if (!stride)
       return false;
 
@@ -571,11 +575,25 @@ bool aligned_tensor(const at::Tensor& tensor){
 }
 
 template <int alignment>
-at::Tensor pad_bias(const at::Tensor& attn_bias) {
-  auto last_dim_size = attn_bias.sym_size(-1);
-  auto pad_count = alignment - (last_dim_size % alignment);
-  auto padded_bias = at::pad_symint(attn_bias, {c10::SymInt(0), pad_count});
-  return padded_bias.slice_symint(-1, 0, last_dim_size);
+at::Tensor copy_to_aligned_bias(const at::Tensor& attn_bias) {
+  TORCH_INTERNAL_ASSERT(attn_bias.dim() > 0);
+
+  c10::SymDimVector aligned_strides(attn_bias.dim());
+  aligned_strides.back() = c10::SymInt(1);
+
+  c10::SymInt next_stride =
+      round_up_to_multiple<alignment>(attn_bias.sym_size(-1));
+  for (int64_t dim = attn_bias.dim() - 1; dim-- > 0;) {
+    aligned_strides[dim] = next_stride;
+    next_stride = next_stride * attn_bias.sym_size(dim);
+  }
+
+  auto aligned_bias = at::empty_strided_symint(
+      attn_bias.sym_sizes(),
+      aligned_strides,
+      attn_bias.options());
+  aligned_bias.copy_(attn_bias);
+  return aligned_bias;
 }
 
 at::Tensor preprocess_mask(
@@ -586,7 +604,7 @@ at::Tensor preprocess_mask(
   constexpr int mem_eff_alignment = 8;
   at::Tensor result_mask = mask;
   if (!aligned_tensor<mem_eff_alignment>(mask)) {
-    result_mask = pad_bias<mem_eff_alignment>(mask);
+    result_mask = copy_to_aligned_bias<mem_eff_alignment>(mask);
   }
   return result_mask.expand_symint(
       {query.sym_size(0),
