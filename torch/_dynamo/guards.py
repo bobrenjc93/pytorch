@@ -3830,7 +3830,7 @@ class GuardsStatePickler(pickle.Pickler):
         return dict.fromkeys(elems).keys()
 
     @classmethod
-    def _unpickle_count_iter(cls, item: int, step: int) -> itertools.count:
+    def _unpickle_count_iter(cls, item: int, step: int) -> itertools.count[int]:
         return itertools.count(item, step)
 
     @classmethod

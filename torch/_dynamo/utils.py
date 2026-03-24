@@ -45,7 +45,6 @@ import uuid
 import warnings
 import weakref
 from collections import Counter, OrderedDict
-from collections.abc import Iterator
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import is_dataclass
 from functools import lru_cache
@@ -2942,7 +2941,7 @@ def dataclass_fields(cls: Any) -> Any:
 iter_next = next
 
 
-def normalize_count_iter(count_iter: Iterator) -> tuple[Any, Any]:
+def normalize_count_iter(count_iter: Iterator[Any]) -> tuple[Any, Any]:
     try:
         _, args = count_iter.__reduce__()
     except TypeError:
