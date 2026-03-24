@@ -2961,7 +2961,7 @@ def normalize_count_iter(count_iter: Iterator[Any]) -> tuple[Any, Any]:
             return (NotImplemented, NotImplemented)
     if len(args) == 1:
         return (args[0], 1)
-    return args
+    return (args[0], args[1])
 
 
 def normalize_range_iter(range_iter: Any) -> tuple[int, int, int]:
