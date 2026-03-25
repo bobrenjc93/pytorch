@@ -550,30 +550,50 @@ std::optional<Tensor> convert_boolean_attn_mask(const std::optional<Tensor>& att
 }
 
 // Memory Efficient Attention requires aligned non-last strides for its bias.
-// We preserve the visible mask shape and copy it into fresh storage whose row
-// stride is rounded up to the requested alignment.
+// Two alignment strategies are used:
+//  1. pad_bias (pad + slice): used when strides are concrete. The slice view
+//     preserves aligned strides through autograd/inductor backward graphs.
+//  2. copy_to_aligned_bias (empty_strided + copy): used when strides are
+//     symbolic. The pad-and-slice approach creates modulo-dependent stride
+//     expressions that export turns into unsatisfiable shape guards, so we
+//     use an aligned-stride copy instead.
 
 template <int alignment>
 c10::SymInt round_up_to_multiple(const c10::SymInt& size) {
   return ((size + (alignment - 1)) / alignment) * alignment;
 }
 
+enum class AlignStatus { Aligned, ConcreteUnaligned, SymbolicUnaligned };
+
 template<int alignment>
-bool aligned_tensor(const at::Tensor& tensor){
+AlignStatus check_alignment(const at::Tensor& tensor){
   for(const auto i : c10::irange(tensor.dim() - 1)){
     auto stride = tensor.sym_stride(i).maybe_as_int();
-    // If the stride is unknown at compilation time, route through the
-    // aligned-copy path instead of guarding on the concrete alignment.
     if (!stride)
-      return false;
+      return AlignStatus::SymbolicUnaligned;
 
     if((*stride) % alignment != 0){
-      return false;
+      return AlignStatus::ConcreteUnaligned;
     }
   }
-  return tensor.sym_stride(-1) == 1;
+  if (tensor.sym_stride(-1) != 1)
+    return AlignStatus::ConcreteUnaligned;
+  return AlignStatus::Aligned;
 }
 
+// Pad the last dim to a multiple of alignment and slice back to the original
+// size. The resulting view has aligned strides that are preserved through
+// autograd and inductor backward graphs.
+template <int alignment>
+at::Tensor pad_bias(const at::Tensor& attn_bias) {
+  auto last_dim_size = attn_bias.sym_size(-1);
+  auto pad_count = alignment - (last_dim_size % alignment);
+  auto padded_bias = at::pad_symint(attn_bias, {c10::SymInt(0), pad_count});
+  return padded_bias.slice_symint(-1, 0, last_dim_size);
+}
+
+// Allocate fresh storage with aligned strides and copy the bias into it.
+// Avoids the modulo-dependent symbolic expressions that pad+slice creates.
 template <int alignment>
 at::Tensor copy_to_aligned_bias(const at::Tensor& attn_bias) {
   TORCH_INTERNAL_ASSERT(attn_bias.dim() > 0);
@@ -603,8 +623,11 @@ at::Tensor preprocess_mask(
     const at::Tensor& value) {
   constexpr int mem_eff_alignment = 8;
   at::Tensor result_mask = mask;
-  if (!aligned_tensor<mem_eff_alignment>(mask)) {
+  auto status = check_alignment<mem_eff_alignment>(mask);
+  if (status == AlignStatus::SymbolicUnaligned) {
     result_mask = copy_to_aligned_bias<mem_eff_alignment>(mask);
+  } else if (status == AlignStatus::ConcreteUnaligned) {
+    result_mask = pad_bias<mem_eff_alignment>(mask);
   }
   return result_mask.expand_symint(
       {query.sym_size(0),
