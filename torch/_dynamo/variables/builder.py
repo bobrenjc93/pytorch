@@ -1852,8 +1852,10 @@ class VariableBuilder:
             return ConstantVariable.create(value=value)
 
         # One can index a tensor with a list/tuple. Therefore, we need to
-        # have a stricter match.
-        self.install_guards(GuardBuilder.SEQUENCE_LENGTH)
+        # have a stricter match. Keep plain list length guards lazy so mutating
+        # methods like append()/clear() don't specialize on untouched contents.
+        if type(value) is not list:
+            self.install_guards(GuardBuilder.SEQUENCE_LENGTH)
 
         # Tuples are immutable objects, so we should mark its items static. This
         # avoids wrapping of tuple items as symints. This helps for nn module

@@ -34,6 +34,7 @@ from ..bytecode_transformation import (
     create_rot_n,
 )
 from ..exc import raise_observed_exception, unimplemented
+from ..guards import GuardBuilder, install_guard
 from ..source import AttrSource, NamedTupleFieldsSource
 from ..utils import (
     cmp_name_to_op_mapping,
@@ -47,7 +48,12 @@ from ..utils import (
     range_iterator,
     set_example_value,
 )
-from .base import AsPythonConstantNotImplementedError, ValueMutationNew, VariableTracker
+from .base import (
+    AsPythonConstantNotImplementedError,
+    ValueMutationExisting,
+    ValueMutationNew,
+    VariableTracker,
+)
 from .constant import CONSTANT_VARIABLE_FALSE, CONSTANT_VARIABLE_NONE, ConstantVariable
 from .functions import UserFunctionVariable
 from .iter import IteratorVariable
@@ -91,6 +97,10 @@ class BaseListVariable(VariableTracker):
     def _as_proxy(self) -> list[Any]:
         return [x.as_proxy() for x in self.items]
 
+    def _install_list_length_guard(self) -> None:
+        if self.source and self.python_type() is list:
+            install_guard(self.source.make_guard(GuardBuilder.SEQUENCE_LENGTH))
+
     def modified(
         self, items: list[VariableTracker], **kwargs: Any
     ) -> "BaseListVariable":
@@ -104,9 +114,11 @@ class BaseListVariable(VariableTracker):
         return prefix + ", ".join(i.debug_repr() for i in self.items) + suffix
 
     def as_python_constant(self) -> Any:
+        self._install_list_length_guard()
         return self.python_type()([x.as_python_constant() for x in self.items])
 
     def as_proxy(self) -> Any:
+        self._install_list_length_guard()
         assert self.python_type() is not SizeVariable
         return self.python_type()(self._as_proxy())
 
@@ -241,7 +253,10 @@ class BaseListVariable(VariableTracker):
     ) -> VariableTracker:
         from .builder import SourcelessBuilder
 
-        if name == "__getitem__":
+        if name == "__len__":
+            self._install_list_length_guard()
+            return ConstantVariable.create(len(self.items))
+        elif name == "__getitem__":
             if kwargs or len(args) != 1:
                 raise_args_mismatch(
                     tx,
@@ -742,6 +757,15 @@ class CommonListMethodsVariable(BaseListVariable):
     Implement methods common to List and other List-like things
     """
 
+    def _disable_direct_list_replay(self) -> None:
+        return
+
+    def _record_direct_list_append(self, arg: VariableTracker) -> None:
+        return
+
+    def _record_direct_list_clear(self) -> None:
+        return
+
     def call_method(
         self,
         tx: "InstructionTranslator",
@@ -761,6 +785,7 @@ class CommonListMethodsVariable(BaseListVariable):
                 )
             (arg,) = args
             tx.output.side_effects.mutation(self)
+            self._record_direct_list_append(arg)
             self.items.append(arg)
             return CONSTANT_VARIABLE_NONE
         elif name == "extend" and self.is_mutable():
@@ -797,6 +822,7 @@ class CommonListMethodsVariable(BaseListVariable):
             else:
                 const_idx = idx.as_python_constant()
             tx.output.side_effects.mutation(self)
+            self._disable_direct_list_replay()
             # type: ignore[arg-type]
             self.items.insert(const_idx, value)
             return CONSTANT_VARIABLE_NONE
@@ -819,6 +845,7 @@ class CommonListMethodsVariable(BaseListVariable):
                     msg = VariableTracker.build(tx, "pop index out of range")
                     raise_observed_exception(IndexError, tx, args=[msg])
             tx.output.side_effects.mutation(self)
+            self._disable_direct_list_replay()
             return self.items.pop(*[a.as_python_constant() for a in args])
         elif name == "clear" and self.is_mutable():
             if args or kwargs:
@@ -829,6 +856,7 @@ class CommonListMethodsVariable(BaseListVariable):
                     f"{len(args)} args and {len(kwargs)} kwargs",
                 )
             tx.output.side_effects.mutation(self)
+            self._record_direct_list_clear()
             self.items.clear()
             return CONSTANT_VARIABLE_NONE
         elif name == "__setitem__" and self.is_mutable() and args:
@@ -850,6 +878,7 @@ class CommonListMethodsVariable(BaseListVariable):
                 raise_args_mismatch(tx, name, "0 kwargs", f"{len(kwargs)} kwargs")
             value = args[1]
             tx.output.side_effects.mutation(self)
+            self._disable_direct_list_replay()
             if isinstance(key, SymNodeVariable):
                 # pyrefly: ignore[unsupported-operation]
                 self.items[key.evaluate_expr()] = value
@@ -881,6 +910,7 @@ class CommonListMethodsVariable(BaseListVariable):
                 )
 
             tx.output.side_effects.mutation(self)
+            self._disable_direct_list_replay()
             if args[0].is_python_constant() and isinstance(
                 args[0].as_python_constant(), (int, slice)
             ):
@@ -926,6 +956,7 @@ class CommonListMethodsVariable(BaseListVariable):
                 )
             self.items.reverse()
             tx.output.side_effects.mutation(self)
+            self._disable_direct_list_replay()
             return CONSTANT_VARIABLE_NONE
         elif name == "remove" and self.is_mutable():
             if kwargs or len(args) != 1:
@@ -944,8 +975,69 @@ class CommonListMethodsVariable(BaseListVariable):
 
 
 class ListVariable(CommonListMethodsVariable):
+    _nonvar_fields = {
+        *CommonListMethodsVariable._nonvar_fields,
+        "_direct_list_replay_enabled",
+        "_replay_list_cleared",
+        "_replay_list_appends",
+    }
+
+    def __init__(
+        self,
+        items: list[VariableTracker],
+        _direct_list_replay_enabled: bool = True,
+        _replay_list_cleared: bool = False,
+        _replay_list_appends: list[VariableTracker] | None = None,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(items, **kwargs)
+        self._direct_list_replay_enabled = _direct_list_replay_enabled
+        self._replay_list_cleared = _replay_list_cleared
+        self._replay_list_appends = (
+            [] if _replay_list_appends is None else list(_replay_list_appends)
+        )
+        if not (
+            self.source is not None
+            and isinstance(self.mutation_type, ValueMutationExisting)
+        ):
+            self._direct_list_replay_enabled = False
+            self._replay_list_cleared = False
+            self._replay_list_appends = []
+
     def python_type(self) -> type:
         return list
+
+    def _disable_direct_list_replay(self) -> None:
+        if self.source is not None:
+            install_guard(self.source.make_guard(GuardBuilder.SEQUENCE_LENGTH))
+        self._direct_list_replay_enabled = False
+        self._replay_list_cleared = False
+        self._replay_list_appends.clear()
+
+    def _record_direct_list_append(self, arg: VariableTracker) -> None:
+        if not self._direct_list_replay_enabled:
+            return
+        if arg is self:
+            self._disable_direct_list_replay()
+            return
+        self._replay_list_appends.append(arg)
+
+    def _record_direct_list_clear(self) -> None:
+        if not self._direct_list_replay_enabled:
+            return
+        self._replay_list_cleared = True
+        self._replay_list_appends.clear()
+
+    def has_direct_list_replay(self) -> bool:
+        return self._direct_list_replay_enabled and (
+            self._replay_list_cleared or bool(self._replay_list_appends)
+        )
+
+    def direct_list_replay_should_clear(self) -> bool:
+        return self._replay_list_cleared
+
+    def direct_list_replay_appends(self) -> list[VariableTracker]:
+        return list(self._replay_list_appends)
 
     def __repr__(self) -> str:
         return f"{self.__class__.__name__}(length={len(self.items)})"
@@ -1027,6 +1119,7 @@ class ListVariable(CommonListMethodsVariable):
 
                 try:
                     # pyrefly: ignore[unsupported-operation]
+                    self._disable_direct_list_replay()
                     self.items[key] = value
                 except (IndexError, TypeError) as e:
                     raise_observed_exception(
@@ -1043,6 +1136,7 @@ class ListVariable(CommonListMethodsVariable):
             ).as_python_constant()
             if len(kwargs) != 0:
                 raise_args_mismatch(tx, name, "0 kwargs", f"{len(kwargs)} kwargs")
+            self._disable_direct_list_replay()
 
             if key_fn_var.is_constant_none():
                 keys = self.items.copy()
