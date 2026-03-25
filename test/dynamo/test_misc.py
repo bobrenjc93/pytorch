@@ -6273,16 +6273,18 @@ not ___dict_contains('cccccccc', G['sys'].modules)""",
 
         def fn():
             items.clear()
+            return torch.ones(8)
 
         opt_fn = torch.compile(fn, backend=cnts, fullgraph=True)
 
-        opt_fn()
+        out1 = opt_fn()
         self.assertEqual(len(items), 0)
 
         items.extend([torch.randn(8), torch.randn(8)])
-        opt_fn()
+        out2 = opt_fn()
 
         self.assertEqual(len(items), 0)
+        self.assertTrue(same(out1, out2))
         self.assertEqual(cnts.frame_count, 1)
 
     def test_inline_dict_mutation(self):

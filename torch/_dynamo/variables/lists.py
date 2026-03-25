@@ -101,6 +101,9 @@ class BaseListVariable(VariableTracker):
         if self.source and self.python_type() is list:
             install_guard(self.source.make_guard(GuardBuilder.SEQUENCE_LENGTH))
 
+    def _disable_direct_list_replay(self) -> None:
+        return
+
     def modified(
         self, items: list[VariableTracker], **kwargs: Any
     ) -> "BaseListVariable":
@@ -127,6 +130,7 @@ class BaseListVariable(VariableTracker):
     ) -> VariableTracker:
         from .tensor import SymNodeVariable
 
+        self._install_list_length_guard()
         if isinstance(arg, SymNodeVariable):
             index = arg.sym_num
         else:
@@ -151,6 +155,7 @@ class BaseListVariable(VariableTracker):
                 raise_observed_exception(IndexError, tx, args=[error_message])
 
     def unpack_var_sequence(self, tx: "InstructionTranslator") -> list[VariableTracker]:
+        self._install_list_length_guard()
         return list(self.items)
 
     def call_tree_map_branch(
@@ -166,8 +171,11 @@ class BaseListVariable(VariableTracker):
                 tx, tree_map_fn, map_fn, rest, tree_map_kwargs
             )
 
+        self._install_list_length_guard()
         other_lists: list[BaseListVariable] = []
         for candidate in rest:
+            if isinstance(candidate, BaseListVariable):
+                candidate._install_list_length_guard()
             if (
                 not isinstance(candidate, BaseListVariable)
                 or len(candidate.items) != len(self.items)
@@ -211,8 +219,11 @@ class BaseListVariable(VariableTracker):
                 tx, tree_map_fn, map_fn, rest, tree_map_kwargs, keypath
             )
 
+        self._install_list_length_guard()
         other_lists: list[BaseListVariable] = []
         for candidate in rest:
+            if isinstance(candidate, BaseListVariable):
+                candidate._install_list_length_guard()
             if (
                 not isinstance(candidate, BaseListVariable)
                 or len(candidate.items) != len(self.items)
@@ -306,6 +317,7 @@ class BaseListVariable(VariableTracker):
                     f"{len(args)} args and {len(kwargs)} kwargs",
                 )
 
+            self._install_list_length_guard()
             try:
                 # Speedup trace times for constant data structures
                 items = [item.as_python_constant() for item in self.items]
@@ -335,6 +347,7 @@ class BaseListVariable(VariableTracker):
                     "1 args and 0 kwargs",
                     f"{len(args)} args and {len(kwargs)} kwargs",
                 )
+            self._install_list_length_guard()
             return VariableTracker.build(tx, operator.countOf).call_function(
                 tx,
                 [self, args[0]],
@@ -357,10 +370,20 @@ class BaseListVariable(VariableTracker):
                 )
                 raise_observed_exception(TypeError, tx, args=[msg_vt])
 
+            other_list = args[0]
+            assert isinstance(other_list, BaseListVariable)
             if name == "__add__":
-                return type(self)(self.items + args[0].items, source=self.source)  # type: ignore[attr-defined]
+                self._install_list_length_guard()
+                other_list._install_list_length_guard()
+                return type(self)(
+                    self.items + other_list.items,
+                    source=self.source,
+                )
             else:
-                self.items += args[0].items  # type: ignore[attr-defined]
+                if self.is_mutable():
+                    tx.output.side_effects.mutation(self)
+                    self._disable_direct_list_replay()
+                self.items += other_list.items
                 return self
         elif name in ("__mul__", "__imul__"):
             if kwargs or len(args) != 1:
@@ -381,8 +404,12 @@ class BaseListVariable(VariableTracker):
             val = args[0].as_python_constant()
 
             if name == "__mul__":
+                self._install_list_length_guard()
                 return type(self)(self.items * val, source=self.source)
             else:
+                if self.is_mutable():
+                    tx.output.side_effects.mutation(self)
+                    self._disable_direct_list_replay()
                 self.items *= val
                 return self
         elif name in cmp_name_to_op_mapping:
@@ -421,6 +448,8 @@ class BaseListVariable(VariableTracker):
                     )
                     raise_observed_exception(TypeError, tx, args=[msg])
 
+            left._install_list_length_guard()
+            right._install_list_length_guard()
             return SourcelessBuilder.create(tx, polyfills.list_cmp).call_function(
                 tx,
                 [
@@ -431,7 +460,9 @@ class BaseListVariable(VariableTracker):
                 {},
             )
         elif name == "__iter__":
-            return ListIteratorVariable(self.items, mutation_type=ValueMutationNew())
+            return ListIteratorVariable(
+                self.unpack_var_sequence(tx), mutation_type=ValueMutationNew()
+            )
 
         return super().call_method(tx, name, args, kwargs)
 
@@ -757,9 +788,6 @@ class CommonListMethodsVariable(BaseListVariable):
     Implement methods common to List and other List-like things
     """
 
-    def _disable_direct_list_replay(self) -> None:
-        return
-
     def _record_direct_list_append(self, arg: VariableTracker) -> None:
         return
 
@@ -804,6 +832,8 @@ class CommonListMethodsVariable(BaseListVariable):
                 raise_observed_exception(TypeError, tx, args=[msg])
 
             (arg,) = args
+            # Intentionally preserve direct replay here: extend is equivalent to
+            # a sequence of append() calls for builtin list semantics.
             arg.force_apply_to_var_sequence(
                 tx, lambda item: self.call_method(tx, "append", [item], {})
             )
@@ -818,7 +848,7 @@ class CommonListMethodsVariable(BaseListVariable):
                 )
             idx, value = args
             if isinstance(idx, SymNodeVariable):
-                const_idx = idx.evaluate_expr()
+                const_idx = operator.index(idx.evaluate_expr())
             else:
                 const_idx = idx.as_python_constant()
             tx.output.side_effects.mutation(self)
@@ -880,8 +910,7 @@ class CommonListMethodsVariable(BaseListVariable):
             tx.output.side_effects.mutation(self)
             self._disable_direct_list_replay()
             if isinstance(key, SymNodeVariable):
-                # pyrefly: ignore[unsupported-operation]
-                self.items[key.evaluate_expr()] = value
+                self.items[operator.index(key.evaluate_expr())] = value
             elif isinstance(key, SliceVariable):
                 if key.is_python_constant():
                     self.items[key.as_python_constant()] = list(value.items)  # type: ignore[attr-defined]
@@ -915,7 +944,7 @@ class CommonListMethodsVariable(BaseListVariable):
                 args[0].as_python_constant(), (int, slice)
             ):
                 if isinstance(args[0], SymNodeVariable):
-                    idx = args[0].evaluate_expr()
+                    idx = operator.index(args[0].evaluate_expr())
                 else:
                     idx = args[0].as_python_constant()
 
@@ -1092,6 +1121,7 @@ class ListVariable(CommonListMethodsVariable):
                 super().call_method(tx, name, args, kwargs)
 
             tx.output.side_effects.mutation(self)
+            self._disable_direct_list_replay()
             if isinstance(key, SliceVariable):
                 if not value.has_force_unpack_var_sequence(tx):
                     msg = VariableTracker.build(tx, "can only assign an iterable")
@@ -1113,13 +1143,11 @@ class ListVariable(CommonListMethodsVariable):
                     )
             else:
                 if isinstance(key, SymNodeVariable):
-                    key = key.evaluate_expr()
+                    key = operator.index(key.evaluate_expr())
                 else:
                     key = key.as_python_constant()
 
                 try:
-                    # pyrefly: ignore[unsupported-operation]
-                    self._disable_direct_list_replay()
                     self.items[key] = value
                 except (IndexError, TypeError) as e:
                     raise_observed_exception(
@@ -1194,6 +1222,7 @@ class ListVariable(CommonListMethodsVariable):
             elif len(args) == 1 and args[0].has_force_unpack_var_sequence(tx):
                 (arg,) = args
                 tx.output.side_effects.mutation(self)
+                self._disable_direct_list_replay()
                 self.items[:] = arg.force_unpack_var_sequence(tx)
                 return CONSTANT_VARIABLE_NONE
 

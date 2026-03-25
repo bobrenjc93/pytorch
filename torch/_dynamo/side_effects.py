@@ -1024,9 +1024,9 @@ class SideEffects:
                 side_effects_log.debug(msg)
 
         def _codegen_direct_list_replay(
-            list_vt: "ListVariable", source: Source
+            list_vt: "ListVariable", source: Source | None
         ) -> bool:
-            if not list_vt.has_direct_list_replay():
+            if source is None or not list_vt.has_direct_list_replay():
                 return False
             appended_items = list_vt.direct_list_replay_appends()
 
@@ -1058,9 +1058,7 @@ class SideEffects:
             ):
                 continue
             if isinstance(var, variables.ListVariable):
-                if _codegen_direct_list_replay(
-                    var, var.source
-                ):  # type: ignore[arg-type]
+                if _codegen_direct_list_replay(var, var.source):
                     continue
                 # old[:] = new
                 cg(var, allow_cache=False)  # Don't codegen via source
@@ -1247,9 +1245,7 @@ class SideEffects:
                     var,
                     variables.UserDefinedListVariable,
                 ) and self.is_modified(var._list_vt):
-                    if not _codegen_direct_list_replay(
-                        var._list_vt, var.source
-                    ):  # type: ignore[arg-type]
+                    if not _codegen_direct_list_replay(var._list_vt, var.source):
                         # Update the list to the updated items. Be careful in
                         # calling the list methods and not the overridden methods.
                         varname_map = {}
