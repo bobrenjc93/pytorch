@@ -476,9 +476,7 @@ class _RuntimeCompiledFnInvoker:
         if not getattr(self.compiled_fn, "_boxed_call", False):
             self.compiled_fn = make_boxed_func(self.compiled_fn)
 
-    def run(
-        self, args: list[Any], *, on_before_call: Callable[[], None]
-    ) -> list[Any]:
+    def run(self, args: list[Any], *, on_before_call: Callable[[], None]) -> list[Any]:
         with self.first_invocation_ctx():
             if self.trace_joint:
                 args_ = list(args)
@@ -750,7 +748,7 @@ def _create_runtime_wrapper(
         if cm is not None:
             cm.__exit__(None, None, None)
 
-    @simple_wraps(compiled_fn)
+    @simple_wraps(compiled_invoker.compiled_fn)
     def runtime_wrapper(args: list[Any]) -> Any:
         # Create context manager for profiler
         cm = record_runtime_wrapper_prologue_enter()
@@ -2377,7 +2375,9 @@ class AOTDispatchAutogradCompileSpec:
     backward_state_indices: list[int]
     disable_amp: bool
     indices_of_inps_to_detach: list[int]
-    lazy_backward_info: AutogradLazyBackwardCompileInfo | CachedAutogradLazyBackwardCompileInfo | None
+    lazy_backward_info: (
+        AutogradLazyBackwardCompileInfo | CachedAutogradLazyBackwardCompileInfo | None
+    )
     aot_config: AOTConfig
     fw_metadata: ViewAndMutationMeta
     try_save_cache_entry: Callable[..., Any] | None
@@ -2420,9 +2420,7 @@ class _AutogradSavedState:
             if idx < num_vc_check:
                 maybe_mark_dynamic_helper(tensors_to_save[idx], dims)
             else:
-                maybe_mark_dynamic_helper(
-                    tensors_no_vc_check[idx - num_vc_check], dims
-                )
+                maybe_mark_dynamic_helper(tensors_no_vc_check[idx - num_vc_check], dims)
 
         ctx.save_for_backward(*tensors_to_save)
         ctx._tensors_no_vc_check = tensors_no_vc_check
@@ -2741,6 +2739,7 @@ class _AutogradBackwardCompiler:
                 )
             ):
                 self.lazy_backward_info.saved_context.fw_metadata.bw_donated_idxs = (  # type: ignore[union-attr]
+                    # pyrefly: ignore [implicit-any]
                     []
                 )
 
