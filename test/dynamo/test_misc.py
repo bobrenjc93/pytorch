@@ -5651,16 +5651,15 @@ not ___dict_contains('cccccccc', G['sys'].modules)""",
         cnts = torch._dynamo.testing.CompileCounter()
         counters.clear()
 
-        def fn(x):
-            gen = torch.Generator()
+        def fn(x, gen):
             gen.manual_seed(3)
             return x + 1
 
         x = torch.randn(10)
-        ref = fn(x)
+        ref = fn(x, torch.Generator())
 
         opt_fn = torch.compile(fn, backend=cnts, fullgraph=False)
-        res = opt_fn(x)
+        res = opt_fn(x, torch.Generator())
 
         self.assertTrue(same(ref, res))
         self.assertEqual(cnts.op_count, 1)
