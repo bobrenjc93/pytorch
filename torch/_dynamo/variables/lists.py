@@ -916,9 +916,9 @@ class CommonListMethodsVariable(BaseListVariable):
             tx.output.side_effects.mutation(self)
             self._disable_direct_list_replay()
             if isinstance(key, SymNodeVariable):
-                self.items[
-                    operator.index(cast(SupportsIndex, key.evaluate_expr()))
-                ] = value
+                self.items[operator.index(cast(SupportsIndex, key.evaluate_expr()))] = (
+                    value
+                )
             elif isinstance(key, SliceVariable):
                 if key.is_python_constant():
                     self.items[key.as_python_constant()] = list(value.items)  # type: ignore[attr-defined]
@@ -952,9 +952,7 @@ class CommonListMethodsVariable(BaseListVariable):
                 args[0].as_python_constant(), (int, slice)
             ):
                 if isinstance(args[0], SymNodeVariable):
-                    idx = operator.index(
-                        cast(SupportsIndex, args[0].evaluate_expr())
-                    )
+                    idx = operator.index(cast(SupportsIndex, args[0].evaluate_expr()))
                 else:
                     idx = args[0].as_python_constant()
 
