@@ -5674,8 +5674,7 @@ not ___dict_contains('cccccccc', G['sys'].modules)""",
         counters.clear()
 
         def fn(x):
-            gen = torch.Generator()
-            return x + 1, gen.initial_seed()
+            return x + 1, torch.default_generator.initial_seed()
 
         x = torch.randn(10)
         ref = fn(x)
@@ -5687,6 +5686,13 @@ not ___dict_contains('cccccccc', G['sys'].modules)""",
         self.assertEqual(cnts.op_count, 1)
         self.assertEqual(cnts.frame_count, 1)
         self.assertEqual(len(counters["graph_break"]), 1)
+
+    def test_torch_generator_get_state_fullgraph(self):
+        def fn():
+            return torch.default_generator.get_state()
+
+        with self.assertRaises(torch._dynamo.exc.Unsupported):
+            torch.compile(fn, backend="eager", fullgraph=True)()
 
     def test_is_tensor_like(self):
         cnts = torch._dynamo.testing.CompileCounter()

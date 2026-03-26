@@ -390,6 +390,8 @@ manual_torch_name_rule_map: dict[
     "inspect.signature": InspectSignatureVariable,
 }
 
+# Keep this in sync with the stateful generator methods exposed from
+# torch/csrc/Generator.cpp.
 _GENERATOR_METHODS_THAT_GRAPH_BREAK = (
     "clone_state",
     "get_offset",
