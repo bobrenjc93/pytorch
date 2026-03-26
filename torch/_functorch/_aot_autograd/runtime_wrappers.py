@@ -2436,7 +2436,9 @@ class _AutogradSavedState:
             )
         ctx.symints = symint_outs
 
-        opaque_object_outs = fw_outs[self.metadata.opaque_objects_saved_for_backwards_slice]
+        opaque_object_outs = fw_outs[
+            self.metadata.opaque_objects_saved_for_backwards_slice
+        ]
         if not all(
             is_opaque_type(type(obj)) or isinstance(obj, OpaqueBase)
             for obj in opaque_object_outs
@@ -2504,9 +2506,7 @@ class _AutogradForwardEpilogue:
                     num_mutated_runtime_inps + num_outputs :
                 ]
                 if any(isinstance(x, TensorAlias) for x in intermediates_raw):
-                    raise AssertionError(
-                        "expected no TensorAlias in intermediates_raw"
-                    )
+                    raise AssertionError("expected no TensorAlias in intermediates_raw")
 
         # invariant: intermediate bases always require gradients, so we don't have to
         # consider marking them as non-differentiable.
@@ -2581,9 +2581,7 @@ class _AutogradRngStateTracker:
         if (
             self.backward_state_position in self.pending_forwards
             and self.backward_state_position not in self.saved_backward_tensor_states
-            and (
-                self.backward_state_position != curr_backward_iter or retain_graph
-            )
+            and (self.backward_state_position != curr_backward_iter or retain_graph)
         ):
             self.saved_backward_tensor_states[self.backward_state_position] = [
                 rng_state.get_state() for rng_state in self.bwd_rng_states
@@ -2615,7 +2613,9 @@ class _AutogradRngStateTracker:
 @dataclass
 class _AutogradBackwardCompiler:
     compiled_bw: Callable[..., Any] | None
-    lazy_backward_info: AutogradLazyBackwardCompileInfo | CachedAutogradLazyBackwardCompileInfo | None
+    lazy_backward_info: (
+        AutogradLazyBackwardCompileInfo | CachedAutogradLazyBackwardCompileInfo | None
+    )
     disable_amp: bool
     aot_config: AOTConfig
     fw_metadata: ViewAndMutationMeta
