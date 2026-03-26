@@ -18,7 +18,7 @@ import collections
 import operator
 import sys
 from collections.abc import Sequence
-from typing import Any, Literal, Optional, TYPE_CHECKING
+from typing import Any, cast, Literal, Optional, SupportsIndex, TYPE_CHECKING
 
 import torch
 import torch.fx
@@ -99,7 +99,12 @@ class BaseListVariable(VariableTracker):
 
     def _install_list_length_guard(self) -> None:
         if self.source and self.python_type() is list:
-            install_guard(self.source.make_guard(GuardBuilder.SEQUENCE_LENGTH))
+            try:
+                install_guard(self.source.make_guard(GuardBuilder.SEQUENCE_LENGTH))
+            except NotImplementedError:
+                # Constant-backed lists are already immutable from Dynamo's
+                # perspective, so they do not need a runtime length guard.
+                return
 
     def _disable_direct_list_replay(self) -> None:
         return
@@ -448,6 +453,8 @@ class BaseListVariable(VariableTracker):
                     )
                     raise_observed_exception(TypeError, tx, args=[msg])
 
+            assert isinstance(left, BaseListVariable)
+            assert isinstance(right, BaseListVariable)
             left._install_list_length_guard()
             right._install_list_length_guard()
             return SourcelessBuilder.create(tx, polyfills.list_cmp).call_function(
@@ -460,9 +467,8 @@ class BaseListVariable(VariableTracker):
                 {},
             )
         elif name == "__iter__":
-            return ListIteratorVariable(
-                self.unpack_var_sequence(tx), mutation_type=ValueMutationNew()
-            )
+            self._install_list_length_guard()
+            return ListIteratorVariable(self.items, mutation_type=ValueMutationNew())
 
         return super().call_method(tx, name, args, kwargs)
 
@@ -848,7 +854,7 @@ class CommonListMethodsVariable(BaseListVariable):
                 )
             idx, value = args
             if isinstance(idx, SymNodeVariable):
-                const_idx = operator.index(idx.evaluate_expr())
+                const_idx = operator.index(cast(SupportsIndex, idx.evaluate_expr()))
             else:
                 const_idx = idx.as_python_constant()
             tx.output.side_effects.mutation(self)
@@ -910,7 +916,9 @@ class CommonListMethodsVariable(BaseListVariable):
             tx.output.side_effects.mutation(self)
             self._disable_direct_list_replay()
             if isinstance(key, SymNodeVariable):
-                self.items[operator.index(key.evaluate_expr())] = value
+                self.items[
+                    operator.index(cast(SupportsIndex, key.evaluate_expr()))
+                ] = value
             elif isinstance(key, SliceVariable):
                 if key.is_python_constant():
                     self.items[key.as_python_constant()] = list(value.items)  # type: ignore[attr-defined]
@@ -944,7 +952,9 @@ class CommonListMethodsVariable(BaseListVariable):
                 args[0].as_python_constant(), (int, slice)
             ):
                 if isinstance(args[0], SymNodeVariable):
-                    idx = operator.index(args[0].evaluate_expr())
+                    idx = operator.index(
+                        cast(SupportsIndex, args[0].evaluate_expr())
+                    )
                 else:
                     idx = args[0].as_python_constant()
 
@@ -1037,8 +1047,7 @@ class ListVariable(CommonListMethodsVariable):
         return list
 
     def _disable_direct_list_replay(self) -> None:
-        if self.source is not None:
-            install_guard(self.source.make_guard(GuardBuilder.SEQUENCE_LENGTH))
+        self._install_list_length_guard()
         self._direct_list_replay_enabled = False
         self._replay_list_cleared = False
         self._replay_list_appends.clear()
@@ -1143,7 +1152,7 @@ class ListVariable(CommonListMethodsVariable):
                     )
             else:
                 if isinstance(key, SymNodeVariable):
-                    key = operator.index(key.evaluate_expr())
+                    key = operator.index(cast(SupportsIndex, key.evaluate_expr()))
                 else:
                     key = key.as_python_constant()
 

@@ -1035,9 +1035,7 @@ class SideEffects:
             )
             cg(source)
             cg.foreach(appended_items)
-            cg.append_output(
-                create_instruction("BUILD_LIST", arg=len(appended_items))
-            )
+            cg.append_output(create_instruction("BUILD_LIST", arg=len(appended_items)))
             cg.append_output(
                 cg.create_load_const(list_vt.direct_list_replay_should_clear())
             )
