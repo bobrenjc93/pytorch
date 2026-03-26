@@ -1363,6 +1363,7 @@ class UserDefinedObjectVariable(UserDefinedVariable):
         kwargs: dict[str, Any],
     ) -> VariableTracker:
         from . import CONSTANT_VARIABLE_NONE, UserMethodVariable
+        from .. import trace_rules
 
         method = self._maybe_get_baseclass_method(name)
         if method is not None:
@@ -1400,6 +1401,27 @@ class UserDefinedObjectVariable(UserDefinedVariable):
                         "evaluating them.",
                     ],
                 )
+
+            # torch.Generator methods are C descriptors, so direct method calls
+            # need an explicit bridge back into trace_rules.
+            if isinstance(self.value, torch._C.Generator) and (
+                isinstance(
+                    method,
+                    (
+                        types.MethodDescriptorType,
+                        types.WrapperDescriptorType,
+                        types.MethodWrapperType,
+                    ),
+                )
+                or torch._C._dynamo.utils.is_instancemethod(method)  # type: ignore[attr-defined]
+                or is_cython_function(method)
+            ):
+                bound_method = getattr(self.value, name)
+                if trace_rules.lookup(bound_method) is not None:
+                    source = AttrSource(self.source, name) if self.source else None
+                    return VariableTracker.build(
+                        tx, bound_method, source
+                    ).call_function(tx, args, kwargs)
 
             # check for methods implemented in C++
             if isinstance(method, types.FunctionType):
