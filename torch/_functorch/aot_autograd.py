@@ -27,7 +27,8 @@ from torch._dynamo.utils import (
 from torch._functorch._aot_autograd.autograd_cache import create_fx_config
 from torch._guards import detect_fake_mode
 from torch._inductor.codecache import resolve_pre_grad_pass_timing
-from torch._inductor.utils import BoxedBool
+# Runtime annotation consumers still resolve BoxedBool from module globals.
+from torch._inductor.utils import BoxedBool  # noqa: TC001
 from torch._subclasses import FakeTensor, FakeTensorMode
 from torch.export._tree_utils import reorder_kwargs
 from torch.fx.experimental.proxy_tensor import make_fx
