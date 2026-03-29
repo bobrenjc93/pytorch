@@ -564,28 +564,48 @@ def cmp_eq(a: object, b: object) -> bool:
     # slow in some corner cases.
     # if a is b:
     #     return True
-    if isinstance(a, type) or isinstance(b, type):
-        # Class objects must dispatch through the runtime type.
-        result = type(a).__eq__(a, b)
-        if result is NotImplemented:
-            result = type(b).__eq__(b, a)
+    if isinstance(a, type):
+        # Default metaclass equality is identity-based. Preserve the reflected
+        # operand fallback without tracing through type.__eq__.
+        if type(a).__eq__ is type.__eq__:
+            result = True if a is b else NotImplemented
+        else:
+            result = type(a).__eq__(a, b)
     else:
         result = a.__eq__(b)
-        if result is NotImplemented:
+    if result is NotImplemented:
+        if isinstance(b, type):
+            if type(b).__eq__ is type.__eq__:
+                result = True if a is b else NotImplemented
+            else:
+                result = type(b).__eq__(b, a)
+        else:
             result = b.__eq__(a)
     return result is not NotImplemented and result
 
 
 def cmp_ne(a: object, b: object) -> bool:
-    use_type_dispatch = isinstance(a, type) or isinstance(b, type)
-    # Check if __ne__ is overridden
-    if isinstance(type(a).__ne__, types.FunctionType):
-        result = type(a).__ne__(a, b) if use_type_dispatch else a.__ne__(b)
+    if isinstance(a, type):
+        if type(a).__ne__ is type.__ne__:
+            result = False if a is b else NotImplemented
+        else:
+            result = type(a).__ne__(a, b)
+        if result is not NotImplemented:
+            return result
+    elif isinstance(type(a).__ne__, types.FunctionType):
+        result = a.__ne__(b)
         if result is not NotImplemented:
             return result
         # Fall through to try b.__ne__(a) or cmp_eq
-    if isinstance(type(b).__ne__, types.FunctionType):
-        result = type(b).__ne__(b, a) if use_type_dispatch else b.__ne__(a)
+    if isinstance(b, type):
+        if type(b).__ne__ is type.__ne__:
+            result = False if a is b else NotImplemented
+        else:
+            result = type(b).__ne__(b, a)
+        if result is not NotImplemented:
+            return result
+    elif isinstance(type(b).__ne__, types.FunctionType):
+        result = b.__ne__(a)
         if result is not NotImplemented:
             return result
     return not cmp_eq(a, b)
