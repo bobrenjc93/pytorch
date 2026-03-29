@@ -1822,12 +1822,17 @@ class TestTorchDeviceType(TestCase):
     @dtypes(torch.float32)
     @dtypesIfCUDA(torch.float32, torch.int32)
     @skipIfMPS
-    @skipIfTorchInductor("warning is not surfaced as UserWarning when warn_only=True")
     def test_nondeterministic_alert_histc(self, device, dtype):
         a = torch.tensor([], device=device, dtype=dtype)
         for op_call in [torch.histc, torch.Tensor.histc]:
+            # This check is about eager deterministic alerts, so bypass the
+            # compiled test harness around the op itself.
+            def eager_histc_call():
+                with torch.compiler.set_stance("force_eager"):
+                    return op_call(a, min=0, max=3)
+
             self.check_nondeterministic_alert(
-                lambda: op_call(a, min=0, max=3),
+                eager_histc_call,
                 '_histc_cuda with floating point input',
                 torch.device(device).type == 'cuda' and dtype.is_floating_point)
 
@@ -1961,8 +1966,12 @@ class TestTorchDeviceType(TestCase):
                 self.fail(f"'{call_type}' is not a valid call type")
 
         def test_func_expect_error(call_type, should_error):
+            def eager_test_func():
+                with torch.compiler.set_stance("force_eager"):
+                    return test_func(call_type)
+
             self.check_nondeterministic_alert(
-                lambda: test_func(call_type),
+                eager_test_func,
                 'median CUDA with indices output',
                 should_error)
 
