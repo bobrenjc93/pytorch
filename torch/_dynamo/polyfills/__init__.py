@@ -564,25 +564,28 @@ def cmp_eq(a: object, b: object) -> bool:
     # slow in some corner cases.
     # if a is b:
     #     return True
-    # Rich comparison dispatch goes through the runtime type, not a direct
-    # attribute lookup on the instance. That matters for class objects because
-    # `cls.__eq__` can resolve the class's instance method instead of the
-    # metaclass comparison slot.
-    result = type(a).__eq__(a, b)
-    if result is NotImplemented:
-        result = type(b).__eq__(b, a)
+    if isinstance(a, type) or isinstance(b, type):
+        # Class objects must dispatch through the runtime type.
+        result = type(a).__eq__(a, b)
+        if result is NotImplemented:
+            result = type(b).__eq__(b, a)
+    else:
+        result = a.__eq__(b)
+        if result is NotImplemented:
+            result = b.__eq__(a)
     return result is not NotImplemented and result
 
 
 def cmp_ne(a: object, b: object) -> bool:
+    use_type_dispatch = isinstance(a, type) or isinstance(b, type)
     # Check if __ne__ is overridden
     if isinstance(type(a).__ne__, types.FunctionType):
-        result = type(a).__ne__(a, b)
+        result = type(a).__ne__(a, b) if use_type_dispatch else a.__ne__(b)
         if result is not NotImplemented:
             return result
         # Fall through to try b.__ne__(a) or cmp_eq
     if isinstance(type(b).__ne__, types.FunctionType):
-        result = type(b).__ne__(b, a)
+        result = type(b).__ne__(b, a) if use_type_dispatch else b.__ne__(a)
         if result is not NotImplemented:
             return result
     return not cmp_eq(a, b)

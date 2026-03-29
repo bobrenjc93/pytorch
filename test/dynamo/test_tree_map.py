@@ -635,6 +635,8 @@ class TreeMapCompileTests(TestCase):
             python_pytree._deregister_pytree_node(RegisteredContainer)
 
     def test_registered_custom_type_multiple_trees_with_eq(self) -> None:
+        """Dataclass registrations compare class objects through the metaclass."""
+
         @dataclass
         class RegisteredContainer:
             x: torch.Tensor
@@ -658,8 +660,8 @@ class TreeMapCompileTests(TestCase):
             result = compiled(lhs, rhs)
 
             self.assertIsInstance(result, RegisteredContainer)
-            self.assertTrue(torch.allclose(result.x, expected.x))
-            self.assertTrue(torch.allclose(result.y, expected.y))
+            self.assertEqual(result.x, expected.x)
+            self.assertEqual(result.y, expected.y)
         finally:
             python_pytree._deregister_pytree_node(RegisteredContainer)
 
