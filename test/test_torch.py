@@ -1825,11 +1825,11 @@ class TestTorchDeviceType(TestCase):
     def test_nondeterministic_alert_histc(self, device, dtype):
         a = torch.tensor([], device=device, dtype=dtype)
         for op_call in [torch.histc, torch.Tensor.histc]:
-            # This check is about eager deterministic alerts, so bypass the
-            # compiled test harness around the op itself.
+            # This check is about eager deterministic alerts, so graph break
+            # around the op itself when the test harness is compile-wrapped.
+            @torch.compiler.disable
             def eager_histc_call():
-                with torch.compiler.set_stance("force_eager"):
-                    return op_call(a, min=0, max=3)
+                return op_call(a, min=0, max=3)
 
             self.check_nondeterministic_alert(
                 eager_histc_call,
@@ -1966,9 +1966,9 @@ class TestTorchDeviceType(TestCase):
                 self.fail(f"'{call_type}' is not a valid call type")
 
         def test_func_expect_error(call_type, should_error):
+            @torch.compiler.disable
             def eager_test_func():
-                with torch.compiler.set_stance("force_eager"):
-                    return test_func(call_type)
+                return test_func(call_type)
 
             self.check_nondeterministic_alert(
                 eager_test_func,
