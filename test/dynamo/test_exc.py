@@ -47,6 +47,20 @@ class ExcTests(LoggingTestCase):
         self.assertEqual(err.message, "bad input")
         self.assertEqual(str(err), "bad input")
 
+    @torch._dynamo.config.patch(suppress_errors=True)
+    def test_runtime_error_fake_tensor_soft_fail_preserves_user_handler(self):
+        def fn():
+            result = torch.zeros(1, 4, 4)
+            source = torch.ones(1, 4, 4)
+            index = torch.ones(5, dtype=torch.long)
+            try:
+                result.index_add_(-1, index, source)
+            except RuntimeError:
+                return "caught"
+            return "missed"
+
+        self.assertEqual(torch.compile(fn, backend="eager")(), "caught")
+
     def test_unsupported_real_stack(self):
         # exercise Unsupported constructor and augment_exc_message
         def fn002(x):

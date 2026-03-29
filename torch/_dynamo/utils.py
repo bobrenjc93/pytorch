@@ -3925,6 +3925,20 @@ def _get_fake_value_impl(
                 from_exc=cause,
             )
         msg = get_concrete_sizes_from_symints(str(e), fake_mode)
+        if (
+            config.suppress_errors
+            and not tx.one_graph
+            and not tx.error_on_graph_break
+        ):
+            # In soft-fail mode, preserve eager exception behavior by graph
+            # breaking instead of surfacing a compile-time TorchRuntimeError.
+            unimplemented(
+                gb_type="RuntimeError when making fake tensor call",
+                context="",
+                explanation=msg,
+                hints=[*graph_break_hints.USER_ERROR],
+                from_exc=cause,
+            )
         _wrap_graph_break_with_torch_runtime_err(
             lambda: unimplemented(
                 gb_type="RuntimeError when making fake tensor call",
