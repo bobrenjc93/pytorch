@@ -403,6 +403,31 @@ class TestTransformers(NNTestCase):
         finally:
             torch.backends.mha.set_fastpath_enabled(previous_fastpath)
 
+    def test_multiheadattention_batch_first_slowpath_output_is_contiguous(self, device):
+        previous_fastpath = torch.backends.mha.get_fastpath_enabled()
+        try:
+            torch.backends.mha.set_fastpath_enabled(False)
+            batch_size = 4
+            seq_len = 32
+            embed_dim = 256
+            num_heads = 8
+
+            mha = nn.MultiheadAttention(
+                embed_dim, num_heads, batch_first=True, device=device
+            ).eval()
+            x = torch.randn(batch_size, seq_len, embed_dim, device=device)
+
+            with torch.no_grad():
+                attn_output, _ = mha(x, x, x, need_weights=False)
+
+            self.assertTrue(attn_output.is_contiguous())
+            self.assertEqual(
+                attn_output.view(batch_size * seq_len, embed_dim).shape,
+                (batch_size * seq_len, embed_dim),
+            )
+        finally:
+            torch.backends.mha.set_fastpath_enabled(previous_fastpath)
+
     @parametrize("nhead", [1, 4, 8])
     def test_transformerencoderlayer_src_mask(self, device, nhead):
         batch_size = 2

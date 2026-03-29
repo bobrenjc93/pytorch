@@ -1511,7 +1511,7 @@ class MultiheadAttention(Module):
                 is_causal=is_causal,
             )
         if self.batch_first and is_batched:
-            return attn_output.transpose(1, 0), attn_output_weights
+            return attn_output.transpose(1, 0).contiguous(), attn_output_weights
         else:
             return attn_output, attn_output_weights
 
