@@ -8423,6 +8423,9 @@ tensor([[[1.+1.j, 1.+1.j, 1.+1.j,  ..., 1.+1.j, 1.+1.j, 1.+1.j],
         x = torch.tensor([])
         self.assertEqual(list(x), [])
 
+    @skipIfTorchDynamo(
+        "Variable.new NumPy scalar inputs are not preserved across graph breaks"
+    )
     def test_new(self) -> None:
         x = torch.autograd.Variable(torch.tensor([]))
         y = torch.autograd.Variable(torch.randn(4, 4))
