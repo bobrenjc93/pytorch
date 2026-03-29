@@ -1822,6 +1822,7 @@ class TestTorchDeviceType(TestCase):
     @dtypes(torch.float32)
     @dtypesIfCUDA(torch.float32, torch.int32)
     @skipIfMPS
+    @skipIfTorchInductor("warning is not surfaced as UserWarning when warn_only=True")
     def test_nondeterministic_alert_histc(self, device, dtype):
         a = torch.tensor([], device=device, dtype=dtype)
         for op_call in [torch.histc, torch.Tensor.histc]:
@@ -6852,6 +6853,7 @@ class TestTorch(TestCase):
                     added = zeros.index_add(0, torch.arange(0, size[0], dtype=idx_dtype, device=device), tensor, alpha=-1)
                     self.assertEqual(added, -tensor)
 
+    @unittest.mock.patch.object(torch._dynamo.config, "suppress_errors", False)
     @set_default_dtype(torch.double)
     def test_index_add_correctness(self):
         # Check whether index_add can get correct result when

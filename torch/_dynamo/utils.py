@@ -3925,11 +3925,7 @@ def _get_fake_value_impl(
                 from_exc=cause,
             )
         msg = get_concrete_sizes_from_symints(str(e), fake_mode)
-        if (
-            config.suppress_errors
-            and not tx.one_graph
-            and not tx.error_on_graph_break
-        ):
+        if config.suppress_errors and not tx.one_graph and not tx.error_on_graph_break:
             # In soft-fail mode, preserve eager exception behavior by graph
             # breaking instead of surfacing a compile-time TorchRuntimeError.
             unimplemented(
