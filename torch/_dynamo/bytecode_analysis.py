@@ -44,6 +44,7 @@ if sys.version_info >= (3, 13):
     TERMINAL_OPCODES.add(dis.opmap["JUMP_BACKWARD_NO_INTERRUPT"])
 JUMP_OPCODES = set(dis.hasjrel + dis.hasjabs)
 JUMP_OPNAMES = {dis.opname[opcode] for opcode in JUMP_OPCODES}
+HASNAME = set(dis.hasname)
 HASLOCAL = set(dis.haslocal)
 HASFREE = set(dis.hasfree)
 
@@ -163,6 +164,11 @@ def livevars_analysis(
     instructions: list["Instruction"], instruction: "Instruction"
 ) -> set[Any]:
     indexof = get_indexof(instructions)
+    all_locals = {
+        inst.argval
+        for inst in instructions
+        if inst.opcode in HASLOCAL and inst.argval is not None
+    }
     must = ReadsWrites(set(), set(), set())
     may = ReadsWrites(set(), set(), set())
 
@@ -173,6 +179,16 @@ def livevars_analysis(
 
         for i in range(start, len(instructions)):
             inst = instructions[i]
+            # `locals()` is currently handled by graph-breaking and resuming in
+            # Python. Once the resumed frame can inspect locals through the
+            # frame mapping, every in-scope local becomes observable even if it
+            # is never accessed via a direct LOAD_FAST in the remaining bytecode.
+            if (
+                inst.opcode in HASNAME
+                and "LOAD" in inst.opname
+                and inst.argval == "locals"
+            ):
+                state.reads.update(all_locals)
             if inst.opcode in HASLOCAL or inst.opcode in HASFREE:
                 if "LOAD" in inst.opname or "DELETE" in inst.opname:
                     if inst.argval not in must.writes:
