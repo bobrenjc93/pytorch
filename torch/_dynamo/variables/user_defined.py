@@ -1413,7 +1413,7 @@ class UserDefinedObjectVariable(UserDefinedVariable):
                     context=f"torch.Generator.{name}",
                     explanation=f"torch.Generator.{name}() is a stateful RNG "
                     "operation that cannot be soundly traced in the FX graph.",
-                    hints=[*graph_break_hints.SUPPORTABLE],
+                    hints=[*graph_break_hints.FUNDAMENTAL],
                 )
 
             # check for methods implemented in C++
