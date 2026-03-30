@@ -1402,28 +1402,19 @@ class UserDefinedObjectVariable(UserDefinedVariable):
                     ],
                 )
 
-            # torch.Generator methods are C descriptors, so direct method calls
-            # need an explicit bridge back into trace_rules, but only for the
-            # stateful generator methods that we intentionally graph break on.
+            # torch.Generator methods like manual_seed(), get_state(), etc.
+            # are stateful RNG operations that cannot be soundly traced.
             if (
                 isinstance(self.value, torch._C.Generator)
                 and name in trace_rules._GENERATOR_METHODS_THAT_GRAPH_BREAK
-                and (
-                    isinstance(
-                        method,
-                        (
-                            types.MethodDescriptorType,
-                            types.WrapperDescriptorType,
-                            types.MethodWrapperType,
-                        ),
-                    )
-                    or torch._C._dynamo.utils.is_instancemethod(method)  # type: ignore[attr-defined]
-                )
             ):
-                source = AttrSource(self.source, name) if self.source else None
-                return VariableTracker.build(
-                    tx, getattr(self.value, name), source
-                ).call_function(tx, args, kwargs)
+                unimplemented(
+                    gb_type="torch.Generator method",
+                    context=f"torch.Generator.{name}",
+                    explanation=f"torch.Generator.{name}() is a stateful RNG "
+                    "operation that cannot be soundly traced in the FX graph.",
+                    hints=[*graph_break_hints.SUPPORTABLE],
+                )
 
             # check for methods implemented in C++
             if isinstance(method, types.FunctionType):
