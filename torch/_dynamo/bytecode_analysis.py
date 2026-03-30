@@ -44,9 +44,10 @@ if sys.version_info >= (3, 13):
     TERMINAL_OPCODES.add(dis.opmap["JUMP_BACKWARD_NO_INTERRUPT"])
 JUMP_OPCODES = set(dis.hasjrel + dis.hasjabs)
 JUMP_OPNAMES = {dis.opname[opcode] for opcode in JUMP_OPCODES}
-HASNAME = set(dis.hasname)
 HASLOCAL = set(dis.haslocal)
 HASFREE = set(dis.hasfree)
+FRAME_LOCALS_READ_BUILTINS = frozenset({"locals", "vars"})
+FRAME_LOCALS_READ_LOAD_OPNAMES = frozenset({"LOAD_GLOBAL", "LOAD_NAME"})
 
 stack_effect = dis.stack_effect
 
@@ -160,6 +161,41 @@ class ReadsWrites:
     visited: set[Any]
 
 
+def _instruction_reads_frame_locals(
+    instructions: list["Instruction"], index: int
+) -> bool:
+    inst = instructions[index]
+
+    if (
+        inst.opname in FRAME_LOCALS_READ_LOAD_OPNAMES
+        and inst.argval in FRAME_LOCALS_READ_BUILTINS
+    ):
+        return True
+
+    if inst.opname not in ("CALL", "CALL_FUNCTION"):
+        return False
+
+    nargs = inst.arg if inst.arg is not None else inst.argval
+    if nargs != 0:
+        return False
+
+    callee_index = index - 1
+    if callee_index < 0:
+        return False
+
+    callee = instructions[callee_index]
+    if callee.opname == "PRECALL":
+        callee_index -= 1
+        if callee_index < 0:
+            return False
+        callee = instructions[callee_index]
+
+    return (
+        callee.opname in FRAME_LOCALS_READ_LOAD_OPNAMES
+        and callee.argval in FRAME_LOCALS_READ_BUILTINS
+    )
+
+
 def livevars_analysis(
     instructions: list["Instruction"], instruction: "Instruction"
 ) -> set[Any]:
@@ -179,15 +215,12 @@ def livevars_analysis(
 
         for i in range(start, len(instructions)):
             inst = instructions[i]
-            # `locals()` is currently handled by graph-breaking and resuming in
-            # Python. Once the resumed frame can inspect locals through the
-            # frame mapping, every in-scope local becomes observable even if it
-            # is never accessed via a direct LOAD_FAST in the remaining bytecode.
-            if (
-                inst.opcode in HASNAME
-                and "LOAD" in inst.opname
-                and inst.argval == "locals"
-            ):
+            # `locals()` and `vars()` with no arguments are currently handled by
+            # graph-breaking and resuming in Python. Once the resumed frame can
+            # inspect locals through the frame mapping, every in-scope local
+            # becomes observable even if it is never accessed via a direct
+            # LOAD_FAST in the remaining bytecode.
+            if _instruction_reads_frame_locals(instructions, i):
                 state.reads.update(all_locals)
             if inst.opcode in HASLOCAL or inst.opcode in HASFREE:
                 if "LOAD" in inst.opname or "DELETE" in inst.opname:
