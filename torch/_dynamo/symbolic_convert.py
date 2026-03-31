@@ -238,6 +238,64 @@ def _import_module(name: str) -> types.ModuleType:
     return importlib.import_module(name)
 
 
+def _frame_locals_read_call_setup_items(
+    stack: list[VariableTracker], inst: Instruction
+) -> int | None:
+    if inst.opname not in ("CALL", "CALL_FUNCTION"):
+        return None
+
+    nargs = inst.arg if inst.arg is not None else inst.argval
+    if nargs != 0 or not stack:
+        return None
+
+    tos = stack[-1]
+    if isinstance(tos, BuiltinVariable) and tos.fn in (locals, vars):
+        return 2 if len(stack) >= 2 and isinstance(stack[-2], NullVariable) else 1
+
+    if (
+        isinstance(tos, NullVariable)
+        and len(stack) >= 2
+        and isinstance(stack[-2], BuiltinVariable)
+        and stack[-2].fn in (locals, vars)
+    ):
+        return 2
+
+    return None
+
+
+def _codegen_frame_locals_read_result(
+    cg: PyCodegen,
+    meta: StackLocalsMetadata,
+    call_setup_items: int,
+) -> list[Instruction]:
+    local_names = tuple(
+        name for name, _ in sorted(meta.locals_names.items(), key=lambda item: item[1])
+    )
+    remaining_stack_items = meta.num_stack - call_setup_items
+    output = [
+        *[create_instruction("POP_TOP") for _ in range(call_setup_items)],
+        *create_copy(remaining_stack_items + 1),
+        cg.create_load_const(0),
+        cg.create_binary_subscr(),
+    ]
+    if local_names:
+        output.extend(
+            [
+                create_instruction("UNPACK_SEQUENCE", arg=len(local_names)),
+                cg.create_load_const(local_names),
+                create_instruction("BUILD_CONST_KEY_MAP", arg=len(local_names)),
+            ]
+        )
+    else:
+        output.extend(
+            [
+                create_instruction("POP_TOP"),
+                create_instruction("BUILD_MAP", arg=0),
+            ]
+        )
+    return output
+
+
 @dataclasses.dataclass
 class SpeculationEntry:
     filename: str
@@ -959,6 +1017,9 @@ def break_graph_if_unsupported(
             inst: Instruction,
             reason: GraphCompileReason,
         ) -> None:
+            frame_locals_read_call_setup_items = _frame_locals_read_call_setup_items(
+                self.stack, inst
+            )
             if (
                 sys.version_info >= (3, 11)
                 and sys.version_info < (3, 12)
@@ -981,7 +1042,18 @@ def break_graph_if_unsupported(
             self.output.add_output_instructions(cg.get_instructions())
             del cg
 
-            if sys.version_info >= (3, 11) and inst.opname == "CALL":
+            if frame_locals_read_call_setup_items is not None:
+                # Graph-breaking `locals()`/`vars()` executes before a resume
+                # function exists, so synthesize the zero-arg result from the
+                # saved frame snapshot instead of consulting stale fast locals.
+                self.output.add_output_instructions(
+                    _codegen_frame_locals_read_result(
+                        PyCodegen(self.output.root_tx),
+                        all_stack_locals_metadata[0],
+                        frame_locals_read_call_setup_items,
+                    )
+                )
+            elif sys.version_info >= (3, 11) and inst.opname == "CALL":
                 kw_names = (
                     self.kw_names.as_python_constant()
                     if self.kw_names is not None
