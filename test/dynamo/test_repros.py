@@ -2010,7 +2010,7 @@ class ReproTests(torch._dynamo.test_case.TestCase):
         self.assertFalse(y.requires_grad)
         self.assertFalse(z.requires_grad)
 
-    def test_locals_after_graph_break_resume_preserves_locals(self):
+    def test_locals_traced_correctly_under_compile(self):
         def fn(x):
             if x.dim() > 2:
                 batch_size, seq_len, hidden_dim = x.shape
@@ -2026,7 +2026,7 @@ class ReproTests(torch._dynamo.test_case.TestCase):
         opt_fn = torch.compile(fn, backend="eager")
         self.assertTrue(same(fn(x), opt_fn(x)))
 
-    def test_vars_after_graph_break_resume_preserves_locals(self):
+    def test_vars_traced_correctly_under_compile(self):
         def fn(x):
             if x.dim() > 2:
                 batch_size, seq_len, hidden_dim = x.shape
