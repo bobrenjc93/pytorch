@@ -47,6 +47,7 @@ JUMP_OPNAMES = {dis.opname[opcode] for opcode in JUMP_OPCODES}
 HASLOCAL = set(dis.haslocal)
 HASFREE = set(dis.hasfree)
 FRAME_LOCALS_READ_BUILTINS = frozenset({"locals", "vars"})
+FRAME_LOCALS_READ_CALL_SETUP_OPNAMES = frozenset({"PRECALL", "PUSH_NULL"})
 FRAME_LOCALS_READ_LOAD_OPNAMES = frozenset({"LOAD_GLOBAL", "LOAD_NAME"})
 
 stack_effect = dis.stack_effect
@@ -180,16 +181,15 @@ def _instruction_reads_frame_locals(
         return False
 
     callee_index = index - 1
+    while (
+        callee_index >= 0
+        and instructions[callee_index].opname in FRAME_LOCALS_READ_CALL_SETUP_OPNAMES
+    ):
+        callee_index -= 1
     if callee_index < 0:
         return False
 
     callee = instructions[callee_index]
-    if callee.opname == "PRECALL":
-        callee_index -= 1
-        if callee_index < 0:
-            return False
-        callee = instructions[callee_index]
-
     return (
         callee.opname in FRAME_LOCALS_READ_LOAD_OPNAMES
         and callee.argval in FRAME_LOCALS_READ_BUILTINS
@@ -200,6 +200,7 @@ def livevars_analysis(
     instructions: list["Instruction"], instruction: "Instruction"
 ) -> set[Any]:
     indexof = get_indexof(instructions)
+    start = indexof[instruction]
     all_locals = {
         inst.argval
         for inst in instructions
@@ -207,6 +208,16 @@ def livevars_analysis(
     }
     must = ReadsWrites(set(), set(), set())
     may = ReadsWrites(set(), set(), set())
+
+    if (
+        start > 0
+        and instructions[start - 1].opname in ("CALL", "CALL_FUNCTION")
+        and _instruction_reads_frame_locals(instructions, start - 1)
+    ):
+        # A resume function starts after the graph-broken zero-arg locals()/vars()
+        # call has already executed in Python, so keep every live frame local
+        # available for that boundary even though the CALL is no longer ahead.
+        must.reads.update(all_locals)
 
     def walk(state: ReadsWrites, start: int) -> None:
         if start in state.visited:
@@ -241,7 +252,7 @@ def livevars_analysis(
             if inst.opcode in TERMINAL_OPCODES:
                 return
 
-    walk(must, indexof[instruction])
+    walk(must, start)
     return must.reads | may.reads
 
 
