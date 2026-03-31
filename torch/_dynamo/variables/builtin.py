@@ -1283,23 +1283,26 @@ class BuiltinVariable(BaseBuiltinVariable):
         self, tx: "InstructionTranslator", *args: VariableTracker
     ) -> VariableTracker:
         if len(args) != 0:
-            unimplemented(
-                gb_type="unimplemented builtin op locals() with arguments",
-                context=f"locals: {self} {args}",
-                explanation=f"Dynamo does not know how to trace builtin operator {self.fn} with arguments",
-                hints=[*graph_break_hints.SUPPORTABLE],
-            )
+            raise_observed_exception(TypeError, tx)
         return self._call_frame_locals_snapshot(tx)
 
     @staticmethod
     def _call_frame_locals_snapshot(tx: "InstructionTranslator") -> VariableTracker:
         frame_local_names = set(tx.f_code.co_varnames) | set(tx.cell_and_freevars())
+        cell_and_freevars = set(tx.cell_and_freevars())
+        frame_locals = {}
+        for name, value in tx.symbolic_locals.items():
+            if name not in frame_local_names:
+                continue
+            if name in cell_and_freevars:
+                value = tx.output.side_effects.load_cell(value)
+            if type.__instancecheck__(variables.NullVariable, value) or isinstance(
+                value, variables.DeletedVariable
+            ):
+                continue
+            frame_locals[ConstantVariable.create(name)] = value
         return ConstDictVariable(
-            {
-                ConstantVariable.create(name): value
-                for name, value in tx.symbolic_locals.items()
-                if name in frame_local_names
-            },
+            frame_locals,
             dict,
             mutation_type=ValueMutationNew(),
         )
