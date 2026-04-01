@@ -169,29 +169,52 @@ def livevars_analysis(
     may = ReadsWrites(set(), set(), set())
     implicit_locals = set() if implicit_locals is None else implicit_locals
 
-    def reads_all_locals(inst_idx: int) -> bool:
+    def is_locals_builtin(inst_idx: int) -> bool:
         inst = instructions[inst_idx]
-        if inst.opname not in ("LOAD_GLOBAL", "LOAD_NAME") or inst.argval not in (
+        return inst.opname in ("LOAD_GLOBAL", "LOAD_NAME") and inst.argval in (
             "locals",
             "vars",
-        ):
+        )
+
+    def reads_all_locals(inst_idx: int) -> bool:
+        inst = instructions[inst_idx]
+        if is_locals_builtin(inst_idx):
+            if inst_idx + 1 >= len(instructions):
+                return False
+
+            next_inst = instructions[inst_idx + 1]
+            if next_inst.opname in ("CALL", "CALL_FUNCTION"):
+                return next_inst.arg == 0
+
+            if next_inst.opname == "PRECALL" and next_inst.arg == 0:
+                return (
+                    inst_idx + 2 < len(instructions)
+                    and instructions[inst_idx + 2].opname == "CALL"
+                    and instructions[inst_idx + 2].arg == 0
+                )
+
             return False
 
-        if inst_idx + 1 >= len(instructions):
-            return False
-
-        next_inst = instructions[inst_idx + 1]
-        if next_inst.opname in ("CALL", "CALL_FUNCTION"):
-            return next_inst.arg == 0
-
-        if next_inst.opname == "PRECALL" and next_inst.arg == 0:
+        if inst.opname == "PRECALL" and inst.arg == 0:
             return (
-                inst_idx + 2 < len(instructions)
-                and instructions[inst_idx + 2].opname == "CALL"
-                and instructions[inst_idx + 2].arg == 0
+                inst_idx + 1 < len(instructions)
+                and instructions[inst_idx + 1].opname == "CALL"
+                and instructions[inst_idx + 1].arg == 0
+                and inst_idx > 0
+                and is_locals_builtin(inst_idx - 1)
             )
 
-        return False
+        if inst.opname not in ("CALL", "CALL_FUNCTION") or inst.arg != 0:
+            return False
+
+        prev_idx = inst_idx - 1
+        if prev_idx < 0:
+            return False
+
+        if instructions[prev_idx].opname == "PRECALL" and instructions[prev_idx].arg == 0:
+            prev_idx -= 1
+
+        return prev_idx >= 0 and is_locals_builtin(prev_idx)
 
     def walk(state: ReadsWrites, start: int) -> None:
         if start in state.visited:
