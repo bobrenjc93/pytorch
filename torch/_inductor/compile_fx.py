@@ -780,6 +780,7 @@ class _CompileFxCallable(Protocol):
         self,
         gm: GraphModule,
         example_inputs: Sequence[InputType],
+        compile_region_name: str | None = None,
         **kwargs: Unpack[_CompileFxKwargs],
     ) -> OutputCode: ...
 
@@ -787,6 +788,7 @@ class _CompileFxCallable(Protocol):
 def compile_fx_inner(
     gm: GraphModule,
     example_inputs: Sequence[InputType],
+    compile_region_name: str | None = None,
     **kwargs: Unpack[_CompileFxKwargs],
 ) -> OutputCode:
     kwargs.setdefault("cudagraphs", None)
@@ -826,6 +828,7 @@ def compile_fx_inner(
         return wrap_compiler_debug(_compile_fx_inner, compiler_name="inductor")(
             gm,
             example_inputs,
+            compile_region_name=compile_region_name,
             **kwargs,
         )
 
@@ -834,6 +837,7 @@ def compile_fx_inner(
 def _compile_fx_inner(
     gm: GraphModule,
     example_inputs: Sequence[InputType],
+    compile_region_name: str | None = None,
     **graph_kwargs: Unpack[_CompileFxKwargs],
 ) -> OutputCode:
     """
@@ -892,6 +896,7 @@ def _compile_fx_inner(
         save_args_for_compile_fx_inner(
             gm,
             example_inputs,
+            compile_region_name=compile_region_name,
             **graph_kwargs,
         )
 
@@ -1797,7 +1802,9 @@ def fx_codegen_and_compile(
         )
         # pyrefly: ignore [unbound-name]
         scheme = _AsyncFxCompile(scheme)
-        scheme._compile.compile_region_name = compile_region_name  # pyrefly: ignore[attr-defined]
+        scheme._compile.compile_region_name = (
+            compile_region_name  # pyrefly: ignore[attr-defined]
+        )
 
     if fx_compile_progressive:
         from .compile_fx_async import _ProgressiveFxCompile
@@ -1816,9 +1823,11 @@ def fx_codegen_and_compile(
 
         # pyrefly: ignore [unbound-name]
         scheme = _ProgressiveFxCompile(fast_scheme, scheme, progression_configs)
-        scheme._optimized_compile.compile_region_name = compile_region_name  # pyrefly: ignore[attr-defined]
+        scheme._optimized_compile.compile_region_name = (
+            compile_region_name  # pyrefly: ignore[attr-defined]
+        )
 
-    scheme.compile_region_name = compile_region_name
+    scheme.compile_region_name = compile_region_name  # pyrefly: ignore[unbound-name]
 
     # pyrefly: ignore [unbound-name]
     return scheme.codegen_and_compile(gm, example_inputs, inputs_to_check, graph_kwargs)
@@ -2660,6 +2669,12 @@ def compile_fx(
                 ignore_shape_env=ignore_shape_env,
                 compile_region_name=compile_region_name,
             )
+
+    # Keep region names out of graph_kwargs so they don't perturb FX cache keys.
+    inner_compile = functools.partial(
+        inner_compile,
+        compile_region_name=compile_region_name,
+    )
 
     # Wake up the AsyncCompile subproc pool as early as possible (if there's cuda).
     if any(
