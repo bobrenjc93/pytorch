@@ -41,10 +41,10 @@ if TYPE_CHECKING:
         operation as TritonIROperation,
     )
 
-    from torch._guards import Source
     from torch._dynamo.symbolic_convert import InstructionTranslator
     from torch._dynamo.variables.constant import ConstantVariable
     from torch._dynamo.variables.functions import TritonKernelVariable
+    from torch._guards import Source
     from torch._inductor.dependencies import ReadWrites
     from torch._subclasses.functional_tensor import BaseFunctionalizeAPI
     from torch.fx.proxy import Proxy
