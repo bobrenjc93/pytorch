@@ -988,7 +988,11 @@ def _compile_fx_inner(
             TritonBundler.begin_compile()
             try:
                 mb_compiled_graph = fx_codegen_and_compile(
-                    gm, example_inputs, inputs_to_check, **graph_kwargs
+                    gm,
+                    example_inputs,
+                    inputs_to_check,
+                    compile_region_name=compile_region_name,
+                    **graph_kwargs,
                 )
                 assert mb_compiled_graph is not None
                 (
@@ -1020,7 +1024,11 @@ def _compile_fx_inner(
             )
             try:
                 mb_compiled_graph = fx_codegen_and_compile(
-                    gm, example_inputs, inputs_to_check, **graph_kwargs
+                    gm,
+                    example_inputs,
+                    inputs_to_check,
+                    compile_region_name=compile_region_name,
+                    **graph_kwargs,
                 )
             except Exception as e:
                 raise InductorError(e, currentframe()).with_traceback(
@@ -1035,7 +1043,11 @@ def _compile_fx_inner(
             TritonBundler.begin_compile()
             try:
                 mb_compiled_graph = fx_codegen_and_compile(
-                    gm, example_inputs, inputs_to_check, **graph_kwargs
+                    gm,
+                    example_inputs,
+                    inputs_to_check,
+                    compile_region_name=compile_region_name,
+                    **graph_kwargs,
                 )
                 assert mb_compiled_graph is not None
                 mb_compiled_graph._time_taken_ns = time.time_ns() - start_time
@@ -1080,6 +1092,8 @@ def _compile_fx_inner(
 
         assert mb_compiled_graph is not None
         compiled_graph = mb_compiled_graph
+        if isinstance(compiled_graph, CompiledFxGraph):
+            compiled_graph.compile_region_name = compile_region_name
 
         # Logging and observability: we log a single chromium event
         # and a tlparse log for every cache action.
@@ -1194,6 +1208,7 @@ class FxCompile(ABC):
 
     # Some stats for logging/debugging
     _compile_stats: dict[type[FxCompile], _FxCompileStat] = defaultdict(_FxCompileStat)
+    compile_region_name: str | None = None
 
     # TODO: We should probably eventually add some kind of async version of this
     # so we can kick off a compile and then go do other things - but we'll need
@@ -1739,6 +1754,7 @@ class _InProcessFxCompile(FxCompile):
                         cudagraphs,
                         example_inputs,
                         static_input_idxs,
+                        self.compile_region_name,
                         graph_kwargs,
                         inputs_to_check,
                         runnable_graph_str,
@@ -1755,6 +1771,7 @@ def fx_codegen_and_compile(
     # This is derivable from the other inputs to this function, but we pass it
     # in explicitly because it's nontrivial to compute
     inputs_to_check: Sequence[int],
+    compile_region_name: str | None = None,
     **graph_kwargs: Unpack[_CompileFxKwargs],
 ) -> OutputCode:
     scheme: FxCompile
@@ -1780,6 +1797,7 @@ def fx_codegen_and_compile(
         )
         # pyrefly: ignore [unbound-name]
         scheme = _AsyncFxCompile(scheme)
+        scheme._compile.compile_region_name = compile_region_name  # pyrefly: ignore[attr-defined]
 
     if fx_compile_progressive:
         from .compile_fx_async import _ProgressiveFxCompile
@@ -1794,9 +1812,13 @@ def fx_codegen_and_compile(
 
         # Use in-process compile for the fast version
         fast_scheme = _InProcessFxCompile()
+        fast_scheme.compile_region_name = compile_region_name
 
         # pyrefly: ignore [unbound-name]
         scheme = _ProgressiveFxCompile(fast_scheme, scheme, progression_configs)
+        scheme._optimized_compile.compile_region_name = compile_region_name  # pyrefly: ignore[attr-defined]
+
+    scheme.compile_region_name = compile_region_name
 
     # pyrefly: ignore [unbound-name]
     return scheme.codegen_and_compile(gm, example_inputs, inputs_to_check, graph_kwargs)
@@ -2598,6 +2620,7 @@ def compile_fx(
     config_patches: dict[str, Any] | None = None,
     decompositions: dict[OpOverload, Callable[..., Any]] | None = None,
     ignore_shape_env: bool = False,
+    compile_region_name: str | None = None,
 ) -> CompileFxOutput:
     """
     Main entry point for compiling given FX graph.  Despite the fact that this
@@ -2635,6 +2658,7 @@ def compile_fx(
                 inner_compile=config.patch(config_patches)(inner_compile),
                 decompositions=decompositions,
                 ignore_shape_env=ignore_shape_env,
+                compile_region_name=compile_region_name,
             )
 
     # Wake up the AsyncCompile subproc pool as early as possible (if there's cuda).
