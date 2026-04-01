@@ -291,6 +291,7 @@ class SideEffects:
         if self.is_reconstructing_generator():
             # This is missing the case where one mutates a tensor. See
             # test_generator.py::test_reconstruct_generator_tensor_mutation
+            self.maybe_log_tracked_side_effects_on_error()
             unimplemented(
                 gb_type="Generator reconstruction with mutations",
                 context=f"mutating object: {item}",
@@ -304,6 +305,7 @@ class SideEffects:
             )
         assert item.mutation_type is not None
         if not is_side_effect_safe(item.mutation_type):
+            self.maybe_log_tracked_side_effects_on_error()
             unimplemented(
                 gb_type="HOP: Unsafe side effect",
                 context=f"Attempted to mutate {item}",
@@ -1025,6 +1027,43 @@ class SideEffects:
 
         return log_str
 
+    def _emit_side_effect_messages(self, side_effect_messages: list[str]) -> None:
+        if not side_effect_messages:
+            return
+
+        for msg in side_effect_messages:
+            side_effects_log.debug(msg)
+
+        torch._logging.trace_structured(
+            "artifact",
+            metadata_fn=lambda: {
+                "name": "dynamo_side_effects",
+                "encoding": "string",
+            },
+            payload_fn=lambda: "\n\n========================================\n\n".join(
+                side_effect_messages
+            ),
+        )
+
+    def log_tracked_side_effects(self) -> None:
+        if config.side_effect_replay_policy == "silent":
+            return
+
+        self._emit_side_effect_messages(
+            [self._format_side_effect_message(var) for var in self._get_modified_vars()]
+        )
+
+    def maybe_log_tracked_side_effects_on_error(self) -> None:
+        output_graph = self.output_graph_weakref()
+        if output_graph is None:
+            return
+
+        if (
+            output_graph.current_tx.one_graph
+            or output_graph.current_tx.error_on_graph_break
+        ):
+            self.log_tracked_side_effects()
+
     def codegen_update_mutated(
         self, cg: PyCodegen, log_side_effects: bool = False
     ) -> None:
@@ -1035,8 +1074,6 @@ class SideEffects:
             if config.side_effect_replay_policy != "silent" and log_side_effects:
                 msg = self._format_side_effect_message(var)
                 side_effect_messages.append(msg)
-                # Log individual side effects for granular debugging
-                side_effects_log.debug(msg)
 
         suffixes = []
         for var in self._get_modified_vars():
@@ -1399,17 +1436,7 @@ class SideEffects:
 
         # Send batched structured trace for all side effects in this compilation
         if log_side_effects and side_effect_messages:
-            combined_msg = "\n\n========================================\n\n".join(
-                side_effect_messages
-            )
-            torch._logging.trace_structured(
-                "artifact",
-                metadata_fn=lambda: {
-                    "name": "dynamo_side_effects",
-                    "encoding": "string",
-                },
-                payload_fn=lambda: combined_msg,
-            )
+            self._emit_side_effect_messages(side_effect_messages)
 
     def log_side_effects_summary(self) -> None:
         if config.side_effect_replay_policy == "silent":
