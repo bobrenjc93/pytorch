@@ -1245,7 +1245,11 @@ class InstructionTranslatorBase(
             if k in self.cell_and_freevars()
         }
         # Only keep the locals that must remain on the stack.
-        reads = livevars_analysis(self.instructions, self.current_instruction)
+        reads = livevars_analysis(
+            self.instructions,
+            self.current_instruction,
+            set(self.symbolic_locals),
+        )
         self.symbolic_locals = {
             k: v for k, v in self.symbolic_locals.items() if k in reads
         }
@@ -2964,7 +2968,11 @@ class InstructionTranslatorBase(
         # There should not be any pruning in the other frames since
         # the current instruction there should be a CALL.
         if is_leaf:
-            reads = livevars_analysis(self.instructions, resume_inst)
+            reads = livevars_analysis(
+                self.instructions,
+                resume_inst,
+                set(self.symbolic_locals),
+            )
             all_argnames = tuple(
                 k
                 for k in self.symbolic_locals
