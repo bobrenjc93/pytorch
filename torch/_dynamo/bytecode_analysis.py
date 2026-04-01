@@ -159,6 +159,58 @@ class ReadsWrites:
     visited: set[Any]
 
 
+def _is_locals_builtin_load(instructions: list["Instruction"], inst_idx: int) -> bool:
+    inst = instructions[inst_idx]
+    return inst.opname in ("LOAD_GLOBAL", "LOAD_NAME") and inst.argval in (
+        "locals",
+        "vars",
+    )
+
+
+def inst_reads_all_locals(instructions: list["Instruction"], inst_idx: int) -> bool:
+    inst = instructions[inst_idx]
+    if _is_locals_builtin_load(instructions, inst_idx):
+        if inst_idx + 1 >= len(instructions):
+            return False
+
+        next_inst = instructions[inst_idx + 1]
+        if next_inst.opname in ("CALL", "CALL_FUNCTION"):
+            return next_inst.arg == 0
+
+        if next_inst.opname == "PRECALL" and next_inst.arg == 0:
+            return (
+                inst_idx + 2 < len(instructions)
+                and instructions[inst_idx + 2].opname == "CALL"
+                and instructions[inst_idx + 2].arg == 0
+            )
+
+        return False
+
+    if inst.opname == "PRECALL" and inst.arg == 0:
+        return (
+            inst_idx + 1 < len(instructions)
+            and instructions[inst_idx + 1].opname == "CALL"
+            and instructions[inst_idx + 1].arg == 0
+            and inst_idx > 0
+            and _is_locals_builtin_load(instructions, inst_idx - 1)
+        )
+
+    if inst.opname not in ("CALL", "CALL_FUNCTION") or inst.arg != 0:
+        return False
+
+    prev_idx = inst_idx - 1
+    if prev_idx < 0:
+        return False
+
+    if (
+        instructions[prev_idx].opname == "PRECALL"
+        and instructions[prev_idx].arg == 0
+    ):
+        prev_idx -= 1
+
+    return prev_idx >= 0 and _is_locals_builtin_load(instructions, prev_idx)
+
+
 def livevars_analysis(
     instructions: list["Instruction"],
     instruction: "Instruction",
@@ -169,53 +221,6 @@ def livevars_analysis(
     may = ReadsWrites(set(), set(), set())
     implicit_locals = set() if implicit_locals is None else implicit_locals
 
-    def is_locals_builtin(inst_idx: int) -> bool:
-        inst = instructions[inst_idx]
-        return inst.opname in ("LOAD_GLOBAL", "LOAD_NAME") and inst.argval in (
-            "locals",
-            "vars",
-        )
-
-    def reads_all_locals(inst_idx: int) -> bool:
-        inst = instructions[inst_idx]
-        if is_locals_builtin(inst_idx):
-            if inst_idx + 1 >= len(instructions):
-                return False
-
-            next_inst = instructions[inst_idx + 1]
-            if next_inst.opname in ("CALL", "CALL_FUNCTION"):
-                return next_inst.arg == 0
-
-            if next_inst.opname == "PRECALL" and next_inst.arg == 0:
-                return (
-                    inst_idx + 2 < len(instructions)
-                    and instructions[inst_idx + 2].opname == "CALL"
-                    and instructions[inst_idx + 2].arg == 0
-                )
-
-            return False
-
-        if inst.opname == "PRECALL" and inst.arg == 0:
-            return (
-                inst_idx + 1 < len(instructions)
-                and instructions[inst_idx + 1].opname == "CALL"
-                and instructions[inst_idx + 1].arg == 0
-                and inst_idx > 0
-                and is_locals_builtin(inst_idx - 1)
-            )
-
-        if inst.opname not in ("CALL", "CALL_FUNCTION") or inst.arg != 0:
-            return False
-
-        prev_idx = inst_idx - 1
-        if prev_idx < 0:
-            return False
-
-        if instructions[prev_idx].opname == "PRECALL" and instructions[prev_idx].arg == 0:
-            prev_idx -= 1
-
-        return prev_idx >= 0 and is_locals_builtin(prev_idx)
-
     def walk(state: ReadsWrites, start: int) -> None:
         if start in state.visited:
             return
@@ -223,7 +228,7 @@ def livevars_analysis(
 
         for i in range(start, len(instructions)):
             inst = instructions[i]
-            if implicit_locals and reads_all_locals(i):
+            if implicit_locals and inst_reads_all_locals(instructions, i):
                 # locals()/vars() with no args can observe every currently live local.
                 state.reads.update(implicit_locals - must.writes)
             if inst.opcode in HASLOCAL or inst.opcode in HASFREE:
