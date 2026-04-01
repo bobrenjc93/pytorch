@@ -89,7 +89,10 @@ class InductorCompiledCallable:
     """
 
     def __init__(
-        self, compiled_callable, original_gm=None, compile_region_name: str | None = None
+        self,
+        compiled_callable,
+        original_gm=None,
+        compile_region_name: str | None = None,
     ):
         self.idx = next(_inductor_compiled_callable_id)
         self.compiled_callable = compiled_callable
@@ -495,6 +498,7 @@ Please make sure the checkpointed region does not contain in-place ops (e.g. tor
     # checkpoint's recompute_fn captures the function in a closure. A bound method
     # reference would keep the Interpreter alive, whose env dict retains the output
     # tensors and prevents the autograd graph from being freed.
+
     def run_with_interpreter(*args):
         return Interpreter(gmod).run(*args)
 
