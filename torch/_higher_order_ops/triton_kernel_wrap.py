@@ -1867,7 +1867,7 @@ class TritonHOPifier:
 
     @staticmethod
     def get_kernel_source(
-        variable: Union["TritonKernelVariable", "TraceableTritonKernelWrapper"],
+        variable: "TritonKernelVariable | TraceableTritonKernelWrapper",
     ) -> "Source | None":
         kernel_source = getattr(variable, "kernel_source", None)
         if kernel_source is None:
@@ -1876,12 +1876,12 @@ class TritonHOPifier:
 
     def recreate_variable(
         self,
-        variable: Union["TritonKernelVariable", "TraceableTritonKernelWrapper"],
+        variable: "TritonKernelVariable | TraceableTritonKernelWrapper",
         *,
         kernel: "TritonKernelType",
         kernel_idx: int | None,
-        grid: Optional["TritonGridType"],
-    ) -> Union["TritonKernelVariable", "TraceableTritonKernelWrapper"]:
+        grid: "TritonGridType | None",
+    ) -> "TritonKernelVariable | TraceableTritonKernelWrapper":
         return type(variable)(
             kernel=kernel,
             kernel_idx=kernel_idx,
