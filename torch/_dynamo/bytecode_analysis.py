@@ -202,10 +202,7 @@ def inst_reads_all_locals(instructions: list["Instruction"], inst_idx: int) -> b
     if prev_idx < 0:
         return False
 
-    if (
-        instructions[prev_idx].opname == "PRECALL"
-        and instructions[prev_idx].arg == 0
-    ):
+    if instructions[prev_idx].opname == "PRECALL" and instructions[prev_idx].arg == 0:
         prev_idx -= 1
 
     return prev_idx >= 0 and _is_locals_builtin_load(instructions, prev_idx)
