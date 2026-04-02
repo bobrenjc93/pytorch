@@ -141,6 +141,20 @@ def _decompose_scatter_functional_helper(
     )
 
 
+def _clone_scatter_input(
+    graph: torch.fx.Graph, inp: torch.fx.Node
+) -> torch.fx.Node:
+    if torch._debug_has_internal_overlap(inp.meta["val"]) == 1:
+        # Match clone_preserve_strides(), which materializes overlapping inputs.
+        return graph_call_function(
+            graph,
+            aten.clone.default,
+            inp,
+            memory_format=torch.contiguous_format,
+        )
+    return graph_call_function(graph, aten.clone, inp)
+
+
 def _decompose_scatter_functional(
     graph: torch.fx.Graph, node: torch.fx.Node
 ) -> torch.fx.Node:
@@ -178,7 +192,7 @@ def _decompose_scatter_mutating(
     assert not node.kwargs
 
     if node.target is _generalized_scatter:
-        inp = graph_call_function(graph, aten.clone, inp)
+        inp = _clone_scatter_input(graph, inp)
 
     tmp = inp
     for view in view_ops:  # type: ignore[union-attr]

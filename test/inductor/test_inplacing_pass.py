@@ -441,6 +441,46 @@ class TestReinplacingPassCorrectness(InductorTestCase):
         result = torch.compile(fn, fullgraph=True, backend="inductor")(x)
         self.assertEqual(result, expected)
 
+    def test_generalized_scatter_overlapping_base(self):
+        from torch._inductor.fx_passes.reinplace import (
+            _decompose_scatter_mutating,
+            _generalized_scatter,
+            ViewOp,
+        )
+        from torch._inductor.virtualized import V
+        from torch._subclasses.fake_tensor import FakeTensorMode
+
+        fake_mode = FakeTensorMode()
+        graph = torch.fx.Graph()
+
+        with fake_mode:
+            base = torch.ones(1).expand(2, 2)
+            src = torch.arange(2.0)
+            expected = torch.diagonal_scatter(base, src)
+
+        self.assertEqual(torch._debug_has_internal_overlap(base), 1)
+
+        inp = graph.placeholder("inp")
+        inp.meta["val"] = base
+        src_node = graph.placeholder("src")
+        src_node.meta["val"] = src
+        scatter = graph.call_function(
+            _generalized_scatter,
+            args=(inp, src_node, [ViewOp(aten.diagonal.default, (), {})]),
+        )
+        scatter.meta["val"] = expected
+
+        with V.set_fake_mode(fake_mode):
+            _decompose_scatter_mutating(graph, scatter)
+
+        clone_nodes = list(
+            graph.find_nodes(op="call_function", target=aten.clone.default)
+        )
+        self.assertEqual(len(clone_nodes), 1)
+        self.assertEqual(
+            clone_nodes[0].kwargs["memory_format"], torch.contiguous_format
+        )
+
     @parametrize(
         "factory_op",
         [
