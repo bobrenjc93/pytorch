@@ -1116,10 +1116,12 @@ class ExceptionTests(torch._dynamo.test_case.TestCase):
         class Custom:
             pass
 
+        attr_name = "__weakref__"
+
         def fn(x, obj):
             try:
                 if use_builtin:
-                    setattr(obj, "__weakref__", None)
+                    setattr(obj, attr_name, None)
                 else:
                     obj.__weakref__ = None
             except AttributeError:

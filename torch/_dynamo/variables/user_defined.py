@@ -129,6 +129,18 @@ def is_standard_delattr(val: object) -> bool:
     return val in (object.__delattr__, BaseException.__delattr__)
 
 
+PY_TPFLAGS_HEAPTYPE = 1 << 9
+
+
+def is_heap_type_getset_descriptor(descriptor: object) -> bool:
+    owner = getattr(descriptor, "__objclass__", None)
+    return (
+        inspect.isgetsetdescriptor(descriptor)
+        and isinstance(owner, type)
+        and bool(getattr(owner, "__flags__", 0) & PY_TPFLAGS_HEAPTYPE)
+    )
+
+
 def is_forbidden_context_manager(ctx: object) -> bool:
     f_ctxs: list[Any] = []
 
@@ -1666,9 +1678,13 @@ class UserDefinedObjectVariable(UserDefinedVariable):
                 )
                 return fset_var.call_function(tx, [self, value], {})
 
-            # C-level descriptor setters can raise immediately in eager mode.
-            # Deferring them until side-effect replay changes try/except behavior,
-            # so fall back to a graph break until Dynamo can trace them directly.
+            # Heap-type getset descriptors like __weakref__ and __dict__ are
+            # part of CPython's instance layout and can raise immediately in
+            # eager mode. Deferring them until side-effect replay changes
+            # try/except behavior, so fall back to a graph break until Dynamo
+            # can trace them directly. Static C-extension descriptors keep the
+            # prior deferred behavior to avoid regressing existing cases like
+            # autograd Function context mutation.
             setter = (
                 inspect.getattr_static(type(descriptor), "__set__", None)
                 if descriptor is not None
@@ -1677,7 +1693,7 @@ class UserDefinedObjectVariable(UserDefinedVariable):
             if (
                 setter is not None
                 and not inspect.isfunction(setter)
-                and not inspect.ismemberdescriptor(descriptor)
+                and is_heap_type_getset_descriptor(descriptor)
             ):
                 unimplemented(
                     gb_type="C-level data descriptor setattr on user-defined object",
@@ -2797,7 +2813,9 @@ class UserDefinedExceptionObjectVariable(UserDefinedObjectVariable):
                 "__cause__", "__context__", "__suppress_context__", "__traceback__"
             )
         ):
-            return self.exc_vt.call_setattr(tx, args[0], args[1])
+            self.exc_vt.call_setattr(tx, args[0], args[1])
+            # Fall through so the deferred STORE_ATTR replay still mutates the
+            # real exception object after execution.
         elif name == "with_traceback":
             return self.exc_vt.call_method(tx, name, args, kwargs)
         return super().call_method(tx, name, args, kwargs)
