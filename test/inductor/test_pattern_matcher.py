@@ -572,9 +572,9 @@ class TestPatternMatcher(TestCase):
             global_amax = torch.amax(x)
             dim_amin = torch.amin(x, [1], True)
             global_amin = torch.min(x)
-            return x / (dim_amax + 1e-8) * global_amax + (
-                x - dim_amin
-            ) / (torch.abs(global_amin) + 1e-8)
+            return x / (dim_amax + 1e-8) * global_amax + (x - dim_amin) / (
+                torch.abs(global_amin) + 1e-8
+            )
 
         x = torch.randn(2, 64, 32, 32, device=GPU_TYPE)
 
