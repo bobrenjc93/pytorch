@@ -566,6 +566,23 @@ class TestPatternMatcher(TestCase):
         self.assertEqual(compiled_fn(x), test_fn(x))
         self.assertEqual(counters["inductor"]["partial_reduction_reuse"], 1)
 
+    def test_unsuccessful_partial_reuse_with_multiple_reduction_families(self):
+        def test_fn(x):
+            dim_amax = torch.amax(x, [2, 3], True)
+            global_amax = torch.amax(x)
+            dim_amin = torch.amin(x, [1], True)
+            global_amin = torch.min(x)
+            return x / (dim_amax + 1e-8) * global_amax + (
+                x - dim_amin
+            ) / (torch.abs(global_amin) + 1e-8)
+
+        x = torch.randn(2, 64, 32, 32, device=GPU_TYPE)
+
+        compiled_fn = torch.compile(test_fn)
+
+        self.assertEqual(compiled_fn(x), test_fn(x))
+        self.assertEqual(counters["inductor"]["partial_reduction_reuse"], 0)
+
     def test_addmm(self):
         def fn(a, b, c):
             return torch.add(a, torch.mm(b, c)), torch.mm(b, c) + a

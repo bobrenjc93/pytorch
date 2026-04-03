@@ -1644,6 +1644,9 @@ def register_partial_reduction_pattern():
         aten.amax.default: aten.max.default,
         aten.amin.default: aten.min.default,
     }
+    supported_reduction_ops = OrderedSet(
+        [aten.amax.default, aten.max.default, aten.amin.default, aten.min.default]
+    )
 
     # TODO: to support other reductions like sum, would need to skip
     # lower precision reductions since partial output would need to be kept at fp32.
@@ -1664,6 +1667,20 @@ def register_partial_reduction_pattern():
 
             # if they're small, reuse not worth it
             if not statically_known_true(input.meta["val"].numel() >= 4096):
+                return True
+            # Only rewrite isolated partial/full pairs. Overlapping supported
+            # max/min reductions on the same source can produce incorrect reuse.
+            if (
+                len(
+                    OrderedSet(
+                        user
+                        for user in input.users
+                        if user.op == "call_function"
+                        and user.target in supported_reduction_ops
+                    )
+                )
+                > 2
+            ):
                 return True
 
             def replacement(inp: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
