@@ -100,6 +100,7 @@ class TestWrapInductorCompiledRegions(torch._dynamo.test_case.TestCase):
         self.assertEqual(result, expected)
 
     @requires_cuda_and_triton
+    @functorch_config.patch(enable_autograd_cache=False)
     def test_wrap_name_visible_in_debug_mode(self):
         """Test that named compiled regions surface their name in DebugMode"""
 
