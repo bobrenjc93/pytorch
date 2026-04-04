@@ -67,15 +67,31 @@ def _generic_ctx_mgr_stack_source_attribution() -> str:
 
 
 def _assert_failure_stack_source_attribution() -> str:
-    caret = (
-        "                   ^^^^^^^^^^^^^^^\n" if sys.version_info >= (3, 11) else ""
-    )
+    if sys.version_info >= (3, 14):
+        caret = "                      ^^^^^^^^^^^^^^^\n"
+    elif sys.version_info >= (3, 11):
+        caret = "                   ^^^^^^^^^^^^^^^\n"
+    else:
+        caret = ""
     return (
         "Stack variable source attribution:\n"
         "  WithExitFunctionVariable() originated from:\n"
         '  File "test_error_messages.py", line N\n'
         "                with GenericCtxMgr():\n"
         f"{caret}"
+    )
+
+
+def _graph_break_in_loop_stack_source_attribution() -> str:
+    if sys.version_info >= (3, 11):
+        return ""
+
+    return (
+        "Stack variable source attribution:\n"
+        "  RangeIteratorVariable() originated from:\n"
+        '  File "test_error_messages.py", line N\n'
+        "                for i in range(2):\n"
+        "\n"
     )
 
 
@@ -1101,8 +1117,7 @@ from user code:
 
         fn(torch.ones(3))
         self.assertEqual(len(records), 1)
-        self.assertExpectedInline(
-            munge_exc(records[0].getMessage(), suppress_suffix=True, skip=0),
+        expected = (
             """\
 Graph break in user code at test_error_messages.py:N
 Graph Break Reason: Failed to handle graph break gracefully. Skipping the function and falling back to eager. Graph break encountered:
@@ -1125,12 +1140,19 @@ graph break in loop
 
  For more details about this graph break, please visit: https://meta-pytorch.github.io/compile-graph-break-site/gb/gb7000.html
 
+"""
+            + _graph_break_in_loop_stack_source_attribution()
+            + """\
 User code traceback:
   File "test_error_messages.py", line N, in test_graph_break_in_loop
     fn(torch.ones(3))
   File "test_error_messages.py", line N, in fn
     torch._dynamo.graph_break()
-""",
+"""
+        )
+        self.assertExpectedInline(
+            munge_exc(records[0].getMessage(), suppress_suffix=True, skip=0),
+            expected,
         )
 
         @torch.compile(backend="eager")
@@ -1144,8 +1166,7 @@ User code traceback:
 
         gn(torch.ones(3))
         self.assertEqual(len(records), 2)
-        self.assertExpectedInline(
-            munge_exc(records[1].getMessage(), suppress_suffix=True, skip=0),
+        expected = (
             """\
 Graph break in user code at test_error_messages.py:N
 Graph Break Reason: Failed to handle graph break gracefully. Skipping the function and falling back to eager. Graph break encountered:
@@ -1175,12 +1196,19 @@ graph break in loop
 
  For more details about this graph break, please visit: https://meta-pytorch.github.io/compile-graph-break-site/gb/gb7000.html
 
+"""
+            + _graph_break_in_loop_stack_source_attribution()
+            + """\
 User code traceback:
   File "test_error_messages.py", line N, in test_graph_break_in_loop
     gn(torch.ones(3))
   File "test_error_messages.py", line N, in gn
     if x.sum() > 0:
-""",
+"""
+        )
+        self.assertExpectedInline(
+            munge_exc(records[1].getMessage(), suppress_suffix=True, skip=0),
+            expected,
         )
 
     @make_logging_test(graph_breaks=True)
