@@ -6,7 +6,7 @@ import inspect
 from typing import Any, TYPE_CHECKING
 
 from ..utils import is_function_or_wrapper
-from .base import VariableTracker, VariableTrackerMeta
+from .base import SourceLocation, VariableTracker, VariableTrackerMeta
 
 
 if TYPE_CHECKING:
@@ -25,6 +25,7 @@ class LazyCache:
         self.value = value
         self.source = source
         self.name_hint: str | None = None
+        self.source_loc: SourceLocation | None = None
         self.vt: VariableTracker | None = None
 
     def realize(self) -> None:
@@ -47,9 +48,13 @@ class LazyCache:
         if self.name_hint is not None:
             self.vt.set_name_hint(self.name_hint)
 
+        if self.source_loc is not None and self.vt.source_loc is None:
+            self.vt.set_source_loc(self.source_loc)
+
         del self.value
         del self.source
         del self.name_hint
+        del self.source_loc
 
 
 class LazyVariableTracker(VariableTracker, metaclass=VariableTrackerMeta):
@@ -136,6 +141,13 @@ class LazyVariableTracker(VariableTracker, metaclass=VariableTrackerMeta):
             self._cache.vt.set_name_hint(name)  # type: ignore[union-attr]
         else:
             self._cache.name_hint = name
+
+    def set_source_loc(self, source_loc: SourceLocation) -> None:
+        self.source_loc = source_loc
+        if self.is_realized():
+            self._cache.vt.set_source_loc(source_loc)  # type: ignore[union-attr]
+        else:
+            self._cache.source_loc = source_loc
 
     def __str__(self) -> str:
         variable_info = "LazyVariableTracker("

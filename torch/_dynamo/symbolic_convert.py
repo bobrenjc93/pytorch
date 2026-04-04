@@ -141,7 +141,7 @@ from .utils import (
     LazyString,
     proxy_args_kwargs,
 )
-from .variables.base import typestr, ValueMutationNew, VariableTracker
+from .variables.base import SourceLocation, typestr, ValueMutationNew, VariableTracker
 from .variables.builder import FrameStateSizeEntry, VariableBuilder, wrap_fx_proxy
 from .variables.builtin import BuiltinVariable, DictBuiltinVariable
 from .variables.constant import ConstantVariable
@@ -1886,6 +1886,25 @@ class InstructionTranslatorBase(
         assert isinstance(val, VariableTracker), (
             f"push expects VariableTracker, got {typestr(val)}"
         )
+        if val.source_loc is None:
+            inst = self.current_instruction
+            if inst.positions is not None and inst.positions.lineno is not None:
+                val.set_source_loc(
+                    SourceLocation(
+                        filename=self.f_code.co_filename,
+                        lineno=inst.positions.lineno,
+                        end_lineno=inst.positions.end_lineno,
+                        col_offset=inst.positions.col_offset,
+                        end_col_offset=inst.positions.end_col_offset,
+                    )
+                )
+            elif inst.starts_line is not None:
+                val.set_source_loc(
+                    SourceLocation(
+                        filename=self.f_code.co_filename,
+                        lineno=inst.starts_line,
+                    )
+                )
         self.stack.append(val)
 
     def push_many(self, vals: list[VariableTracker]) -> None:
@@ -4602,6 +4621,24 @@ class InstructionTranslatorBase(
         frame_loc_chain_list.append(frame_loc)
         return tuple(frame_loc_chain_list)
 
+    def _format_stack_source_attribution(self) -> str:
+        """Format bytecode source locations for stack values involved in a graph break."""
+        seen: set[tuple[str, int, int | None, int | None]] = set()
+        parts = []
+        for vt in self.stack:
+            loc = vt.source_loc
+            if loc is None:
+                continue
+            key = (loc.filename, loc.lineno, loc.col_offset, loc.end_col_offset)
+            if key in seen:
+                continue
+            seen.add(key)
+            parts.append(f"  {vt!r} originated from:\n{loc.format()}")
+
+        if not parts:
+            return ""
+        return "\nStack variable source attribution:\n" + "\n".join(parts)
+
     def log_graph_break(
         self,
         code_options: dict[str, Any],
@@ -4651,9 +4688,11 @@ class InstructionTranslatorBase(
         if exc is not None:
             reason = augment_exc_message_with_hop_name(exc, reason)
 
+        stack_source_attribution = self._format_stack_source_attribution()
         user_stack_trace = (
             f"Graph break in user code at {frame_loc[0]}:{frame_loc[1]}\n"
             f"Graph Break Reason: {reason}\n"
+            f"{stack_source_attribution}"
             "\nUser code traceback:\n"
         )
 
