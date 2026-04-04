@@ -132,10 +132,11 @@ def is_standard_delattr(val: object) -> bool:
 PY_TPFLAGS_HEAPTYPE = 1 << 9
 
 
-def is_heap_type_getset_descriptor(descriptor: object) -> bool:
+def is_opaque_heap_type_getset_descriptor(descriptor: object) -> bool:
     owner = getattr(descriptor, "__objclass__", None)
     return (
         inspect.isgetsetdescriptor(descriptor)
+        and getattr(descriptor, "__name__", None) != "__dict__"
         and isinstance(owner, type)
         and bool(getattr(owner, "__flags__", 0) & PY_TPFLAGS_HEAPTYPE)
     )
@@ -1678,12 +1679,14 @@ class UserDefinedObjectVariable(UserDefinedVariable):
                 )
                 return fset_var.call_function(tx, [self, value], {})
 
-            # Heap-type getset descriptors like __weakref__ and __dict__ are
-            # part of CPython's instance layout and can raise immediately in
-            # eager mode. Deferring them until side-effect replay changes
-            # try/except behavior, so fall back to a graph break until Dynamo
-            # can trace them directly. Static C-extension descriptors keep the
-            # prior deferred behavior to avoid regressing existing cases like
+            # Heap-type getset descriptors like __weakref__ are part of
+            # CPython's instance layout and can raise immediately in eager
+            # mode. Deferring them until side-effect replay changes try/except
+            # behavior, so fall back to a graph break until Dynamo can trace
+            # them directly. Keep __dict__ writes on the old path: they are
+            # writable and relied on by code such as functools.partial
+            # __setstate__. Static C-extension descriptors keep the prior
+            # deferred behavior to avoid regressing existing cases like
             # autograd Function context mutation.
             setter = (
                 inspect.getattr_static(type(descriptor), "__set__", None)
@@ -1693,7 +1696,7 @@ class UserDefinedObjectVariable(UserDefinedVariable):
             if (
                 setter is not None
                 and not inspect.isfunction(setter)
-                and is_heap_type_getset_descriptor(descriptor)
+                and is_opaque_heap_type_getset_descriptor(descriptor)
             ):
                 unimplemented(
                     gb_type="C-level data descriptor setattr on user-defined object",
