@@ -933,6 +933,11 @@ Data-dependent assertion failed (cannot compile partial graph)
 
  For more details about this graph break, please visit: https://meta-pytorch.github.io/compile-graph-break-site/gb/gb0034.html
 
+Stack variable source attribution:
+  WithExitFunctionVariable() originated from:
+  File "test_error_messages.py", line N
+                with GenericCtxMgr():
+
 User code traceback:
   File "test_error_messages.py", line N, in test_assert_failure_in_generic_ctx_mgr
     torch.compile(fn, backend="eager")(torch.randn(3))

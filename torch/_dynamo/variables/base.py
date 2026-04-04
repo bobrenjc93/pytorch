@@ -60,8 +60,9 @@ class SourceLocation:
     def format(self) -> str:
         line = linecache.getline(self.filename, self.lineno).rstrip()
         result = f'  File "{self.filename}", line {self.lineno}\n'
-        result += f"    {line}\n"
-        if self.col_offset is not None and self.end_col_offset is not None:
+        if line:
+            result += f"    {line}\n"
+        if line and self.col_offset is not None and self.end_col_offset is not None:
             num_carets = max(1, self.end_col_offset - self.col_offset)
             result += "    " + " " * self.col_offset + "^" * num_carets + "\n"
         return result

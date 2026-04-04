@@ -4623,21 +4623,20 @@ class InstructionTranslatorBase(
 
     def _format_stack_source_attribution(self) -> str:
         """Format bytecode source locations for stack values involved in a graph break."""
-        seen: set[tuple[str, int, int | None, int | None]] = set()
-        parts = []
+        seen: set[SourceLocation] = set()
+        parts: list[str] = []
         for vt in self.stack:
             loc = vt.source_loc
             if loc is None:
                 continue
-            key = (loc.filename, loc.lineno, loc.col_offset, loc.end_col_offset)
-            if key in seen:
+            if loc in seen:
                 continue
-            seen.add(key)
-            parts.append(f"  {vt!r} originated from:\n{loc.format()}")
+            seen.add(loc)
+            parts.append(f"  {vt!r} originated from:\n{loc.format().rstrip()}")
 
         if not parts:
             return ""
-        return "\nStack variable source attribution:\n" + "\n".join(parts)
+        return "Stack variable source attribution:\n" + "\n".join(parts)
 
     def log_graph_break(
         self,
@@ -4689,12 +4688,14 @@ class InstructionTranslatorBase(
             reason = augment_exc_message_with_hop_name(exc, reason)
 
         stack_source_attribution = self._format_stack_source_attribution()
-        user_stack_trace = (
-            f"Graph break in user code at {frame_loc[0]}:{frame_loc[1]}\n"
-            f"Graph Break Reason: {reason}\n"
-            f"{stack_source_attribution}"
-            "\nUser code traceback:\n"
-        )
+        user_stack_trace_parts = [
+            f"Graph break in user code at {frame_loc[0]}:{frame_loc[1]}",
+            f"Graph Break Reason: {reason}",
+        ]
+        if stack_source_attribution:
+            user_stack_trace_parts.extend(["", stack_source_attribution])
+        user_stack_trace_parts.extend(["", "User code traceback:"])
+        user_stack_trace = "\n".join(user_stack_trace_parts) + "\n"
 
         if config.verbose:
             user_stack_trace += (

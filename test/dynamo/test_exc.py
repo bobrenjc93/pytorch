@@ -1,7 +1,7 @@
 # Owner(s): ["module: dynamo"]
 
-import sys
 import unittest
+from typing import cast
 
 import torch
 import torch._dynamo
@@ -181,6 +181,11 @@ missing BUILD_SET handler
   Developer debug context:
 
  For more details about this graph break, please visit: https://meta-pytorch.github.io/compile-graph-break-site/gb/gb0200.html
+
+Stack variable source attribution:
+  ConstantVariable(int: 1) originated from:
+  File "test_exc.py", line N
+                return {1, 2}
 
 User code traceback:
   File "test_exc.py", line N, in test_unsupported_error
@@ -421,7 +426,6 @@ Failed Source Expressions:
         self.assertIn(f'File "{__file__}", line 1', result)
         self.assertNotIn("^", result)
 
-    @unittest.skipIf(sys.version_info < (3, 11), "positions only available in 3.11+")
     def test_source_location_format_with_col_info(self):
         loc = SourceLocation(
             filename=__file__,
@@ -433,6 +437,17 @@ Failed Source Expressions:
         result = loc.format()
         self.assertIn(f'File "{__file__}", line 1', result)
         self.assertIn("^" * 10, result)
+
+    def test_source_location_format_without_source_line(self):
+        loc = SourceLocation(
+            filename="<string>",
+            lineno=1,
+            end_lineno=1,
+            col_offset=0,
+            end_col_offset=10,
+        )
+        result = loc.format()
+        self.assertEqual(result, '  File "<string>", line 1\n')
 
     def test_vt_source_loc_set_during_tracing(self):
         _source_loc_capture.clear()
@@ -446,7 +461,7 @@ Failed Source Expressions:
 
         loc = _source_loc_capture.get("source_loc")
         self.assertIsNotNone(loc)
-        assert loc is not None
+        loc = cast(SourceLocation, loc)
         self.assertEqual(loc.filename, __file__.replace(".pyc", ".py"))
         self.assertIsNotNone(loc.lineno)
 
