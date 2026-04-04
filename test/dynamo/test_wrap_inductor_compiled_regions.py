@@ -950,6 +950,7 @@ class TestWrapInductorCompiledRegions(torch._dynamo.test_case.TestCase):
         self.assertEqual(y.grad, y_eager.grad)
 
     @requires_cuda_and_triton
+    @functorch_config.patch(enable_autograd_cache=False)
     def test_sac_outer_compile_inner_name_visible_to_policy(self):
         """Test that SAC policies can inspect torch.compile region names"""
 
