@@ -1,9 +1,11 @@
 # Owner(s): ["module: dynamo"]
+# flake8: noqa: B001,B006,B020,B021,B950,C405,C416,E711,E721,E722,E731,F401,F403,F405,F541,F821,F823
 # ruff: noqa: F403,F405,F841
 try:
     from .dynamo_test_common import *
 except ImportError:
     from dynamo_test_common import *
+
 
 class MiscTestsPyTree(torch._inductor.test_case.TestCase):
     @parametrize_pytree_module
@@ -324,6 +326,7 @@ class MiscTestsPyTree(torch._inductor.test_case.TestCase):
 
         inp = torch.ones(3)
         self.assertEqual(fn(inp, Foo()), inp + 1)
+
 
 instantiate_parametrized_tests(MiscTestsPyTree)
 if __name__ == "__main__":

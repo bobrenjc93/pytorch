@@ -1,9 +1,11 @@
 # Owner(s): ["module: dynamo"]
+# flake8: noqa: B001,B006,B020,B021,B950,C405,C416,E711,E721,E722,E731,F401,F403,F405,F541,F821,F823
 # ruff: noqa: B006,E731,F401,F403,F405,F823,F841,PIE804,RSE102,TRY002,UP004,UP008,UP028
 try:
     from .dynamo_test_common import *
 except ImportError:
     from dynamo_test_common import *
+
 
 class UserDefinedObjectTests(torch._inductor.test_case.TestCase):
     def test_module_not_callable(self):
@@ -3655,6 +3657,8 @@ not ___dict_contains('cccccccc', G['sys'].modules)""",
         x = torch.randn(3)
         f(x)
         self.assertEqual(counter.frame_count, 2)
+
+
 if __name__ == "__main__":
     from torch._dynamo.test_case import run_tests
 

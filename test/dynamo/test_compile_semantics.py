@@ -1,9 +1,13 @@
 # Owner(s): ["module: dynamo"]
+# flake8: noqa: B001,B006,B020,B021,B950,C405,C416,E711,E721,E722,E731,F401,F403,F405,F541,F821,F823
 # ruff: noqa: F403,F405,F841,PGH004
 try:
     from .dynamo_test_common import *
 except ImportError:
     from dynamo_test_common import *
+
+from torch._dynamo.eval_frame import _debug_get_cache_entry_list
+
 
 class CompileSemanticsTests(torch._inductor.test_case.TestCase):
     def test_get_cache_entry(self):
@@ -2224,6 +2228,8 @@ fn
         ret1 = fn()
         ret2 = compilefn()
         self.assertEqual(ret1, ret2)
+
+
 if __name__ == "__main__":
     from torch._dynamo.test_case import run_tests
 

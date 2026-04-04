@@ -1,9 +1,13 @@
 # Owner(s): ["module: dynamo"]
+# flake8: noqa: B001,B006,B020,B021,B950,C405,C416,E711,E721,E722,E731,F401,F403,F405,F541,F821,F823
 # ruff: noqa: B021,E711,E721,F403,F405,F841
 try:
     from .dynamo_test_common import *
 except ImportError:
     from dynamo_test_common import *
+
+from torch.fx.experimental.symbolic_shapes import _constrain_range_for_size
+
 
 class GuardTests(torch._inductor.test_case.TestCase):
     @torch._dynamo.config.patch(capture_scalar_outputs=True)
@@ -1657,6 +1661,7 @@ class GuardTests(torch._inductor.test_case.TestCase):
         args = list(range(2000))
         foo(*args)
 
+    @dataclasses.dataclass
     class CSETestCase:
         expr: str
         preface: typing.List[str] = dataclasses.field(default_factory=list)
@@ -2535,6 +2540,8 @@ ShapeEnv not equal: field values don't match:
 
         x = torch.ones(3)
         self.assertEqual(x + 1, f(x))
+
+
 if __name__ == "__main__":
     from torch._dynamo.test_case import run_tests
 

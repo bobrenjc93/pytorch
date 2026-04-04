@@ -1,9 +1,11 @@
 # Owner(s): ["module: dynamo"]
+# flake8: noqa: B001,B006,B020,B021,B950,C405,C416,E711,E721,E722,E731,F401,F403,F405,F541,F821,F823
 # ruff: noqa: F403,F405,F841
 try:
     from .dynamo_test_common import *
 except ImportError:
     from dynamo_test_common import *
+
 
 class TestCustomFunction(torch.testing._internal.common_utils.TestCase):
     def test_autograd_function_with_matmul_folding_at_output(self):
@@ -67,6 +69,8 @@ class TestCustomFunction(torch.testing._internal.common_utils.TestCase):
         y = torch.cos(x)
         opt_fn(x, y).sum().backward()
         self.assertTrue(y.grad is not None)
+
+
 if __name__ == "__main__":
     from torch._dynamo.test_case import run_tests
 

@@ -1,9 +1,11 @@
 # Owner(s): ["module: dynamo"]
+# flake8: noqa: B001,B006,B020,B021,B950,C405,C416,E711,E721,E722,E731,F401,F403,F405,F541,F821,F823
 # ruff: noqa: B020,F403,F405,F841,PLW0127
 try:
     from .dynamo_test_common import *
 except ImportError:
     from dynamo_test_common import *
+
 
 class MiscTestsDevice(torch._inductor.test_case.TestCase):
     def test_rand(self, device):
@@ -301,7 +303,8 @@ class MiscTestsDevice(torch._inductor.test_case.TestCase):
         foo.config.pad_val += 1.0
         result2 = foo.forward(inputs)
 
-devices = ('cuda', 'hpu', 'xpu')
+
+devices = ("cuda", "hpu", "xpu")
 instantiate_device_type_tests(
     MiscTestsDevice, globals(), only_for=devices, allow_xpu=True
 )

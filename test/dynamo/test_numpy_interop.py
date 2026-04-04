@@ -1,9 +1,11 @@
 # Owner(s): ["module: dynamo"]
+# flake8: noqa: B001,B006,B020,B021,B950,C405,C416,E711,E721,E722,E731,F401,F403,F405,F541,F821,F823
 # ruff: noqa: C416,F403,F405,F821,F841
 try:
     from .dynamo_test_common import *
 except ImportError:
     from dynamo_test_common import *
+
 
 class NumpyInteropTests(torch._inductor.test_case.TestCase):
     def test_numpy_int_constant(self):
@@ -645,6 +647,8 @@ class NumpyInteropTests(torch._inductor.test_case.TestCase):
                     "RuntimeError: broken backend" in metric.fail_reason,
                     "Should have logged fail reason",
                 )
+
+
 if __name__ == "__main__":
     from torch._dynamo.test_case import run_tests
 

@@ -1,9 +1,11 @@
 # Owner(s): ["module: dynamo"]
+# flake8: noqa: B001,B006,B020,B021,B950,C405,C416,E711,E721,E722,E731,F401,F403,F405,F541,F821,F823
 # ruff: noqa: F403,F405,F841,PERF102,PIE808,SIM118,UP008
 try:
     from .dynamo_test_common import *
 except ImportError:
     from dynamo_test_common import *
+
 
 class TensorSemanticsTests(torch._inductor.test_case.TestCase):
     def test_scalar_device_movement(self):
@@ -2809,6 +2811,8 @@ def forward(self, L_x_ : torch.Tensor):
         result = torch.compile(fn, fullgraph=True)(x.clone())
         self.assertEqual(ref, result)
         self.assertEqual(saved_ref, saved["grad"])
+
+
 if __name__ == "__main__":
     from torch._dynamo.test_case import run_tests
 

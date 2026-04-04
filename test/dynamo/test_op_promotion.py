@@ -1,9 +1,11 @@
 # Owner(s): ["module: dynamo"]
+# flake8: noqa: B001,B006,B020,B021,B950,C405,C416,E711,E721,E722,E731,F401,F403,F405,F541,F821,F823
 # ruff: noqa: F403,F405,F841
 try:
     from .dynamo_test_common import *
 except ImportError:
     from dynamo_test_common import *
+
 
 class DynamoOpPromotionTests(torch._dynamo.test_case.TestCase):
     @unittest.skipIf(not TEST_CUDA, "This test requires a CUDA device")
@@ -179,6 +181,8 @@ class DynamoOpPromotionTests(torch._dynamo.test_case.TestCase):
                 x
             )  # second time compile runs, we should also move the module to cpu device
             self.assertEqual(str(mod.fc.weight.device), "cpu")
+
+
 if __name__ == "__main__":
     from torch._dynamo.test_case import run_tests
 

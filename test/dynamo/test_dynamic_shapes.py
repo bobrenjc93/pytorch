@@ -33,10 +33,10 @@ except ImportError:
     import test_ctx_manager
     import test_export
     import test_functions
+    import test_guards
     import test_higher_order_ops
 
     import test_modules
-    import test_guards
     import test_numpy_interop
     import test_python_builtins
     import test_repros

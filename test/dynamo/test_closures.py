@@ -1,9 +1,11 @@
 # Owner(s): ["module: dynamo"]
+# flake8: noqa: B001,B006,B020,B021,B950,C405,C416,E711,E721,E722,E731,F401,F403,F405,F541,F821,F823
 # ruff: noqa: E722,F403,F405,F841
 try:
     from .dynamo_test_common import *
 except ImportError:
     from dynamo_test_common import *
+
 
 class ClosureTests(torch._inductor.test_case.TestCase):
     def test_closure_recompiles(self):
@@ -1232,6 +1234,8 @@ class ClosureTests(torch._inductor.test_case.TestCase):
         ones = torch.ones(4, requires_grad=True)
         fn(ones)
         nonlocal_fn()
+
+
 if __name__ == "__main__":
     from torch._dynamo.test_case import run_tests
 

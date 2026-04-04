@@ -1,9 +1,11 @@
 # Owner(s): ["module: dynamo"]
+# flake8: noqa: B001,B006,B020,B021,B950,C405,C416,E711,E721,E722,E731,F401,F403,F405,F541,F821,F823
 # ruff: noqa: C405,C416,F403,F405,F841,PLR0133,RUF015,SIM113,TRY203,UP032
 try:
     from .dynamo_test_common import *
 except ImportError:
     from dynamo_test_common import *
+
 
 class PythonBuiltinTests(torch._inductor.test_case.TestCase):
     def test_int_shape_binops(self):
@@ -1924,6 +1926,8 @@ class PythonBuiltinTests(torch._inductor.test_case.TestCase):
         ref = f(x)
         res = opt_f(x)
         self.assertEqual(ref, res)
+
+
 if __name__ == "__main__":
     from torch._dynamo.test_case import run_tests
 
