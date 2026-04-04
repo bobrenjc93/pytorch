@@ -2716,6 +2716,7 @@ def compile_fx(
                     ),
                     ignore_shape_env=ignore_shape_env,
                     get_decomp_fn=get_decomp_fn,
+                    compile_region_name=compile_region_name,
                 )
 
     return _maybe_wrap_and_compile_fx_main(
@@ -2724,6 +2725,7 @@ def compile_fx(
         inner_compile,
         ignore_shape_env,
         get_decomp_fn=get_decomp_fn,
+        compile_region_name=compile_region_name,
     )
 
 
@@ -2765,6 +2767,7 @@ def _maybe_wrap_and_compile_fx_main(
     ignore_shape_env: bool,
     *,
     get_decomp_fn: Callable[..., dict[Any, Callable[..., Any]]] = select_decomp_table,
+    compile_region_name: str | None = None,
 ) -> CompileFxOutput:
     """
     Part of compile_fx, called after patching configs.
@@ -2780,6 +2783,7 @@ def _maybe_wrap_and_compile_fx_main(
         inner_compile=inner_compile,
         ignore_shape_env=ignore_shape_env,
         get_decomp_fn=get_decomp_fn,
+        compile_region_name=compile_region_name,
     )
     if not graph_returns_tuple(model_):
         return make_graph_return_tuple(model_, example_inputs_, compile_gm)
@@ -2802,6 +2806,7 @@ def _maybe_wrap_and_compile_fx_main(
         inner_compile,
         ignore_shape_env,
         get_decomp_fn=get_decomp_fn,
+        compile_region_name=compile_region_name,
     )
 
 
@@ -2812,6 +2817,7 @@ def _compile_fx_main(
     ignore_shape_env: bool,
     *,
     get_decomp_fn: Callable[..., dict[Any, Callable[..., Any]]] = select_decomp_table,
+    compile_region_name: str | None = None,
 ) -> CompileFxOutput:
     """
     Main part of compile_fx, called after wrapping is done.
@@ -3004,6 +3010,7 @@ def _compile_fx_main(
                     boxed_forward_device_index=compiler_config_extra.forward_device,
                     ignore_shape_env=ignore_shape_env,
                     pre_grad_passes=run_pre_grad_passes,
+                    compile_region_name=compile_region_name,
                 )(model_, example_inputs_)
             except ShortenTraceback as e:
                 # We will also shorten the traceback inside dynamo.

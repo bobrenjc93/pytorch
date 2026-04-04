@@ -708,13 +708,20 @@ def normalize_placeholder_names(
 
 
 def create_fx_config(
-    cudagraphs: BoxedBool | None, boxed_forward_device_index: BoxedDeviceIndex | None
+    cudagraphs: BoxedBool | None,
+    boxed_forward_device_index: BoxedDeviceIndex | None,
+    compile_region_name: str | None = None,
 ) -> _CompileFxKwargs:
     if cudagraphs is None:
         cudagraphs = BoxedBool(torch._inductor.config.triton.cudagraphs)
+    # compile_region_name is not in _CompileFxKwargs (it conflicts with the
+    # explicit parameter in fx_codegen_and_compile's Unpack signature) but we
+    # carry it through fx_config so the AOTAutograd cache hit path can stamp
+    # it onto the loaded CompiledFxGraph before post_compile.
     return {
         "cudagraphs": cudagraphs,
         "boxed_forward_device_index": boxed_forward_device_index,
+        "compile_region_name": compile_region_name,  # pyrefly: ignore[bad-typed-dict-key]
     }
 
 
