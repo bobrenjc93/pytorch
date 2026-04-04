@@ -1,5 +1,6 @@
 # Owner(s): ["module: dynamo"]
 
+import sys
 import unittest
 from typing import cast
 
@@ -34,6 +35,28 @@ def _capture_y_source_loc(ctx) -> None:
     y_vt = tx.symbolic_locals.get("y")
     if y_vt is not None and y_vt.source_loc is not None:
         _source_loc_capture["source_loc"] = y_vt.source_loc
+
+
+def _unsupported_error_source_attribution() -> str:
+    if sys.version_info < (3, 11):
+        return """\
+Stack variable source attribution:
+  ConstantVariable(int: 1) originated from:
+  File "test_exc.py", line N
+                return {1, 2}
+"""
+
+    return """\
+Stack variable source attribution:
+  ConstantVariable(int: 1) originated from:
+  File "test_exc.py", line N
+                return {1, 2}
+                        ^
+  ConstantVariable(int: 2) originated from:
+  File "test_exc.py", line N
+                return {1, 2}
+                           ^
+"""
 
 
 class ExcTests(LoggingTestCase):
@@ -167,32 +190,31 @@ from user code:
         torch.compile(fn001, backend="eager")(torch.randn(1))
 
         record = self.getRecord(records, "missing BUILD_SET handler")
+        expected = (
+            "Graph break in user code at test_exc.py:N\n"
+            "Graph Break Reason: Failed to handle graph break gracefully. "
+            "Skipping the function and falling back to eager. Graph break "
+            "encountered:\n"
+            "\n"
+            "missing BUILD_SET handler\n"
+            "  Explanation: Missing BUILD_SET bytecode handler (for testing purposes).\n"
+            "\n"
+            "\n"
+            "  Developer debug context:\n"
+            "\n"
+            " For more details about this graph break, please visit: "
+            "https://meta-pytorch.github.io/compile-graph-break-site/gb/gb0200.html\n"
+            "\n" + _unsupported_error_source_attribution() + "\n"
+            "User code traceback:\n"
+            '  File "test_exc.py", line N, in test_unsupported_error\n'
+            '    torch.compile(fn001, backend="eager")(torch.randn(1))\n'
+            '  File "test_exc.py", line N, in fn001\n'
+            "    return {1, 2}\n"
+        )
 
         self.assertExpectedInline(
             munge_exc(record.getMessage()),
-            """\
-Graph break in user code at test_exc.py:N
-Graph Break Reason: Failed to handle graph break gracefully. Skipping the function and falling back to eager. Graph break encountered:
-
-missing BUILD_SET handler
-  Explanation: Missing BUILD_SET bytecode handler (for testing purposes).
-
-
-  Developer debug context:
-
- For more details about this graph break, please visit: https://meta-pytorch.github.io/compile-graph-break-site/gb/gb0200.html
-
-Stack variable source attribution:
-  ConstantVariable(int: 1) originated from:
-  File "test_exc.py", line N
-                return {1, 2}
-
-User code traceback:
-  File "test_exc.py", line N, in test_unsupported_error
-    torch.compile(fn001, backend="eager")(torch.randn(1))
-  File "test_exc.py", line N, in fn001
-    return {1, 2}
-""",  # noqa: B950
+            expected,  # noqa: B950
         )
 
     @torch._dynamo.config.patch(suppress_errors=False)
