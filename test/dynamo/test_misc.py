@@ -458,11 +458,12 @@ graph():
 
         x = torch.ones(5)
         with YoloMode(), YoloMode2():
-            torch.compile(
-                lambda x, y: torch.add(x, y), fullgraph=True, backend=backend
-            )(x, x)
+            with self.assertRaisesRegex(torch._dynamo.exc.Unsupported, "fullgraph=True"):
+                torch.compile(
+                    lambda x, y: torch.add(x, y), fullgraph=True, backend=backend
+                )(x, x)
 
-        self.assertEqual(len(backend2.graphs), 1)
+        self.assertEqual(len(backend2.graphs), 0)
         self.assertEqual(len(backend3.graphs), 0)
         self.assertEqual(len(backend.graphs), 0)
 
@@ -532,11 +533,12 @@ graph():
 
         x = torch.ones(5)
         with YoloMode(), YoloMode2():
-            torch.compile(
-                lambda x, y: torch.add(x, y), fullgraph=True, backend=backend
-            )(x, x)
+            with self.assertRaisesRegex(torch._dynamo.exc.Unsupported, "fullgraph=True"):
+                torch.compile(
+                    lambda x, y: torch.add(x, y), fullgraph=True, backend=backend
+                )(x, x)
 
-        self.assertEqual(len(backend2.graphs), 1)
+        self.assertEqual(len(backend2.graphs), 0)
         self.assertEqual(len(backend3.graphs), 0)
         self.assertEqual(len(backend.graphs), 0)
 
@@ -547,12 +549,13 @@ graph():
         backend = torch._dynamo.testing.EagerAndRecordGraphs()
 
         with YoloMode2(), YoloMode():
-            torch.compile(
-                lambda x, y: torch.add(x, y), fullgraph=True, backend=backend
-            )(x, x)
+            with self.assertRaisesRegex(torch._dynamo.exc.Unsupported, "fullgraph=True"):
+                torch.compile(
+                    lambda x, y: torch.add(x, y), fullgraph=True, backend=backend
+                )(x, x)
 
-        self.assertEqual(len(backend2.graphs), 1)
-        self.assertEqual(len(backend3.graphs), 1)
+        self.assertEqual(len(backend2.graphs), 0)
+        self.assertEqual(len(backend3.graphs), 0)
         self.assertEqual(len(backend.graphs), 0)
 
     @torch._dynamo.config.patch(inline_torch_dispatch_torch_compile=False)

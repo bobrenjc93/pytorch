@@ -2351,17 +2351,37 @@ class CatchErrorsWrapper:
             should_skip_for_dispatch_mode = (
                 is_in_any_mode_without_ignore_compile_internals()
             )
+        export = getattr(self._torchdynamo_orig_backend, "_export", False)
+        one_graph = getattr(self._torchdynamo_orig_backend, "_one_graph", False)
+        is_torch_internal_frame = os.path.realpath(frame.f_code.co_filename).startswith(
+            os.path.dirname(os.path.realpath(torch.__file__)) + os.sep
+        )
 
         if (
             # TODO: the first condition is not covered by any test
             has_started_execution
             or is_skipfile
             or config.disable
-            or (
-                should_skip_for_dispatch_mode
-                and not getattr(self._torchdynamo_orig_backend, "_export", False)
-            )
+            or (should_skip_for_dispatch_mode and not export)
         ):
+            if (
+                should_skip_for_dispatch_mode
+                and one_graph
+                and not export
+                and not is_torch_internal_frame
+            ):
+                raise exc.Unsupported(
+                    (
+                        exc.format_skip_frame_message(
+                            frame.f_code,
+                            "non-infra torch dispatch mode present, this is not supported today in torch.compile",
+                        )
+                        + "\nfullgraph=True requires the frame to compile instead of silently falling back to eager. "
+                        "Either remove the active TorchDispatchMode, set ignore_compile_internals() = True on it, "
+                        "or use fullgraph=False."
+                    )
+                )
+
             if log.isEnabledFor(logging.DEBUG):
                 if has_started_execution:
                     skip_reason = "traced frame already"

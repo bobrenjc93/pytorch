@@ -139,6 +139,36 @@ class TorchDispatchModeTests(torch._dynamo.test_case.TestCase):
         self.assertEqual(eager_res, compiled_res)
         self.assertEqual(cnt.frame_count, 0)
 
+    def test_skip_torch_dispatch_modes_fullgraph_errors(self):
+        @torch.library.custom_op("mylib::modes_fullgraph_skip", mutates_args=())
+        def foo(x: torch.Tensor) -> torch.Tensor:
+            return x.clone()
+
+        checksums = []
+
+        class ChecksumFoo(TorchDispatchMode):
+            def __torch_dispatch__(self, func, types, args, kwargs=None):
+                kwargs = kwargs or {}
+
+                if func is torch.ops.mylib.modes_fullgraph_skip.default:
+                    checksums.append(args[0].abs().sum())
+
+                return func(*args, **kwargs)
+
+        @torch.compile(backend="eager", fullgraph=True)
+        def g(x):
+            return x.sin().cos()
+
+        x = torch.randn(3)
+
+        with ChecksumFoo():
+            foo(x)
+            with self.assertRaisesRegex(torch._dynamo.exc.Unsupported, "fullgraph=True"):
+                g(x)
+            foo(x)
+
+        self.assertEqual(len(checksums), 2)
+
 
 class TorchFunctionModeTests(torch._dynamo.test_case.TestCase):
     @classmethod
