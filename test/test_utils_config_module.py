@@ -1,6 +1,7 @@
 # Owner(s): ["module: unknown"]
 import os
 import pickle
+import queue
 import threading
 import warnings
 from unittest.mock import patch
@@ -428,13 +429,13 @@ torch.testing._internal.fake_config_module3.e_func = _warnings.warn""",
 
     def _assert_patch_reentrant_across_threads(self, fn):
         barrier = threading.Barrier(2, timeout=5)
-        errors = []
+        errors: queue.SimpleQueue[str] = queue.SimpleQueue()
 
         def worker():
             try:
                 fn(barrier)
-            except BaseException as e:
-                errors.append(repr(e))
+            except Exception as e:
+                errors.put(repr(e))
 
         threads = [threading.Thread(target=worker) for _ in range(2)]
         for thread in threads:
@@ -442,7 +443,16 @@ torch.testing._internal.fake_config_module3.e_func = _warnings.warn""",
         for thread in threads:
             thread.join()
 
-        self.assertFalse(errors, f"concurrent patch usage failed: {errors}")
+        error_messages = []
+        while True:
+            try:
+                error_messages.append(errors.get_nowait())
+            except queue.Empty:
+                break
+
+        self.assertFalse(
+            error_messages, f"concurrent patch usage failed: {error_messages}"
+        )
         self.assertTrue(config.e_bool)
 
     def test_patch_context_manager_is_reentrant_across_threads(self):
@@ -455,6 +465,17 @@ torch.testing._internal.fake_config_module3.e_func = _warnings.warn""",
                 self.assertFalse(config.e_bool)
 
         self._assert_patch_reentrant_across_threads(fn)
+
+    def test_patch_context_manager_is_reentrant_when_nested(self):
+        patcher = config.patch(e_bool=False)
+
+        with patcher:
+            self.assertFalse(config.e_bool)
+            with patcher:
+                self.assertFalse(config.e_bool)
+            self.assertFalse(config.e_bool)
+
+        self.assertTrue(config.e_bool)
 
     def test_patch_decorator_is_reentrant_across_threads(self):
         @config.patch(e_bool=False)
