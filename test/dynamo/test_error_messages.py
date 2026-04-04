@@ -84,6 +84,16 @@ def _assert_failure_stack_source_attribution() -> str:
 
 
 def _reconstruction_failure_gb_stack_source_attribution() -> str:
+    if sys.version_info >= (3, 14):
+        return (
+            "Stack variable source attribution:\n"
+            "  LazyVariableTracker(realized: SkipFunctionVariable()) originated from:\n"
+            '  File "test_error_messages.py", line N\n'
+            "                torch._dynamo.graph_break()\n"
+            "                ^^^^^^^^^^^^^^^^^^^^^^^^^\n"
+            "\n"
+        )
+
     if sys.version_info >= (3, 11):
         return ""
 
@@ -2268,8 +2278,7 @@ Dynamo recompile limit exceeded
 
         torch.compile(fn, backend="eager")()
         self.assertEqual(len(records), 2)
-        self.assertExpectedInline(
-            munge_exc(records[0].getMessage(), suppress_suffix=True, skip=0),
+        expected = (
             """\
 Graph break in user code at test_error_messages.py:N
 Graph Break Reason: Failed to handle graph break gracefully. Skipping the function and falling back to eager. Graph break encountered:
@@ -2304,6 +2313,10 @@ Graph break under GenericContextWrappingVariable
 
  For more details about this graph break, please visit: https://meta-pytorch.github.io/compile-graph-break-site/gb/gb0066.html
 
+"""
+            + _generic_ctx_mgr_stack_source_attribution()
+            + """\
+
 User code traceback:
   File "test_error_messages.py", line N, in test_nested_generic_ctx_mgr
     torch.compile(fn, backend="eager")()
@@ -2311,7 +2324,11 @@ User code traceback:
     inner()
   File "test_error_messages.py", line N, in inner
     torch._dynamo.graph_break()
-""",
+"""
+        )
+        self.assertExpectedInline(
+            munge_exc(records[0].getMessage(), suppress_suffix=True, skip=0),
+            expected,
         )
         self.assertExpectedInline(
             munge_exc(records[1].getMessage(), suppress_suffix=True, skip=0),
