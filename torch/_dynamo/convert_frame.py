@@ -77,6 +77,7 @@ from torch.monitor import _WaitCounter
 from torch.nn.parallel.distributed import DistributedDataParallel
 from torch.utils._python_dispatch import (
     _disable_current_modes,
+    _get_current_dispatch_mode_stack,
     any_torch_dispatch_mode_on_stack,
     is_in_any_mode_without_ignore_compile_internals,
     is_traceable_wrapper_subclass,
@@ -194,6 +195,15 @@ if typing.TYPE_CHECKING:
 
 
 log = logging.getLogger(__name__)
+
+_TORCH_PACKAGE_PREFIX = os.path.dirname(os.path.realpath(torch.__file__)) + os.sep
+
+
+def _is_torch_internal_dispatch_mode(mode: object) -> bool:
+    module_name = type(mode).__module__
+    return module_name == "torch" or module_name.startswith("torch.")
+
+
 bytecode_log = torch._logging.getArtifactLogger(__name__, "bytecode")
 graph_break_log = torch._logging.getArtifactLogger(__name__, "graph_breaks")
 
@@ -2351,11 +2361,20 @@ class CatchErrorsWrapper:
             should_skip_for_dispatch_mode = (
                 is_in_any_mode_without_ignore_compile_internals()
             )
+        active_dispatch_modes = [
+            mode
+            for mode in _get_current_dispatch_mode_stack()
+            if not mode.is_infra_mode() and not mode.ignore_compile_internals()
+        ]
+        should_error_for_dispatch_mode = should_skip_for_dispatch_mode and (
+            not active_dispatch_modes
+            or any(
+                not _is_torch_internal_dispatch_mode(mode)
+                for mode in active_dispatch_modes
+            )
+        )
         export = getattr(self._torchdynamo_orig_backend, "_export", False)
         one_graph = getattr(self._torchdynamo_orig_backend, "_one_graph", False)
-        is_torch_internal_frame = os.path.realpath(frame.f_code.co_filename).startswith(
-            os.path.dirname(os.path.realpath(torch.__file__)) + os.sep
-        )
 
         if (
             # TODO: the first condition is not covered by any test
@@ -2365,13 +2384,17 @@ class CatchErrorsWrapper:
             or (should_skip_for_dispatch_mode and not export)
         ):
             if (
-                should_skip_for_dispatch_mode
+                should_error_for_dispatch_mode
                 and one_graph
                 and not export
-                and not is_torch_internal_frame
             ):
-                raise exc.Unsupported(
-                    (
+                # Allow internal torch helper frames to keep the legacy skip
+                # behavior while surfacing an Unsupported for user frames so
+                # fullgraph=True does not silently fall back to eager.
+                if not os.path.realpath(frame.f_code.co_filename).startswith(
+                    _TORCH_PACKAGE_PREFIX
+                ):
+                    raise exc.Unsupported(
                         exc.format_skip_frame_message(
                             frame.f_code,
                             "non-infra torch dispatch mode present, this is not supported today in torch.compile",
@@ -2380,7 +2403,6 @@ class CatchErrorsWrapper:
                         "Either remove the active TorchDispatchMode, set ignore_compile_internals() = True on it, "
                         "or use fullgraph=False."
                     )
-                )
 
             if log.isEnabledFor(logging.DEBUG):
                 if has_started_execution:
