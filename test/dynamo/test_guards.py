@@ -1,11 +1,12 @@
 # Owner(s): ["module: dynamo"]
-# ruff: noqa: F403,F405,F841
+# ruff: noqa: B021,E711,E721,F403,F405,F841
 try:
     from .dynamo_test_common import *
 except ImportError:
     from dynamo_test_common import *
 
 class GuardTests(torch._inductor.test_case.TestCase):
+    @torch._dynamo.config.patch(capture_scalar_outputs=True)
     def test_unbacked_repeat_cat(self):
         def f(x, n):
             m = x.item()
@@ -605,6 +606,7 @@ class GuardTests(torch._inductor.test_case.TestCase):
             lambda: fn(torch.randn(10), torch.randn(10)),
         )
 
+    @patch.object(torch._dynamo.config, "error_on_nested_fx_trace", False)
     def test_no_error_on_nested_fx_trace(self):
         input = torch.rand(2, 3)
 
@@ -812,6 +814,7 @@ class GuardTests(torch._inductor.test_case.TestCase):
         self.assertTrue(guard_failure is not None)
         self.assertIn("""tensor 'x' size mismatch at index 0""", guard_failure[0])
 
+    @torch._dynamo.config.patch(capture_dynamic_output_shape_ops=True)
     def test_argwhere_with_dynamic_shapes(self):
         def fn(
             tensor: torch.Tensor,
@@ -1025,6 +1028,7 @@ class GuardTests(torch._inductor.test_case.TestCase):
         with self.assertRaises(ConstraintViolationError):
             torch.compile(dyn_fn, backend="eager")(y)
 
+    @torch._dynamo.config.patch(capture_scalar_outputs=True)
     def test_unbacked_empty_tensor(self):
         @torch.compile(backend="eager", fullgraph=True)
         def fn(x):
@@ -1034,6 +1038,7 @@ class GuardTests(torch._inductor.test_case.TestCase):
         self.assertEqual(fn(torch.tensor([4])).size(0), 1)
         self.assertEqual(fn(torch.tensor([1])).size(0), 0)
 
+    @torch._dynamo.config.patch(capture_scalar_outputs=True)
     def test_sym_and_terms(self):
         from torch.fx.experimental.symbolic_shapes import sym_and
 
@@ -1078,6 +1083,7 @@ class GuardTests(torch._inductor.test_case.TestCase):
         #     func(torch.rand(1, 1), torch.rand(2, 1))
         func(torch.rand(1, 1), torch.rand(2, 1))
 
+    @torch._dynamo.config.patch(capture_scalar_outputs=True)
     def test_sym_constrain_range_on_replaced_unbacked_symbol(self):
         # Tests the following case:
         # Deferred runtime asserts adds sym_constrain_range(u0).
@@ -1132,6 +1138,7 @@ class GuardTests(torch._inductor.test_case.TestCase):
         sym_max_nodes = [n for n in graph.graph.nodes if n.target is torch.sym_max]
         self.assertEqual(len(sym_max_nodes), 1, "sym_max should be in the graph")
 
+    @torch.fx.experimental._config.patch(translation_validation=False)
     def test_mark_dynamic_with_ranges(self):
         y = torch.randn([8, 3, 3])
 
@@ -1189,6 +1196,7 @@ class GuardTests(torch._inductor.test_case.TestCase):
         torch._dynamo.reset()
         torch.compile(my_dyn_fn, backend="eager")(y, y)
 
+    @unittest.expectedFailure
     def test_raise_guard_partial_constraint_across_break(self):
         y = torch.randn([3, 3, 3])
 
@@ -1224,6 +1232,11 @@ class GuardTests(torch._inductor.test_case.TestCase):
         with self.assertRaises(ConstraintViolationError):
             torch.compile(my_dyn_fn, backend="eager")(y, y)
 
+    @torch._dynamo.config.patch(force_parameter_static_shapes=True)
+    @torch._dynamo.config.patch(force_nn_module_property_static_shapes=True)
+    @torch.compiler.config.patch(
+        dynamic_sources="L['x'],L['y'],L['self']._modules['y'].x,L['self']._modules['y']._modules['c']._parameters['weight'],L['self']._modules['y']._modules['c']._parameters['bias']"
+    )
     def test_dynamic_sources_force_parameter_static_shapes_and_property_static_shapes_override(
         self,
     ):
@@ -1260,6 +1273,7 @@ class GuardTests(torch._inductor.test_case.TestCase):
 
         self.assertEqual(counter.frame_count, 1)
 
+    @torch.compiler.config.patch(dynamic_sources="L['self']._modules['inner'].x")
     def test_dynamic_sources_precedence_over_int_specialization(self):
         builder._DYNAMIC_SOURCES = None
 
@@ -1284,6 +1298,7 @@ class GuardTests(torch._inductor.test_case.TestCase):
 
         self.assertEqual(counter.frame_count, 1)
 
+    @torch.compiler.config.patch(dynamic_sources="L['x']")
     def test_dynamic_sources_int(self):
         counter = CompileCounter()
 
@@ -1297,6 +1312,7 @@ class GuardTests(torch._inductor.test_case.TestCase):
 
         self.assertEqual(counter.frame_count, 1)
 
+    @torch.compiler.config.patch(dynamic_sources="L['x']")
     def test_dynamic_sources_tensor(self):
         counter = CompileCounter()
 
@@ -1310,6 +1326,7 @@ class GuardTests(torch._inductor.test_case.TestCase):
 
         self.assertEqual(counter.frame_count, 1)
 
+    @torch.compiler.config.patch(unbacked_sources="L['x']")
     def test_unbacked_sources_tensor(self):
         counter = CompileCounter()
 
@@ -1323,6 +1340,7 @@ class GuardTests(torch._inductor.test_case.TestCase):
 
         self.assertEqual(counter.frame_count, 1)
 
+    @torch.compiler.config.patch(unbacked_sources="L['x']")
     def test_unbacked_sources_scalar(self):
         counter = CompileCounter()
 
@@ -1336,6 +1354,7 @@ class GuardTests(torch._inductor.test_case.TestCase):
 
         self.assertEqual(counter.frame_count, 1)
 
+    @torch.compiler.config.patch(dynamic_sources="L['x']")
     def test_dynamic_sources_graph_break(self):
         counter = CompileCounter()
 
@@ -1355,6 +1374,7 @@ class GuardTests(torch._inductor.test_case.TestCase):
         # 2 since graph break produces 2 graphs. NB: there are no recompiles
         self.assertEqual(counter.frame_count, 2)
 
+    @torch.compiler.config.patch(dynamic_sources="L['x'], L['y']")
     def test_dynamic_sources_dynamic_override(self):
         counter = CompileCounter()
 
@@ -1368,6 +1388,7 @@ class GuardTests(torch._inductor.test_case.TestCase):
 
         self.assertEqual(counter.frame_count, 1)
 
+    @torch.compiler.config.patch(dynamic_sources="L\\['x.*'\\], L\\['y.*'\\]")
     def test_dynamic_sources_dynamic_override_regex(self):
         counter = CompileCounter()
 
@@ -1798,6 +1819,9 @@ def ___make_guard_fn():
         self.assertEqual(fn(y3), y3 - 3)
         self.assertEqual(cnt.frame_count, 2)
 
+    @torch._dynamo.config.patch(
+        capture_scalar_outputs=True, capture_dynamic_output_shape_ops=True
+    )
     def test_unbacked_symint_split(self):
         @torch.compile(backend="eager")
         def f(lengths, values):
@@ -1806,6 +1830,7 @@ def ___make_guard_fn():
 
         f(torch.tensor([2, 3, 4]), torch.randn(9))
 
+    @torch._dynamo.config.patch(capture_scalar_outputs=True)
     def test_runtime_assert_replacement(self):
         @torch.compile(backend="eager")
         def fn(x, y):
@@ -1816,6 +1841,7 @@ def ___make_guard_fn():
         fn(torch.randn(4), torch.tensor([3]))
         self.assertRaises(RuntimeError, lambda: fn(torch.randn(4), torch.tensor([4])))
 
+    @torch._dynamo.config.patch(capture_scalar_outputs=True)
     def test_cat_unbacked(self):
         @torch.compile(backend="eager")
         def fn(x, y):
@@ -1829,6 +1855,9 @@ def ___make_guard_fn():
             RuntimeError, lambda: fn(torch.randn(2, 3), torch.tensor([1]))
         )
 
+    @torch._dynamo.config.patch(
+        capture_scalar_outputs=True, capture_dynamic_output_shape_ops=True
+    )
     def test_aot_autograd_propagate_unbacked_symints_shape(self):
         @torch.compile(backend="aot_eager")
         def f(x):
@@ -1836,6 +1865,7 @@ def ___make_guard_fn():
 
         f(torch.tensor([1, 0, 3, 2, 0]))
 
+    @torch._dynamo.config.patch(capture_scalar_outputs=True)
     def test_validate_outputs_unbacked(self):
         class SillyCat(torch.autograd.Function):
             @staticmethod
@@ -1858,6 +1888,7 @@ def ___make_guard_fn():
 
         f(torch.randn(9, requires_grad=True), torch.tensor([3, 6]))
 
+    @torch._dynamo.config.patch(capture_scalar_outputs=True)
     def test_validate_outputs_unbacked_by_custom_op(self):
         with torch.library._scoped_library("mylib", "FRAGMENT") as lib:
             torch.library.define(
@@ -1924,6 +1955,7 @@ def ___make_guard_fn():
         main.check_equal(other)
         self._replay_and_check(main)
 
+    @onlyIfTranslationValidation
     def test_shape_env_equal_constructor(self):
         main, other = ShapeEnv(allow_scalar_outputs=False), ShapeEnv()
         self.assertExpectedRaisesInline(
@@ -1939,6 +1971,7 @@ ShapeEnv not equal: field values don't match:
         )
         self._replay_and_check(main)
 
+    @onlyIfTranslationValidation
     def test_shape_env_equal_create_symbolic_sizes_strides_storage_offset(self):
         main, other = ShapeEnv(), ShapeEnv()
         main.create_symbolic_sizes_strides_storage_offset(
@@ -1978,6 +2011,7 @@ ShapeEnv not equal: field values don't match:
         )
         self._replay_and_check(main)
 
+    @onlyIfTranslationValidation
     def test_shape_env_equal_unbacked(self):
         main, other = ShapeEnv(), ShapeEnv()
         main.create_unbacked_symint()
@@ -2005,6 +2039,7 @@ ShapeEnv not equal: field values don't match:
         )
         self._replay_and_check(main)
 
+    @onlyIfTranslationValidation
     def test_shape_env_equal_evaluate_expr_divisible(self):
         main, other = ShapeEnv(), ShapeEnv()
 
@@ -2044,6 +2079,7 @@ ShapeEnv not equal: field values don't match:
         )
         self._replay_and_check(main)
 
+    @onlyIfTranslationValidation
     def test_shape_env_equal_evaluate_expr_replacement(self):
         main, other = ShapeEnv(), ShapeEnv()
 
@@ -2086,6 +2122,7 @@ ShapeEnv not equal: field values don't match:
         )
         self._replay_and_check(main)
 
+    @onlyIfTranslationValidation
     def test_shape_env_equal_evaluate_expr_refinement(self):
         main, other = ShapeEnv(), ShapeEnv()
 
@@ -2126,6 +2163,7 @@ ShapeEnv not equal: field values don't match:
         )
         self._replay_and_check(main)
 
+    @onlyIfTranslationValidation
     def test_shape_env_equal_runtime_assert(self):
         main, other = ShapeEnv(), ShapeEnv()
 
@@ -2217,6 +2255,7 @@ ShapeEnv not equal: field values don't match:
             torch.compile(fn4, backend="eager")(x)
             self.assertEqual(3, len(torch._dynamo.utils.get_compilation_metrics()))
 
+    @torch._dynamo.config.patch(capture_scalar_outputs=True)
     def test_check_simplification(self):
         @torch.compile(backend="eager", fullgraph=True)
         def fn(x):
@@ -2229,6 +2268,7 @@ ShapeEnv not equal: field values don't match:
 
         fn(torch.tensor([3, 3]))
 
+    @torch._dynamo.config.patch(assume_static_by_default=True)
     def test_mark_unbacked_strict(self):
         @torch.compile(backend="eager")
         def fn(x, y):
@@ -2242,6 +2282,7 @@ ShapeEnv not equal: field values don't match:
         with self.assertRaisesRegex(RuntimeError, "specialized"):
             fn(x, y)
 
+    @torch._dynamo.config.patch(capture_scalar_outputs=True)
     def test_infer_unbacked_size_gt_zero(self):
         # This code, in fact, does NOT work in eager
         @torch.compile(backend="eager", fullgraph=True)
@@ -2253,6 +2294,7 @@ ShapeEnv not equal: field values don't match:
 
         self.assertEqual(fn(torch.tensor([0])), torch.zeros(0))
 
+    @torch.fx.experimental._config.patch(no_data_dependent_graph_break=True)
     def test_unbacked_strict_mode(self):
         @torch.compile(backend="eager")
         def fn(x, y):
@@ -2283,6 +2325,7 @@ ShapeEnv not equal: field values don't match:
         self.assertEqual(f(torch.randn(0)).shape, (1,))
         self.assertEqual(f(torch.randn(2)).shape, (2,))
 
+    @torch._dynamo.config.patch(guard_nn_modules=True)
     def test_hasattr_nn_module_guard(self):
         class M(torch.nn.Module):
             def __init__(self) -> None:

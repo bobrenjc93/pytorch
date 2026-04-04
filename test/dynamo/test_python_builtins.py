@@ -1,5 +1,5 @@
 # Owner(s): ["module: dynamo"]
-# ruff: noqa: F403,F405,F841
+# ruff: noqa: C405,C416,F403,F405,F841,PLR0133,RUF015,SIM113,TRY203,UP032
 try:
     from .dynamo_test_common import *
 except ImportError:
@@ -375,6 +375,7 @@ class PythonBuiltinTests(torch._inductor.test_case.TestCase):
         self.assertEqual(r.dtype, torch.int64)
         self.assertEqual(cnts.frame_count, 1)
 
+    @torch._dynamo.config.patch(capture_dynamic_output_shape_ops=True)
     def test_unique_consecutive(self):
         x = torch.tensor([1, 1, 2, 2, 1, 3])
 
@@ -1834,11 +1835,13 @@ class PythonBuiltinTests(torch._inductor.test_case.TestCase):
         self.assertFalse(ne)
         self.assertEqual(len(counters["graph_break"]), 1)
 
+    @unittest.skipIf(sys.version_info < (3, 12), "Python 3.12+")
     def test_CALL_INTRINSIC(self):
         from torch.testing._internal.py312_intrinsics import Foo
 
         Foo.test_default_update(self)
 
+    @unittest.skipIf(sys.version_info < (3, 11), "Python 3.11+")
     def test_RAISE_VARARGS_0(self):
         def foo():
             try:
@@ -1859,6 +1862,7 @@ class PythonBuiltinTests(torch._inductor.test_case.TestCase):
         y = fn(t)
         self.assertEqual(y, t.sin())
 
+    @torch._dynamo.config.patch(capture_scalar_outputs=True)
     def test_builtin_bool_on_symint(self):
         def f(x):
             return bool(x.item())
@@ -1870,6 +1874,7 @@ class PythonBuiltinTests(torch._inductor.test_case.TestCase):
         res = opt_f(x)
         self.assertEqual(ref, res)
 
+    @torch._dynamo.config.patch(capture_scalar_outputs=True)
     def test_builtin_bool_on_tensor(self):
         def f_all(mask):
             return bool((mask == 0).all())
@@ -1896,6 +1901,7 @@ class PythonBuiltinTests(torch._inductor.test_case.TestCase):
         with self.assertRaises(RuntimeError):
             opt_f(non_scalar)
 
+    @torch._dynamo.config.patch(capture_scalar_outputs=True)
     def test_builtin_bool_on_symfloat(self):
         def f(x):
             return bool(x.item())
@@ -1907,6 +1913,7 @@ class PythonBuiltinTests(torch._inductor.test_case.TestCase):
         res = opt_f(x)
         self.assertEqual(ref, res)
 
+    @torch._dynamo.config.patch(capture_scalar_outputs=True)
     def test_builtin_bool_on_symbool(self):
         def f(x):
             return bool(x.item())

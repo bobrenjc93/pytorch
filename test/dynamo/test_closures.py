@@ -1,5 +1,5 @@
 # Owner(s): ["module: dynamo"]
-# ruff: noqa: F403,F405,F841
+# ruff: noqa: E722,F403,F405,F841
 try:
     from .dynamo_test_common import *
 except ImportError:
@@ -292,6 +292,7 @@ class ClosureTests(torch._inductor.test_case.TestCase):
 
         self.assertTrue(same(out[0], out[1]))
 
+    @torch._dynamo.config.patch(specialize_float=True)
     def test_closure_out_of_scope_cell(self):
         cell1 = torch.rand(1).item()
         cell2 = torch.rand(3, 3)
@@ -313,6 +314,7 @@ class ClosureTests(torch._inductor.test_case.TestCase):
         self.assertEqual(cnts.frame_count, 1)
         self.assertEqual(cnts.op_count, 1)
 
+    @torch._dynamo.config.patch(specialize_float=True)
     def test_closure_out_of_scope_cell_with_mutation(self):
         cell1 = torch.rand(1).item()
         orig1 = cell1

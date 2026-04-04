@@ -1,5 +1,5 @@
 # Owner(s): ["module: dynamo"]
-# ruff: noqa: F403,F405,F841
+# ruff: noqa: B006,E731,F401,F403,F405,F823,F841,PIE804,RSE102,TRY002,UP004,UP008,UP028
 try:
     from .dynamo_test_common import *
 except ImportError:
@@ -246,6 +246,7 @@ not ___dict_contains('cccccccc', G['sys'].modules)""",
         r2 = opt_fn(d)
         self.assertEqual(r1, r2)
 
+    @torch._dynamo.config.patch(specialize_float=True)
     def test_config_obj(self):
         class Cfg:
             def __init__(self) -> None:
@@ -299,6 +300,7 @@ not ___dict_contains('cccccccc', G['sys'].modules)""",
         self.assertEqual(opt_fn(v, cfg1)[0], 5)
         self.assertEqual(cnts.frame_count, 3)
 
+    @patch.object(torch._dynamo.config, "capture_scalar_outputs", True)
     def test_user_code_statically_known(self):
         from torch.fx.experimental.symbolic_shapes import (
             has_static_value,
@@ -1794,6 +1796,7 @@ not ___dict_contains('cccccccc', G['sys'].modules)""",
 
         torch.compile(fn, backend="eager", fullgraph=True)(torch.ones(3))
 
+    @unittest.expectedFailure
     def test_typing_union_new_syntax_reconstruct(self):
         def fn(x):
             return (
@@ -1849,6 +1852,7 @@ not ___dict_contains('cccccccc', G['sys'].modules)""",
         # If this doesn't crash, the test passes
         fn(torch.ones(3))
 
+    @unittest.skipIf(not torch.distributed.is_available(), "requires distributed")
     def test_or_union_type_opaque_class(self):
         # Test that or_ on opaque class types (e.g. Shard | _StridedShard)
         # doesn't cause a graph break.
@@ -1884,6 +1888,7 @@ not ___dict_contains('cccccccc', G['sys'].modules)""",
         res = opt_fn(x, y)
         self.assertTrue(torch.allclose(ref, res))
 
+    @torch._dynamo.config.patch(guard_nn_modules=True)
     def test_module_complex_iter(self):
         n_embd = 768
         block_size = 128
@@ -2045,6 +2050,7 @@ not ___dict_contains('cccccccc', G['sys'].modules)""",
         res = opt_fn(x, m)
         self.assertTrue(torch.allclose(ref, res))
 
+    @torch._dynamo.config.patch(guard_nn_modules=True)
     def test_nn_sequential_invocation(self):
         with freeze_rng_state():
 
@@ -2069,6 +2075,7 @@ not ___dict_contains('cccccccc', G['sys'].modules)""",
             dynamo_result = graph(x)
             self.assertTrue(same(real, dynamo_result))
 
+    @torch._dynamo.config.patch(guard_nn_modules=True)
     def test_nn_sequential_invocation_reposition_indices(self):
         with freeze_rng_state():
 

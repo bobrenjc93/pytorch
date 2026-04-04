@@ -1,5 +1,5 @@
 # Owner(s): ["module: dynamo"]
-# ruff: noqa: F403,F405,F841
+# ruff: noqa: B020,F403,F405,F841,PLW0127
 try:
     from .dynamo_test_common import *
 except ImportError:

@@ -1,5 +1,5 @@
 # Owner(s): ["module: dynamo"]
-# ruff: noqa: F403,F405,F841
+# ruff: noqa: F403,F405,F841,PERF102,PIE808,SIM118,UP008
 try:
     from .dynamo_test_common import *
 except ImportError:
@@ -94,6 +94,15 @@ class TensorSemanticsTests(torch._inductor.test_case.TestCase):
         self.assertEqual(res, torch.ones(5) + 1)
         self.assertTrue(res.offloading_activation)
 
+    @unittest.skipIf(
+        not torch.cuda.is_available() or torch.cuda.get_device_capability() < (9, 0),
+        "requires Hopper+ (SM >= 9.0) for TMA",
+    )
+    @unittest.skipIf(
+        not torch.utils._triton.has_triton()
+        or not hasattr(__import__("triton"), "set_allocator"),
+        "requires triton with set_allocator support",
+    )
     def test_triton_set_allocator_no_graph_break(self):
         """set_allocator inside torch.compile does not graph break and
         replays correctly at runtime (including cache hits)."""
@@ -320,6 +329,7 @@ class TensorSemanticsTests(torch._inductor.test_case.TestCase):
         actual = compiled_model(x)
         self.assertEqual(expected, actual)
 
+    @torch._dynamo.config.patch(capture_scalar_outputs=True)
     def test_arange_length_with_float32_dtype(self):
         @torch.compile(fullgraph=True, backend="eager")
         def f(x):
@@ -334,6 +344,7 @@ class TensorSemanticsTests(torch._inductor.test_case.TestCase):
         x = torch.tensor([300])
         r = f(x)
 
+    @torch._dynamo.config.patch(capture_scalar_outputs=True)
     def test_torch_check(self):
         cnts = torch._dynamo.testing.CompileCounter()
 
@@ -347,6 +358,7 @@ class TensorSemanticsTests(torch._inductor.test_case.TestCase):
         f(torch.tensor([4]))
         self.assertEqual(cnts.frame_count, 1)
 
+    @torch._dynamo.config.patch(capture_scalar_outputs=True)
     def test_torch_check_symbolic_shape_rel(self):
         cnts = torch._dynamo.testing.CompileCounter()
 
@@ -365,6 +377,8 @@ class TensorSemanticsTests(torch._inductor.test_case.TestCase):
         f(torch.tensor([4]))
         self.assertEqual(cnts.frame_count, 1)
 
+    @torch._dynamo.config.patch(capture_scalar_outputs=True)
+    @torch.fx.experimental._config.patch(translation_validation=False)
     def test_torch_check_nonnegative(self):
         cnts = torch._dynamo.testing.CompileCounter()
 
@@ -530,6 +544,7 @@ class TensorSemanticsTests(torch._inductor.test_case.TestCase):
             expected_ops_dynamic=ifdynstaticdefault(3, 4),
         )
 
+    @patch.object(torch._dynamo.config, "capture_scalar_outputs", True)
     def test_tensor_item_capture(self):
         def fn(a, b):
             return (a + b).sum().item()
@@ -543,6 +558,7 @@ class TensorSemanticsTests(torch._inductor.test_case.TestCase):
         self.assertEqual(cnts.frame_count, 1)
         self.assertEqual(cnts.op_count, 4)
 
+    @patch.object(torch._dynamo.config, "capture_scalar_outputs", False)
     def test_tensor_item_no_capture(self):
         def fn(a, b):
             return (a + b).sum().item()
@@ -982,6 +998,7 @@ class TensorSemanticsTests(torch._inductor.test_case.TestCase):
 
         self.assertTrue(same(ref, res))
 
+    @torch._dynamo.config.patch(guard_nn_modules=True)
     def test_source_non_input_grad_access(self):
         # This test creates a model, and accesses the grads
         # from its parameter. This means that within dynamo,
@@ -1084,6 +1101,7 @@ class TensorSemanticsTests(torch._inductor.test_case.TestCase):
         for x in [torch.contiguous_format, torch.channels_last]:
             self.assertEqual(fn(x), opt_fn(x))
 
+    @patch.object(torch._dynamo.config, "capture_scalar_outputs", True)
     def test_tensor_ctor_list_of_tensor(self):
         def fn(x):
             return torch.tensor([x], dtype=torch.int64)
@@ -1113,6 +1131,7 @@ class TensorSemanticsTests(torch._inductor.test_case.TestCase):
         opt_fn(torch.int16, torch.ShortTensor)
         opt_fn(torch.bool, torch.BoolTensor)
 
+    @patch.object(torch._dynamo.config, "capture_scalar_outputs", True)
     def test_item(self):
         class MyMod(torch.nn.Module):
             def forward(self, x):
@@ -1125,6 +1144,7 @@ class TensorSemanticsTests(torch._inductor.test_case.TestCase):
 
         self.assertEqual(y, 11)
 
+    @patch.object(torch._dynamo.config, "capture_scalar_outputs", True)
     def test_item_changes(self):
         class MyMod(torch.nn.Module):
             def forward(self, x):
@@ -1140,6 +1160,7 @@ class TensorSemanticsTests(torch._inductor.test_case.TestCase):
         self.assertEqual(y, 11)
         self.assertEqual(z, 61)
 
+    @patch.object(torch._dynamo.config, "capture_scalar_outputs", True)
     def test_item_changes_new_shape(self):
         class MyMod(torch.nn.Module):
             def forward(self, x):
@@ -1155,6 +1176,7 @@ class TensorSemanticsTests(torch._inductor.test_case.TestCase):
         self.assertEqual(y, 11)
         self.assertEqual(z, 61)
 
+    @patch.object(torch._dynamo.config, "capture_scalar_outputs", True)
     def test_foreach_tensor_scalar(self):
         # Test that foreach ops with tensor scalar values can be traced fullgraph
         # when capture_scalar_outputs is enabled. The scalar's .item() creates an
@@ -1209,6 +1231,7 @@ class TensorSemanticsTests(torch._inductor.test_case.TestCase):
         actual = torch.compile(fn_pow, backend="eager", fullgraph=True)(a, val)
         self.assertEqual(expected, actual)
 
+    @unittest.skip("https://github.com/pytorch/pytorch/issues/99726")
     def test_cross_entropy_loss_fancy_ctor1(self):
         rand_5 = torch.randn(5)
         rand_3_5 = torch.randn(3, 5)
@@ -1323,6 +1346,7 @@ class TensorSemanticsTests(torch._inductor.test_case.TestCase):
             self.assertEqual(k_a, k)
             self.assertTrue(torch.allclose(v_a, v))
 
+    @torch._dynamo.config.patch(trace_autograd_ops=True)
     def test_tensor_dot_grad_no_graph_break(self):
         def fn(a, b):
             y = 3 * a**3 - b**2
@@ -1417,6 +1441,7 @@ class TensorSemanticsTests(torch._inductor.test_case.TestCase):
         x = torch.rand([4, 4])
         self.assertEqual(opt_fn(x), fn(x))
 
+    @unittest.skipIf(not TEST_CUDA and not TEST_XPU, "Test requires CUDA or XPU.")
     def test_symint_as_device_kwarg_non_strict_export(self):
         class Mod(torch.nn.Module):
             def forward(self, x):
@@ -1673,6 +1698,8 @@ class TensorSemanticsTests(torch._inductor.test_case.TestCase):
         self.assertEqual(pt, aot_eager)
         inductor = torch.compile(forward, backend="inductor")(test_tensor)
 
+    @torch._dynamo.config.patch(capture_scalar_outputs=True)
+    @torch._dynamo.config.patch(assume_static_by_default=True)
     def test_symint_copy_into_unbacked_slice(self):
         @torch.compile(backend="eager")
         def fn(a, x):
@@ -1691,6 +1718,7 @@ class TensorSemanticsTests(torch._inductor.test_case.TestCase):
         # Previously would crash with guard on data dependent error
         fn(a, x)
 
+    @torch._dynamo.config.patch(capture_scalar_outputs=True)
     def test_symint_fold_nontrivial_product_modulo(self):
         @torch.compile(fullgraph=True, backend="eager")
         def f(x):
@@ -1984,6 +2012,9 @@ class TensorSemanticsTests(torch._inductor.test_case.TestCase):
         out_comp = compiled(x, idxs)
         self.assertEqual(eager[0], out_comp[0])
 
+    @torch._dynamo.config.patch(
+        capture_scalar_outputs=True, capture_dynamic_output_shape_ops=True
+    )
     def test_out_variant_custom_op(self):
         with torch.library._scoped_library("mylib", "FRAGMENT") as lib:
             lib.define(
@@ -2050,6 +2081,7 @@ class TensorSemanticsTests(torch._inductor.test_case.TestCase):
             out = torch.empty(2, 272)
             f2(tensors, dim, num_chunks, out)
 
+    @torch._dynamo.config.patch(capture_scalar_outputs=True)
     def test_dim_order(self):
         @torch.compile(dynamic=False, fullgraph=True, backend="eager")
         def f(x):
@@ -2113,6 +2145,7 @@ class TensorSemanticsTests(torch._inductor.test_case.TestCase):
         ):
             h1(xs, ambiguity_check=True)
 
+    @torch._dynamo.config.patch(capture_scalar_outputs=True)
     def test_tolist_scalar(self):
         def fn(x):
             new_list = []
@@ -2127,6 +2160,7 @@ class TensorSemanticsTests(torch._inductor.test_case.TestCase):
         self.assertEqual(eager, compiled)
         self.assertEqual(counter.frame_count, 1)
 
+    @torch._dynamo.config.patch(capture_scalar_outputs=True)
     def test_tolist_1d(self):
         def fn(x):
             new_list = []
@@ -2141,6 +2175,7 @@ class TensorSemanticsTests(torch._inductor.test_case.TestCase):
         self.assertEqual(eager, compiled)
         self.assertEqual(counter.frame_count, 1)
 
+    @torch._dynamo.config.patch(capture_scalar_outputs=True)
     def test_tolist_kd(self):
         def fn(x):
             new_list = []
@@ -2155,6 +2190,8 @@ class TensorSemanticsTests(torch._inductor.test_case.TestCase):
         self.assertEqual(eager, compiled)
         self.assertEqual(counter.frame_count, 1)
 
+    @torch._dynamo.config.patch(capture_scalar_outputs=True)
+    @patch.object(torch._dynamo.config, "specialize_int", True)
     def test_tolist_0d(self):
         def fn(x):
             new_list = []
@@ -2169,6 +2206,8 @@ class TensorSemanticsTests(torch._inductor.test_case.TestCase):
         self.assertEqual(eager, compiled)
         self.assertEqual(counter.frame_count, 1)
 
+    @patch.object(torch._dynamo.config, "assume_static_by_default", False)
+    @patch.object(torch._dynamo.config, "automatic_dynamic_shapes", False)
     def test_tolist_kd_dynamic(self):
         def fn(x):
             new_list = []
@@ -2279,6 +2318,7 @@ class TensorSemanticsTests(torch._inductor.test_case.TestCase):
         with set_default_dtype(torch.double):
             foo()
 
+    @wrapDeterministicFlagAPITest
     def test_backward_deterministic_mode_mismatch_warning(self):
         @torch.compile(backend="aot_eager")
         def func(a, b):
@@ -2303,6 +2343,13 @@ class TensorSemanticsTests(torch._inductor.test_case.TestCase):
             else:
                 res.backward(grad)
 
+    @skipIfWindows(
+        msg="AssertionError: False is not true : Encountered an unexpected fallback to 'aten pow' in dynamo compiled code"
+    )
+    @unittest.skipIf(
+        torch._inductor.config.cpu_backend != "cpp",
+        "Skip for non cpp backend CPU as comments contain 'aten.pow' ",
+    )
     def test_torch_dynamo_codegen_pow(self):
         def pow(x):
             return x**2
@@ -2475,6 +2522,9 @@ class TensorSemanticsTests(torch._inductor.test_case.TestCase):
         self.assertTrue(len(counters["graph_break"]) > 0)
         counters.clear()
 
+    @torch._dynamo.config.patch(
+        capture_scalar_outputs=True, capture_dynamic_output_shape_ops=True
+    )
     def test_new_tensor_break(self):
         a = torch.tensor([1, 0, 0, 5])
 
@@ -2634,6 +2684,7 @@ def forward(self, L_x_ : torch.Tensor):
     return (b,)""",
             )
 
+    @torch._dynamo.config.patch(trace_autograd_ops=True)
     def test_requires_grad_on_intermediate_not_returned(self):
         def fn(x):
             y = x * 2
@@ -2648,6 +2699,7 @@ def forward(self, L_x_ : torch.Tensor):
         result = torch.compile(fn, fullgraph=True)(x.clone())
         self.assertEqual(ref, result)
 
+    @torch._dynamo.config.patch(trace_autograd_ops=True)
     def test_requires_grad_intermediate_backward_grad_used_in_compute(self):
         # Use the grad result in further computation within compile
         def fn(x):
@@ -2663,6 +2715,7 @@ def forward(self, L_x_ : torch.Tensor):
         result = torch.compile(fn, fullgraph=True)(x.clone())
         self.assertEqual(ref, result)
 
+    @torch._dynamo.config.patch(trace_autograd_ops=True)
     def test_requires_grad_intermediate_chunked_loss_backward(self):
         # Mirrors the TxtUnembedding pattern: forward compute, detach, make
         # new leaf, chunked loss with per-chunk backward, then propagate
@@ -2697,6 +2750,7 @@ def forward(self, L_x_ : torch.Tensor):
         # Verify grad propagated to the input
         self.assertEqual(x_ref.grad, x_test.grad)
 
+    @torch._dynamo.config.patch(trace_autograd_ops=True)
     def test_requires_grad_intermediate_backward_and_return_detached(self):
         # Returning a detached version of the tainted tensor is safe — detach()
         # strips requires_grad so AOTAutograd functionalization can't lose anything.
@@ -2716,6 +2770,7 @@ def forward(self, L_x_ : torch.Tensor):
         self.assertEqual(ref_out, compiled_out)
         self.assertFalse(compiled_out.requires_grad)
 
+    @torch._dynamo.config.patch(trace_autograd_ops=True)
     def test_requires_grad_intermediate_metadata_checks(self):
         # After requires_grad_() on an intermediate, requires_grad and is_leaf
         # should report correctly and be usable in control flow.
@@ -2733,6 +2788,7 @@ def forward(self, L_x_ : torch.Tensor):
         result = torch.compile(fn, fullgraph=True)(x.clone())
         self.assertEqual(ref, result)
 
+    @torch._dynamo.config.patch(trace_autograd_ops=True)
     def test_requires_grad_intermediate_side_effect_global(self):
         # requires_grad_() on intermediate, then store grad in a global
         saved = {}

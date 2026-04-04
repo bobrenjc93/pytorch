@@ -1,5 +1,5 @@
 # Owner(s): ["module: dynamo"]
-# ruff: noqa: F403,F405,F841
+# ruff: noqa: C416,F403,F405,F821,F841
 try:
     from .dynamo_test_common import *
 except ImportError:
@@ -215,6 +215,7 @@ class NumpyInteropTests(torch._inductor.test_case.TestCase):
             y = fn(x)
         self.assertTrue(y.flags.writeable)  # XXX: differs from numpy
 
+    @torch._dynamo.config.patch(capture_scalar_outputs=True)
     def test_numpy_tolist(self):
         def fn(x):
             return x.tolist()
@@ -366,6 +367,9 @@ class NumpyInteropTests(torch._inductor.test_case.TestCase):
         else:
             self.assertExpectedInline(str(cnts.frame_count), """2""")
 
+    @skipIfWindows(
+        msg="AssertionError: Object comparison failed: dtype('int64') != <class 'int'>"
+    )
     def test_numpy_with_builtin_type(self):
         x = np.random.rand(5)
 
@@ -427,6 +431,9 @@ class NumpyInteropTests(torch._inductor.test_case.TestCase):
         self.assertEqual(fn(x), compiled_fn(x))
         self.assertEqual(counter.frame_count, 2)
 
+    @skipIfWindows(
+        msg="AssertionError: The values for attribute 'dtype' do not match: torch.int32 != torch.int64."
+    )
     def test_trace_ndarray_frame_2(self):
         # no tensors/ndarray as inputs in the frame
         def fn(x):
@@ -471,6 +478,7 @@ class NumpyInteropTests(torch._inductor.test_case.TestCase):
         self.assertEqual(res, [np.array([0]), np.array([1]), np.array([2])])
         self.assertEqual(cnts.frame_count, 1)
 
+    @torch._dynamo.config.patch(recompile_limit=12)
     def test_dtypes_no_graphbreaks(self):
         dtypes = [
             # floats
@@ -501,6 +509,7 @@ class NumpyInteropTests(torch._inductor.test_case.TestCase):
 
             self.assertEqual(cnts.frame_count, 1)  # no graph break
 
+    @torch._dynamo.config.patch(use_numpy_random_stream=True)
     def test_numpy_random_config_to_numpy(self):
         @torch.compile(backend="eager")
         def fn():
@@ -565,6 +574,7 @@ class NumpyInteropTests(torch._inductor.test_case.TestCase):
 
         foo()
 
+    @unittest.expectedFailure
     def test_numpy_ufunc_out_graph_break(self):
         @torch.compile(backend="eager")
         def foo():

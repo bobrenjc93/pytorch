@@ -1,5 +1,5 @@
 # Owner(s): ["module: dynamo"]
-# ruff: noqa: F403,F405,F841
+# ruff: noqa: F403,F405,F841,PGH004
 try:
     from .dynamo_test_common import *
 except ImportError:
@@ -60,6 +60,7 @@ class CompileSemanticsTests(torch._inductor.test_case.TestCase):
         self.assertTrue(same(val4, correct1))
         self.assertEqual(counter.frame_count, 3)
 
+    @unittest.skipIf(not TEST_CUDA, "cuda needed")
     def test_assume_32_bit_indexing(self):
         @torch.compile(backend="inductor")
         def func(a, b):
@@ -370,6 +371,7 @@ graph():
         self.assertEqual(len(backend3.graphs), 1)
         self.assertEqual(len(backend.graphs), 0)
 
+    @torch._dynamo.config.patch(inline_torch_dispatch_torch_compile=False)
     def test_compile_non_infra_disabled_config(self):
         """Test that setting inline_torch_dispatch_torch_compile=False reverts to old behavior."""
         from torch.utils._python_dispatch import TorchDispatchMode
@@ -396,6 +398,7 @@ graph():
         # With the config disabled, compile should be skipped, so 0 graphs captured
         self.assertEqual(len(backend.graphs), 0)
 
+    @torch._dynamo.config.patch(accumulated_recompile_limit=1)
     def test_dynamo_disabled_in_custom_op_kernels(self):
         counters.clear()
 
@@ -545,6 +548,7 @@ graph():
         # TODO(jansel): FX doesn't support this, should add upstream support
         torch._dynamo.testing.standard_test(self, matmul_op1, 2, expected_ops=1)
 
+    @torch._dynamo.config.patch(only_allow_pt2_compliant_ops=True)
     def test_pt2_compliant_ops_are_allowed(self):
         with torch.library._scoped_library("mylib", "FRAGMENT") as lib:
             torch.library.define(
@@ -576,6 +580,7 @@ graph():
             optimized_g = torch.compile(f, backend=counts, fullgraph=True)
             _ = optimized_g(x)
 
+    @torch._dynamo.config.patch(only_allow_pt2_compliant_ops=True)
     def test_non_pt2_compliant_ops_graph_break(self):
         with torch.library._scoped_library("mylib", "FRAGMENT") as lib:
             torch.library.define("mylib::bar2", "(Tensor x) -> Tensor", lib=lib)
@@ -610,6 +615,7 @@ graph():
                 optimized_g = torch.compile(f, backend=counts, fullgraph=True)
                 y = optimized_g(x)
 
+    @torch._dynamo.config.patch(only_allow_pt2_compliant_ops=True)
     def test_pt2_compliant_overload(self):
         with torch.library._scoped_library("mylib", "FRAGMENT") as lib:
             torch.library.define(
@@ -660,6 +666,8 @@ graph():
             with self.assertRaisesRegex(torch._dynamo.exc.Unsupported, "failed to"):
                 y = optimized_h(x)
 
+    @torch._dynamo.config.patch(capture_scalar_outputs=True)
+    @torch._dynamo.config.patch(capture_dynamic_output_shape_ops=True)
     def test_cond_runtime_assert_generation(self):
         def fn(x):
             y = x.nonzero()  # unbacked binding u0
@@ -746,6 +754,7 @@ graph():
             expected_ops_dynamic=ifdynstaticdefault(1, 7),
         )
 
+    @torch._dynamo.config.patch(capture_scalar_outputs=True)
     def test_bound_shape_checks(self):
         def f1(x, y):
             b = x.item()
@@ -825,6 +834,9 @@ graph():
 
         self.assertTrue(same(ref, res))
 
+    @skipIfWindows(
+        msg="TODO(xuhancn): confirm, AssertionError: tensor([0.0290, 0.4019, 0.2598, 0.3666]) is not None"
+    )
     def test_release_input_memory(self):
         x = torch.rand([4])
         x_ref = weakref.ref(x)
@@ -840,6 +852,9 @@ graph():
         del x
         self.assertIs(x_ref(), None)
 
+    @skipIfWindows(
+        msg="TODO: (xuhancn) conform, AssertionError: Linear(in_features=10, out_features=10, bias=True) is not None"
+    )
     def test_release_module_memory(self):
         mod = torch.nn.Linear(10, 10)
         x = torch.rand([10, 10])
@@ -871,6 +886,7 @@ graph():
         self.assertIsNone(mod_ref(), None)
         self.assertIsNone(mod_weight_ref(), None)
 
+    @skipIfWindows(msg="TODO: (xuhancn) conform, AssertionError: False is not true")
     def test_release_scope_memory(self):
         def inner(y):
             y
@@ -1344,6 +1360,7 @@ graph():
         # reset logging state
         torch._logging.set_logs()
 
+    @torch._dynamo.config.patch(guard_nn_modules=True)
     def test_repro_graph_breaks_in__get_item_by_idx(self):
         class Mod(torch.nn.Module):
             def __init__(self) -> None:
@@ -1665,6 +1682,8 @@ graph():
         opt_fn = torch.compile(fn, backend="eager", fullgraph=True)
         self.assertEqual(opt_fn(), torch.tensor([2.0]))
 
+    @skipIfNotPy311
+    @unittest.skipIf(sys.version_info >= (3, 13), "feature landed in 3.13")
     def test_get_instruction_source_311(self):
         def f():
             # flake8: noqa
@@ -1864,6 +1883,9 @@ graph():
             loss = torch.compile(model, backend="aot_eager")(inp).sum()
             loss.backward()
 
+    @skipIfWindows(
+        msg="TypeError: sequence item 0: expected str instance, NoneType found"
+    )
     def test_funcname_cache(self):
         src = """\
 import torch
