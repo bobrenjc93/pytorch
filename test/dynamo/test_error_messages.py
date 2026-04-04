@@ -68,7 +68,7 @@ def _generic_ctx_mgr_stack_source_attribution() -> str:
 
 def _assert_failure_stack_source_attribution() -> str:
     if sys.version_info >= (3, 14):
-        caret = "                      ^^^^^^^^^^^^^^^\n"
+        caret = "                     ^^^^^^^^^^^^^^^\n"
     elif sys.version_info >= (3, 11):
         caret = "                   ^^^^^^^^^^^^^^^\n"
     else:
@@ -79,6 +79,19 @@ def _assert_failure_stack_source_attribution() -> str:
         '  File "test_error_messages.py", line N\n'
         "                with GenericCtxMgr():\n"
         f"{caret}"
+    )
+
+
+def _reconstruction_failure_gb_stack_source_attribution() -> str:
+    if sys.version_info >= (3, 11):
+        return ""
+
+    return (
+        "Stack variable source attribution:\n"
+        "  LazyVariableTracker(realized: SkipFunctionVariable()) originated from:\n"
+        '  File "test_error_messages.py", line N\n'
+        "                torch._dynamo.graph_break()\n"
+        "\n"
     )
 
 
@@ -769,10 +782,7 @@ User code traceback:
 """,
         )
 
-        self.assertExpectedInline(
-            post_munge(
-                munge_exc(records[1].getMessage(), suppress_suffix=True, skip=0)
-            ),
+        expected = (
             """\
 Graph break in user code at test_error_messages.py:N
 Graph Break Reason: Failed to handle graph break gracefully. Skipping the function and falling back to eager. Graph break encountered:
@@ -787,12 +797,22 @@ Reconstruction failure
 
  For more details about this graph break, please visit: https://meta-pytorch.github.io/compile-graph-break-site/gb/gb0092.html
 
+"""
+            + _reconstruction_failure_gb_stack_source_attribution()
+            + """\
 User code traceback:
   File "test_error_messages.py", line N, in test_reconstruction_failure_gb
     torch.compile(fn, backend="eager")()
   File "test_error_messages.py", line N, in fn
     torch._dynamo.graph_break()
-""",
+"""
+        )
+
+        self.assertExpectedInline(
+            post_munge(
+                munge_exc(records[1].getMessage(), suppress_suffix=True, skip=0)
+            ),
+            expected,
         )
 
     def test_faketensor_nyi(self):
