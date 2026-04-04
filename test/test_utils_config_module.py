@@ -1,6 +1,7 @@
 # Owner(s): ["module: unknown"]
 import os
 import pickle
+import threading
 import warnings
 from unittest.mock import patch
 
@@ -424,6 +425,45 @@ torch.testing._internal.fake_config_module3.e_func = _warnings.warn""",
         with self.assertRaises(AssertionError):
             with config.patch("does_not_exist"):
                 pass
+
+    def _assert_patch_reentrant_across_threads(self, fn):
+        barrier = threading.Barrier(2, timeout=5)
+        errors = []
+
+        def worker():
+            try:
+                fn(barrier)
+            except BaseException as e:
+                errors.append(repr(e))
+
+        threads = [threading.Thread(target=worker) for _ in range(2)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+        self.assertFalse(errors, f"concurrent patch usage failed: {errors}")
+        self.assertTrue(config.e_bool)
+
+    def test_patch_context_manager_is_reentrant_across_threads(self):
+        patcher = config.patch(e_bool=False)
+
+        def fn(barrier):
+            with patcher:
+                self.assertFalse(config.e_bool)
+                barrier.wait()
+                self.assertFalse(config.e_bool)
+
+        self._assert_patch_reentrant_across_threads(fn)
+
+    def test_patch_decorator_is_reentrant_across_threads(self):
+        @config.patch(e_bool=False)
+        def fn(barrier):
+            self.assertFalse(config.e_bool)
+            barrier.wait()
+            self.assertFalse(config.e_bool)
+
+        self._assert_patch_reentrant_across_threads(fn)
 
     def test_make_closur_patcher(self):
         revert = config._make_closure_patcher(e_bool=False)()
