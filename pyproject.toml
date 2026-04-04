@@ -306,6 +306,9 @@ select = [
 "test/dynamo/test_debug_utils.py" = [
     "UP037",
 ]
+"test/dynamo/test_misc.py" = [
+    "PGH004",
+]
 "test/jit/**" = [
     "PLR0133", # tests require this for JIT
     "PYI",
