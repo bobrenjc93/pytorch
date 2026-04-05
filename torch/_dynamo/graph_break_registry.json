@@ -980,6 +980,18 @@
       ]
     }
   ],
+  "GB8082": [
+    {
+      "Gb_type": "Fullgraph skip due to non-infra torch dispatch mode",
+      "Context": "exc.format_skip_frame_message(                             frame.f_code,                             \"non-infra torch dispatch mode present, this is not supported today in torch.compile\",                         )",
+      "Explanation": "fullgraph=True requires the frame to compile instead of silently falling back to eager.",
+      "Hints": [
+        "Remove the active TorchDispatchMode.",
+        "Set ignore_compile_internals() = True on the mode.",
+        "Use fullgraph=False."
+      ]
+    }
+  ],
   "GB7596": [
     {
       "Gb_type": "Indexing torch.Size with non-scalar tensor",
