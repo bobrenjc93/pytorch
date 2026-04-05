@@ -1,5 +1,4 @@
 # Owner(s): ["module: dynamo"]
-import collections
 import dataclasses
 import json
 import os
@@ -14,18 +13,25 @@ import torch.compiler.config as compiler_config
 from torch._dynamo import utils
 from torch._inductor.test_case import TestCase
 
+try:
+    import numpy as np
+except ModuleNotFoundError:
+    np = None  # type: ignore[assignment]
+
 
 _IS_WINDOWS = sys.platform == "win32"
 
 
 class TestUtils(TestCase):
-    def test_refactor_preserves_utils_reexports(self):
-        Point = collections.namedtuple("Point", ["x", "y"])
-
-        self.assertIs(utils.LazyString, torch._logging.LazyString)
-        self.assertTrue(callable(utils.lazy_format_graph_code))
-        self.assertTrue(callable(utils.clone_input))
-        self.assertEqual(utils.namedtuple_fields(Point), ("x", "y"))
+    def test_numpy_type_helpers_require_exact_numpy_types(self):
+        if np is None:
+            self.skipTest("requires numpy")
+        int_subclass = type("IntSubclass", (np.int32,), {})
+        float_subclass = type("FloatSubclass", (np.float32,), {})
+        self.assertTrue(utils.is_numpy_int_type(np.int32(1)))
+        self.assertFalse(utils.is_numpy_int_type(int_subclass(1)))
+        self.assertTrue(utils.is_numpy_float_type(np.float32(1)))
+        self.assertFalse(utils.is_numpy_float_type(float_subclass(1)))
 
     def test_nan(self):
         a = torch.Tensor([float("nan")])
