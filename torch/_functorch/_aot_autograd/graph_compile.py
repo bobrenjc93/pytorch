@@ -1272,18 +1272,22 @@ def maybe_inline_graph_saved_tensors_hooks(
 
     if mode == "donated":
         # collect_bw_donated_buffer_idxs requires inner_meta to have num_symints_saved_for_bw
-        inner_meta.num_symints_saved_for_bw = len(
-            [n for n in fw_outs_saved_for_bw if is_sym_node(n)]  # type: ignore[arg-type]
-        )
-        # Count tensors with no version counter check (used in tensors_saved_for_backwards_slice)
-        inner_meta.num_tensors_saved_with_no_vc_check = len(
-            [
-                n
-                # pyrefly: ignore [not-iterable]
-                for n in fw_outs_saved_for_bw
-                if isinstance(n, torch.fx.Node)
-                and n.meta.get("saved_tensor_with_no_vc_check", False)
-            ]
+        inner_meta.set_partitioned_meta(
+            num_symints_saved_for_bw=len(
+                [n for n in fw_outs_saved_for_bw if is_sym_node(n)]  # type: ignore[arg-type]
+            ),
+            # Count tensors with no version counter check
+            # (used in tensors_saved_for_backwards_slice).
+            num_tensors_saved_with_no_vc_check=len(
+                [
+                    n
+                    # pyrefly: ignore [not-iterable]
+                    for n in fw_outs_saved_for_bw
+                    if isinstance(n, torch.fx.Node)
+                    and n.meta.get("saved_tensor_with_no_vc_check", False)
+                ]
+            ),
+            num_opaque_objects_saved_for_bw=0,
         )
         bw_donated_idxs = collect_bw_donated_buffer_idxs(
             fw_module,
@@ -1850,12 +1854,6 @@ def _aot_stage2a_partition(
 
             num_symints_saved_for_bw = len(symint_outs_saved_for_bw)
             num_opaque_objects_saved_for_bw = len(opaque_outs_saved_for_bw)
-            fw_metadata.num_symints_saved_for_bw = num_symints_saved_for_bw
-            fw_metadata.num_opaque_objects_saved_for_bw = (
-                num_opaque_objects_saved_for_bw
-            )
-            inner_meta.num_symints_saved_for_bw = num_symints_saved_for_bw
-            inner_meta.num_opaque_objects_saved_for_bw = num_opaque_objects_saved_for_bw
 
             # See Note [Activations with no version counter checks in eager]
             # Count tensors saved with no version counter check.
@@ -1868,11 +1866,19 @@ def _aot_stage2a_partition(
                     "saved_tensor_with_no_vc_check", False
                 ):
                     num_tensors_saved_with_no_vc_check += 1
-            fw_metadata.num_tensors_saved_with_no_vc_check = (
-                num_tensors_saved_with_no_vc_check
+            fw_metadata.set_partitioned_meta(
+                num_symints_saved_for_bw=num_symints_saved_for_bw,
+                num_tensors_saved_with_no_vc_check=(
+                    num_tensors_saved_with_no_vc_check
+                ),
+                num_opaque_objects_saved_for_bw=num_opaque_objects_saved_for_bw,
             )
-            inner_meta.num_tensors_saved_with_no_vc_check = (
-                num_tensors_saved_with_no_vc_check
+            inner_meta.set_partitioned_meta(
+                num_symints_saved_for_bw=num_symints_saved_for_bw,
+                num_tensors_saved_with_no_vc_check=(
+                    num_tensors_saved_with_no_vc_check
+                ),
+                num_opaque_objects_saved_for_bw=num_opaque_objects_saved_for_bw,
             )
 
             if torch._functorch.config.donated_buffer:
