@@ -126,9 +126,7 @@ class BundledOutputCodeLoadable(InductorOutput[TOutputCode], Generic[TOutputCode
             )
             result = graph  # type: ignore[assignment]
             result.compile_region_name = (  # pyrefly: ignore[missing-attribute]
-                fx_config.get(
-                    "compile_region_name"
-                )
+                fx_config.get("compile_region_name")
             )
 
         # Run normal post compile
