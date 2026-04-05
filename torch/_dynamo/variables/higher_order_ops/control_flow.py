@@ -1,6 +1,9 @@
+from typing import TYPE_CHECKING
+
 from .common import (
     ConstantVariable,
     LazyVariableTracker,
+    ListVariable,
     OutputSpec,
     Proxy,
     Sequence,
@@ -30,6 +33,10 @@ from .common import (
     variables,
     warnings,
 )
+
+
+if TYPE_CHECKING:
+    from torch._dynamo.symbolic_convert import InstructionTranslator
 
 
 class CondHigherOrderVariable(TorchHigherOrderOperatorVariable):

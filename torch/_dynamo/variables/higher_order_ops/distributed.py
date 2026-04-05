@@ -1,3 +1,5 @@
+from typing import TYPE_CHECKING
+
 from .common import (
     Any,
     Generator,
@@ -16,6 +18,10 @@ from .common import (
     variables,
 )
 from .autograd import WrapHigherOrderVariable
+
+
+if TYPE_CHECKING:
+    from torch._dynamo.symbolic_convert import InstructionTranslator
 
 
 class ExecutorchCallDelegateHigherOrderVariable(TorchHigherOrderOperatorVariable):

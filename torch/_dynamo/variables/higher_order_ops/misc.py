@@ -1,3 +1,5 @@
+from typing import TYPE_CHECKING
+
 from .common import (
     Any,
     ConstDictVariable,
@@ -17,6 +19,10 @@ from .common import (
     torch,
     unimplemented,
 )
+
+
+if TYPE_CHECKING:
+    from torch._dynamo.symbolic_convert import InstructionTranslator
 
 
 class CallTorchbindHigherOrderVariable(TorchHigherOrderOperatorVariable):

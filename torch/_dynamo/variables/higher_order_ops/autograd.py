@@ -1,3 +1,5 @@
+from typing import TYPE_CHECKING
+
 from .common import (
     Any,
     AttrSource,
@@ -22,6 +24,7 @@ from .common import (
     _check_supported_callable_arg,
     _get_fake_value,
     _make_inlined,
+    add_hop_context,
     add_call_function,
     copy,
     discard_graph_changes,
@@ -41,6 +44,12 @@ from .common import (
     unimplemented,
     variables,
 )
+
+
+if TYPE_CHECKING:
+    from torch._dynamo.output_graph import SubgraphTracer
+    from torch._dynamo.symbolic_convert import InstructionTranslator
+    from .. import AutogradFunctionContextVariable
 
 
 class CustomFunctionHigherOrderOperatorVariable(TorchHigherOrderOperatorVariable):

@@ -35,7 +35,7 @@ import torch.fx
 import torch.nn
 from torch._dispatch.python import enable_python_dispatcher
 from torch._dynamo.utils import get_fake_value
-from torch._dynamo.variables.constant import CONSTANT_VARIABLE_NONE, ConstantVariable
+from torch._dynamo.variables.constant import CONSTANT_VARIABLE_NONE
 from torch._dynamo.variables.ctx_manager import RepararametrizeModuleContextVariable
 from torch._dynamo.variables.functions import UserFunctionVariable
 from torch._dynamo.variables.nn_module import UnspecializedNNModuleVariable
@@ -71,7 +71,10 @@ if TYPE_CHECKING:
     from torch._dynamo.output_graph import SubgraphTracer
     from torch._dynamo.symbolic_convert import InstructionTranslator
     from torch._subclasses.fake_tensor import FakeTensor, FakeTensorMode
-    from .. import AutogradFunctionContextVariable
+    from .control_flow import (
+        WhileLoopHigherOrderVariable,
+        WhileLoopStackOutputHigherOrderVariable,
+    )
 
 from collections.abc import Generator, Iterable
 from typing import ParamSpec, TypeVar

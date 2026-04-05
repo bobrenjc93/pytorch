@@ -1,3 +1,5 @@
+from typing import TYPE_CHECKING
+
 from .common import (
     Any,
     DictGetItemSource,
@@ -8,6 +10,7 @@ from .common import (
     TorchHigherOrderOperatorVariable,
     TupleVariable,
     UnspecializedNNModuleVariable,
+    Unsupported,
     VariableTracker,
     cast,
     discard_graph_changes,
@@ -20,6 +23,10 @@ from .common import (
     torch,
     unimplemented,
 )
+
+
+if TYPE_CHECKING:
+    from torch._dynamo.symbolic_convert import InstructionTranslator
 
 
 class FlexAttentionBackwardHighOrderVariable(TorchHigherOrderOperatorVariable):
