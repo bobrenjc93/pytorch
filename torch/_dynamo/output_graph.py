@@ -945,11 +945,31 @@ class GraphCompiler:
         self.compiler_fn: CompilerFn | None = compiler_fn
         self.register_finalizer_fns: list[Callable[[fx.GraphModule], None]] = []
 
+    @dataclass(frozen=True)
+    class RuntimeContext:
+        param_name_to_source: dict[str, Source] | None
+        source_to_user_stacks: dict[Source, list[traceback.StackSummary]]
+        dynamo_compile_id: CompileId | None
+        has_user_defined_allowed_in_graph: bool
+        co_fields: dict[str, object]
+        root_tx: "InstructionTranslatorBase | None"
+
     @property
     def root_tx(self) -> "InstructionTranslatorBase":
         root_tx = self.output_graph.root_tx
         assert root_tx is not None
         return root_tx
+
+    def runtime_context(self) -> RuntimeContext:
+        output_graph = self.output_graph
+        return self.RuntimeContext(
+            param_name_to_source=output_graph.param_name_to_source,
+            source_to_user_stacks=output_graph.source_to_user_stacks,
+            dynamo_compile_id=output_graph.dynamo_compile_id,
+            has_user_defined_allowed_in_graph=output_graph.has_user_defined_allowed_in_graph,
+            co_fields=output_graph.co_fields,
+            root_tx=output_graph.root_tx,
+        )
 
     def compile_and_call_fx_graph(
         self,
@@ -1170,6 +1190,7 @@ class GraphCompiler:
             if specializations := old_fake_mode.shape_env.specializations:
                 specialization_guards = []
                 specialization_cache: dict[Specialization, Callable[[Any], Any]] = {}
+                runtime_context = self.runtime_context()
                 shape_env = output_graph.shape_env
                 tracing_context = output_graph.tracing_context
                 sources = [a.source for a in output_graph.graphargs]
@@ -1219,7 +1240,11 @@ class GraphCompiler:
                                 example_inputs: list[Tensor] = list(args)
                                 with tracing(tracing_context):
                                     specialization_cache[specialization] = (
-                                        self.call_user_compiler(gm, example_inputs)
+                                        self.call_user_compiler(
+                                            gm,
+                                            example_inputs,
+                                            runtime_context=runtime_context,
+                                        )
                                     )
 
                             return specialization_cache[specialization](*args, **kwargs)
@@ -1272,7 +1297,11 @@ class GraphCompiler:
             return cg.get_instructions()
 
     def call_user_compiler(
-        self, gm: fx.GraphModule, example_inputs: list[Tensor]
+        self,
+        gm: fx.GraphModule,
+        example_inputs: list[Tensor],
+        *,
+        runtime_context: RuntimeContext | None = None,
     ) -> CompiledFn:
         with dynamo_timed(
             "OutputGraph.call_user_compiler",
@@ -1282,12 +1311,18 @@ class GraphCompiler:
             waitcounter_name_override="compile_aot_autograd",
             dynamo_compile_column_us="aot_autograd_cumulative_compile_time_us",
         ):
-            return self._call_user_compiler(gm, example_inputs)
+            return self._call_user_compiler(
+                gm, example_inputs, runtime_context=runtime_context
+            )
 
     def _call_user_compiler(
-        self, gm: fx.GraphModule, example_inputs: list[Tensor]
+        self,
+        gm: fx.GraphModule,
+        example_inputs: list[Tensor],
+        *,
+        runtime_context: RuntimeContext | None = None,
     ) -> CompiledFn:
-        output_graph = self.output_graph
+        runtime_context = runtime_context or self.runtime_context()
         assert self.compiler_fn is not None
         tot = 0
         placeholders = []
@@ -1305,20 +1340,20 @@ class GraphCompiler:
                 pl._dynamo_source = arg.source
 
         # NOTE: can't move these into meta: https://github.com/pytorch/pytorch/issues/141640
-        gm._param_name_to_source = output_graph.param_name_to_source  # type: ignore[assignment]
-        gm._source_to_user_stacks = output_graph.source_to_user_stacks  # type: ignore[assignment]
+        gm._param_name_to_source = runtime_context.param_name_to_source  # type: ignore[assignment]
+        gm._source_to_user_stacks = runtime_context.source_to_user_stacks  # type: ignore[assignment]
 
         # Check for per-graph backend override (for debugging/bisecting)
         compiler_fn = (
             get_backend_override_for_compile_id(
-                output_graph.dynamo_compile_id, config.debug_backend_override
+                runtime_context.dynamo_compile_id, config.debug_backend_override
             )
             or self.compiler_fn
         )
 
         # Check for per-graph inductor config override (for debugging/bisecting)
         inductor_config_override = get_inductor_config_override_for_compile_id(
-            output_graph.dynamo_compile_id, config.debug_inductor_config_override
+            runtime_context.dynamo_compile_id, config.debug_inductor_config_override
         )
         if inductor_config_override:
             compiler_fn = _wrap_with_inductor_config(
@@ -1347,15 +1382,17 @@ class GraphCompiler:
         except (TensorifyScalarRestartAnalysis, ShortenTraceback):
             raise
         except exceptions_allowed_to_be_fallback as e:
-            if output_graph.has_user_defined_allowed_in_graph:
+            if runtime_context.has_user_defined_allowed_in_graph:
                 raise BackendCompilerFailed(
                     self.compiler_fn, e, inspect.currentframe()
                 ).with_traceback(e.__traceback__) from None
+            root_tx = runtime_context.root_tx
+            assert root_tx is not None
             unimplemented_with_warning(
                 e,
-                self.root_tx.f_code,
+                root_tx.f_code,
                 gb_type="Backend compiler exception",
-                context=f"Backend: {name}\nException:{str(e)}\nTraceback:\n{self.root_tx.format_frame_summary()}",
+                context=f"Backend: {name}\nException:{str(e)}\nTraceback:\n{root_tx.format_frame_summary()}",
                 explanation=f"Backend compiler `{name}` failed with {str(e)}. Adding a graph break.",
                 hints=[
                     "Report an issue to the backend compiler repo.",
@@ -1374,7 +1411,7 @@ class GraphCompiler:
             "dynamo",
             "OutputGraph.call_user_compiler",
             {
-                **output_graph.co_fields,
+                **runtime_context.co_fields,
                 "op_count": tot,
                 "node_count": len(gm.graph.nodes),
                 "input_count": len(placeholders),

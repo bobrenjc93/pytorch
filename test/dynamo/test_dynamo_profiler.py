@@ -6,9 +6,11 @@ These tests verify that the dynamo_profiler config flag and related profiling
 infrastructure work correctly for tracking where Dynamo spends time during compilation.
 """
 
+import gc
 import os
 import pstats
 import tempfile
+import weakref
 
 import torch
 import torch._dynamo.test_case
@@ -16,6 +18,54 @@ import torch._dynamo.testing
 
 
 class DynamoProfilerTests(torch._dynamo.test_case.TestCase):
+    def test_graph_compiler_runtime_context_survives_output_graph_teardown(self):
+        from torch.fx import Graph, GraphModule
+
+        from torch._dynamo.output_graph import GraphCompiler
+        from torch._dynamo.source import LocalSource
+
+        class FakeRootTx:
+            f_code = DynamoProfilerTests.test_function_trace_timing.__code__
+
+            def format_frame_summary(self) -> str:
+                return "fake frame summary"
+
+        class FakeOutputGraph:
+            def __init__(self) -> None:
+                source = LocalSource("x")
+                self.param_name_to_source = {"x": source}
+                self.source_to_user_stacks = {source: []}
+                self.dynamo_compile_id = None
+                self.has_user_defined_allowed_in_graph = False
+                self.co_fields = {"co_name": "fake", "co_filename": __file__}
+                self.root_tx = FakeRootTx()
+
+        output_graph = FakeOutputGraph()
+        compiler = GraphCompiler(output_graph, lambda gm, _: gm.forward)
+        runtime_context = compiler.runtime_context()
+
+        graph = Graph()
+        x = graph.placeholder("x")
+        x._dynamo_source = LocalSource("x")
+        graph.output(x)
+        gm = GraphModule(torch.nn.Module(), graph)
+
+        output_graph_ref = weakref.ref(output_graph)
+        del output_graph
+        gc.collect()
+        self.assertIsNone(output_graph_ref())
+
+        compiled = compiler.call_user_compiler(
+            gm, [torch.randn(2)], runtime_context=runtime_context
+        )
+        result = compiled(torch.ones(2))
+
+        self.assertIs(gm._param_name_to_source, runtime_context.param_name_to_source)
+        self.assertIs(
+            gm._source_to_user_stacks, runtime_context.source_to_user_stacks
+        )
+        self.assertTrue(torch.equal(result, torch.ones(2)))
+
     def test_bytecode_tracing_stop_captures_root_tx_before_close(self):
         from torch._dynamo.output_graph import BytecodeEmitter
 
