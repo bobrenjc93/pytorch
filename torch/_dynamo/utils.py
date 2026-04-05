@@ -20,29 +20,21 @@ import contextlib
 import copy
 import dataclasses
 import datetime
-import dis
 import enum
 import functools
-import gc
-import importlib
 import inspect
 import itertools
 import json
-import linecache
 import logging
-import math
 import operator
 import os
 import re
 import sys
-import textwrap
 import threading
 import time
-import traceback
 import types
 import typing
 import uuid
-import warnings
 import weakref
 from collections import Counter, OrderedDict
 from contextlib import AbstractContextManager, contextmanager
@@ -51,7 +43,6 @@ from functools import lru_cache
 from types import CodeType, MethodWrapperType
 from typing import (
     Any,
-    cast,
     ClassVar,
     Generic,
     Literal,
@@ -70,14 +61,10 @@ import torch.utils._pytree as pytree
 from torch import fx
 from torch._C import (
     _instruction_counter,
-    _len_torch_function_stack,
-    _pop_torch_function_stack,
-    _push_on_torch_function_stack,
 )
 from torch._dispatch.python import enable_python_dispatcher
 from torch._dynamo.metrics_context import MetricsContext, RuntimeMetricsContext
-from torch._guards import CompileId, Source, TracingContext
-from torch._subclasses.meta_utils import is_sparse_compressed
+from torch._guards import CompileId, TracingContext
 from torch._utils_internal import (
     justknobs_check,
     log_chromium_event_internal,
@@ -85,14 +72,96 @@ from torch._utils_internal import (
     record_chromium_event_internal,
     signpost_event,
 )
-from torch.fx._utils import _format_graph_code, lazy_format_graph_code
+from torch.fx._utils import lazy_format_graph_code  # noqa: F401
 from torch.monitor import _WaitCounter
 from torch.nn.modules.lazy import LazyModuleMixin
 from torch.utils._ordered_set import OrderedSet
-from torch.utils._python_dispatch import is_traceable_wrapper_subclass
 from torch.utils._triton import has_triton, has_triton_package
-from torch.utils.hooks import RemovableHandle
 
+from ._utils.bytecode import (  # noqa: F401
+    _Anchors,
+    _extract_anchors_from_expr,
+    _fix_offset,
+    get_instruction_source_311,
+)
+from ._utils.compare import (  # noqa: F401
+    bitwise_same,
+    is_numpy_float_type,
+    is_numpy_int_type,
+    is_numpy_ndarray,
+    rmse,
+    same,
+)
+from ._utils.nn_module import (  # noqa: F401
+    GmWrapper,
+    TensorStaticReason,
+    all_hook_names,
+    backward_hook_names,
+    class_has_getattribute,
+    does_not_override_dict_iter_methods,
+    flatten_graph_inputs,
+    format_bytecode,
+    forward_hook_names,
+    fqn,
+    get_custom_getattr,
+    get_locals_to_steal,
+    import_submodule,
+    invalid_removeable_handle,
+    lazy_format_graph_tabular,
+    nn_module_get_all_hooks,
+    nn_module_has_global_hooks,
+    nn_module_proxy,
+    nnmodule_has_hooks,
+    object_has_getattribute,
+    object_setattr_ignore_descriptor,
+    set_locals_to_steal,
+    state_dict_hook_names,
+    tensor_always_has_static_shape,
+    tensor_static_reason_to_message,
+)
+from ._utils.runtime import (  # noqa: F401
+    Lit,
+    _breakpoint_for_c_dynamo,
+    _disable_saved_tensors_hooks_during_tracing,
+    _extract_tensor_dict,
+    build_event,
+    build_stream,
+    call_size,
+    call_storage_offset,
+    call_stride,
+    clear_torch_function_mode_stack,
+    get_current_stream,
+    get_torch_function_mode_stack,
+    get_torch_function_mode_stack_at,
+    get_traced_code,
+    is_parameter_freezing,
+    record_pregraph_bytecode_enter,
+    record_pregraph_bytecode_exit,
+    set_torch_function_mode_stack,
+    strip_color_from_string,
+    verify_guard_fn_signature,
+    warn_once,
+    warn_once_cache,
+)
+from ._utils.tensor import (  # noqa: F401
+    _copy_dynamo_attr,
+    check_is_cuda,
+    checkpoint_params,
+    clone_input,
+    clone_inputs,
+    clone_tensor,
+    copy_dynamo_tensor_attributes,
+    getfile,
+    is_jit_model,
+    is_namedtuple,
+    is_namedtuple_cls,
+    namedtuple_fields,
+    nothing,
+    preserve_rng_state,
+    skip_frame_if_in_functorch_mode,
+    timed,
+    torchscript,
+)
 from .graph_utils import _get_flat_args
 
 
@@ -106,11 +175,9 @@ if typing.TYPE_CHECKING:
         Iterator,
         KeysView,
         Mapping,
-        Sequence,
         ValuesView,
     )
 
-    from torch._dynamo.bytecode_transformation import Instruction
     from torch._dynamo.replay_record import ExecutionRecord
     from torch._dynamo.symbolic_convert import (
         InstructionTranslator,
@@ -130,7 +197,7 @@ try:
     import torch._logging
     import torch._numpy as tnp
     from torch._guards import detect_fake_mode  # noqa: F401
-    from torch._logging import LazyString
+    from torch._logging import LazyString  # noqa: F401
 
     from . import config
 
@@ -797,7 +864,7 @@ def dynamo_timed(
 
     cx_mgrs: list[typing.Any] = [compile_time_record_function(f"{key} (dynamo_timed)")]
     if log_waitcounter:
-        wc_name = waitcounter_name_override if waitcounter_name_override else key
+        wc_name = waitcounter_name_override or key
         cx_mgrs.append(_WaitCounter(f"pytorch.wait_counter.{wc_name}").guard())
 
     is_compile_time = torch._guards.CompileContext.current_compile_id() is not None
@@ -1055,10 +1122,6 @@ def hashable(x: Any) -> bool:
         return False
 
 
-def nothing(*args: Any, **kwargs: Any) -> None:
-    pass
-
-
 class ExactWeakKeyDictionary:
     """Similar to weakref.WeakKeyDictionary, but use `is`/`id` rather than `==` to compare equality"""
 
@@ -1253,39 +1316,6 @@ def is_typing(value: Any) -> bool:
     )
 
 
-def is_numpy_int_type(value: Any) -> bool:
-    if not np:
-        return False
-
-    return istype(
-        value,
-        (
-            np.int8,
-            np.int16,
-            np.int32,
-            np.int64,
-            np.uint8,
-            np.uint16,
-            np.uint32,
-            np.uint64,
-        ),
-    )
-
-
-def is_numpy_float_type(value: Any) -> bool:
-    if not np:
-        return False
-
-    return istype(
-        value,
-        (
-            np.float16,
-            np.float32,
-            np.float64,
-        ),
-    )
-
-
 @overload
 def is_lru_cache_wrapped_function(
     value: Callable[..., T],
@@ -1395,13 +1425,6 @@ def unwrap_with_attr_name_if_wrapper(fn: Any) -> tuple[Any, str | None]:
     else:
         attr_name = None
     return fn, attr_name
-
-
-def is_numpy_ndarray(value: Any) -> TypeGuard[np.ndarray]:  # type: ignore[type-arg]
-    if not np:
-        return False
-
-    return istype(value, np.ndarray)
 
 
 def istensor(obj: Any) -> bool:
@@ -2349,334 +2372,6 @@ class CleanupManager(ExactWeakKeyDictionary):
 CleanupManager.instance = CleanupManager()
 
 
-def clone_tensor(x: torch.Tensor) -> torch.Tensor:
-    """Clone the tensor and its gradient"""
-    y = x.clone().requires_grad_(x.requires_grad)
-    if x.is_leaf and x.grad is not None:
-        y.grad = x.grad.clone()
-    return y
-
-
-def _copy_dynamo_attr(src: torch.Tensor, dst: torch.Tensor, attr: str) -> None:
-    """Copy a single dynamo attribute from src to dst, or remove it from dst if src doesn't have it."""
-    if hasattr(src, attr):
-        setattr(dst, attr, getattr(src, attr).copy())
-    elif hasattr(dst, attr):
-        delattr(dst, attr)
-
-
-def copy_dynamo_tensor_attributes(src: torch.Tensor, dst: torch.Tensor) -> None:
-    """
-    Copy dynamo-specific tensor attributes from src to dst.
-    These attributes are used for dynamic shape marking and must be preserved
-    when cloning or casting tensors. If src doesn't have an attribute but dst does,
-    the attribute is removed from dst.
-    """
-    _copy_dynamo_attr(src, dst, "_dynamo_dynamic_indices")
-    _copy_dynamo_attr(src, dst, "_dynamo_unbacked_indices")
-    _copy_dynamo_attr(src, dst, "_dynamo_hint_overrides")
-    _copy_dynamo_attr(src, dst, "_dynamo_shape_ids")
-    _copy_dynamo_attr(src, dst, "_dynamo_strict_unbacked_indices")
-    _copy_dynamo_attr(src, dst, "_dynamo_weak_dynamic_indices")
-
-
-def clone_input(x: torch.Tensor, *, dtype: torch.dtype | None = None) -> torch.Tensor:
-    """copy while preserving strides"""
-    # TODO: this is questionable
-    if is_fake(x):
-        # this func fails on fake tensors in __torch_dispatch__
-        return x
-
-    def torch_clone(x: torch.Tensor) -> torch.Tensor:
-        y = torch.clone(x)
-        if x.is_leaf:
-            y.requires_grad_(x.requires_grad)
-        if x.is_leaf and x.grad is not None:
-            y.grad = clone_input(x.grad, dtype=dtype)
-        copy_dynamo_tensor_attributes(x, y)
-        return y
-
-    with torch.no_grad():
-        if x.device.type == "xla":
-            # Access data_ptr() for a xla tensor will cause crash
-            return torch_clone(x)
-
-        # Handle sparse storage (no stride).
-        if x.layout is torch.sparse_coo:
-            return torch.sparse_coo_tensor(
-                torch_clone(x._indices()),
-                torch_clone(x._values()),
-                x.shape,
-                is_coalesced=x.is_coalesced(),
-            )
-        elif is_sparse_compressed(x):
-            if x.layout in {torch.sparse_csr, torch.sparse_bsr}:
-                compressed_indices = x.crow_indices()
-                plain_indices = x.col_indices()
-            else:
-                compressed_indices = x.ccol_indices()
-                plain_indices = x.row_indices()
-            return torch.sparse_compressed_tensor(
-                torch_clone(compressed_indices),
-                torch_clone(plain_indices),
-                torch_clone(x.values()),
-                x.shape,
-                layout=x.layout,
-            )
-        elif is_traceable_wrapper_subclass(x):
-            # Questionable - but this is required to not fail executorch related
-            # torchao tests.
-            return torch_clone(x)
-
-        needed_size = sum(
-            (shape - 1) * stride for shape, stride in zip(x.size(), x.stride())
-        )
-        if x.is_quantized:
-            result = torch.empty_quantized((needed_size + 32,), x)
-        else:
-            result = torch.empty(
-                needed_size + 32, dtype=dtype or x.dtype, device=x.device
-            )
-        cache_line_offset = (
-            (x.data_ptr() - result.data_ptr()) % 32
-        ) // x.element_size()
-        result.as_strided_(x.size(), x.stride(), cache_line_offset)
-        try:
-            result.copy_(x.clone())
-            if x.is_leaf:
-                result.requires_grad_(x.requires_grad)
-            if x.is_leaf and x.grad is not None:
-                result.grad = clone_input(x.grad, dtype=dtype)
-        except RuntimeError:
-            # RuntimeError: unsupported operation: more than one element of the written-to
-            # tensor refers to a single memory location. Please clone() the tensor before
-            # performing the operation.
-            return torch_clone(x)
-        copy_dynamo_tensor_attributes(x, result)
-        return result
-
-
-@overload
-def clone_inputs(
-    example_inputs: dict[str, T | tuple[T, ...]],
-) -> dict[str, list[T]]: ...
-
-
-@overload
-def clone_inputs(example_inputs: Sequence[T]) -> list[T]: ...
-
-
-def clone_inputs(example_inputs: Any) -> Any:
-    res: dict[str, Any] | list[Any]
-    if type(example_inputs) is dict:
-        res = dict(example_inputs)
-        for key, value in res.items():
-            if isinstance(value, tuple):
-                res[key] = clone_inputs(value)
-            else:
-                assert isinstance(value, torch.Tensor), type(value)
-                res[key] = clone_input(value)
-        return res
-
-    res = list(example_inputs)
-    for i in range(len(res)):
-        if isinstance(res[i], torch.Tensor):
-            res[i] = clone_input(res[i])
-    return res
-
-
-def skip_frame_if_in_functorch_mode(val: torch.Tensor) -> None:
-    try:
-        val.data_ptr()  # will throw for functorch tensors
-    except RuntimeError as e:
-        from .exc import unimplemented
-
-        # This will be GradTrackingTensor/BatchedTensor/etc
-        functorch_subclass_name = re.sub(r"\(.*", "", repr(val))
-
-        unimplemented(
-            gb_type="skip frame due to being in functorh mode",
-            context="",
-            explanation=f"torch.compile cannot be run in context: {functorch_subclass_name}. Skipping frame.",
-            hints=[],
-            from_exc=e,
-            skip_frame=True,
-        )
-
-
-@contextmanager
-def preserve_rng_state() -> Generator[None, None, None]:
-    disable_functorch = torch._C._DisableFuncTorch
-    disable_current_modes = torch.utils._python_dispatch._disable_current_modes
-    with disable_current_modes(), disable_functorch():
-        rng_state = torch.clone(torch.random.get_rng_state())
-        skip_frame_if_in_functorch_mode(rng_state)
-        if torch.cuda.is_available():
-            cuda_rng_state = torch.clone(torch.cuda.get_rng_state())
-        if torch.xpu.is_available():
-            xpu_rng_state = torch.clone(torch.xpu.get_rng_state())
-    try:
-        yield
-    finally:
-        with torch.utils._python_dispatch._disable_current_modes():
-            torch.random.set_rng_state(rng_state)
-            if torch.cuda.is_available():
-                torch.cuda.set_rng_state(cuda_rng_state)  # type: ignore[possibly-undefined]
-            if torch.xpu.is_available():
-                torch.xpu.set_rng_state(xpu_rng_state)  # type: ignore[possibly-undefined]
-
-
-def is_jit_model(
-    model0: Any,
-) -> TypeIs[
-    torch.jit._trace.TopLevelTracedModule
-    | torch.jit._script.RecursiveScriptModule
-    | torch.jit.ScriptFunction[Any, Any]
-    | torch.jit.ScriptModule
-]:
-    return isinstance(
-        model0,
-        (
-            torch.jit._trace.TopLevelTracedModule,
-            torch.jit._script.RecursiveScriptModule,
-            torch.jit.ScriptFunction,
-            torch.jit.ScriptModule,
-        ),
-    )
-
-
-def torchscript(model: Any, example_inputs: Any, verbose: bool = False) -> Any:
-    if is_jit_model(model):
-        # already done?
-        return model
-
-    try:
-        return torch.jit.trace(model, example_inputs)
-    except Exception:
-        try:
-            return torch.jit.script(model)
-        except Exception:
-            if verbose:
-                log.exception("jit error")
-            else:
-                log.error("Both torch.jit.trace and torch.jit.script failed")
-    return None
-
-
-def getfile(obj: Any) -> str | None:
-    try:
-        return inspect.getfile(obj)
-    except (TypeError, OSError):
-        return None
-
-
-def is_namedtuple(obj: Any) -> bool:
-    """Test if an object is a namedtuple or a torch.return_types.* quasi-namedtuple"""
-    return is_namedtuple_cls(type(obj))
-
-
-def is_namedtuple_cls(cls: Any) -> bool:
-    """Test if an object is a namedtuple or a (torch.return_types|torch.autograd.forward_ad).* quasi-namedtuple"""
-    try:
-        if issubclass(cls, tuple):
-            module = getattr(cls, "__module__", None)
-            if module in ("torch.return_types", "torch.autograd.forward_ad"):
-                return True
-            if isinstance(getattr(cls, "_fields", None), tuple) and callable(
-                getattr(cls, "_make", None)
-            ):
-                # The subclassing style namedtuple can have an extra base `typing.Generic`
-                bases = tuple(t for t in cls.__bases__ if t is not Generic)
-                if bases == (tuple,):
-                    # This is a namedtuple type directly created by `collections.namedtuple(...)`
-                    return True
-                if bases and any(
-                    (
-                        # Subclass of namedtuple
-                        is_namedtuple_cls(t)
-                        # For subclasses of namedtuple, the __new__ method should not be customized
-                        and cls.__new__ is t.__new__
-                    )
-                    for t in bases
-                ):
-                    return True
-    except TypeError:
-        pass
-    return False
-
-
-@functools.lru_cache(1)
-def namedtuple_fields(cls: type) -> tuple[str, ...]:
-    """Get the fields of a namedtuple or a torch.return_types.* quasi-namedtuple"""
-    if cls is slice:
-        return ("start", "stop", "step")
-
-    assert issubclass(cls, tuple)
-    if hasattr(cls, "_fields"):
-        # normal namedtuples
-        return cls._fields
-
-    @dataclasses.dataclass
-    class Marker:
-        index: int
-
-    # frustrating ones e.g. torch.return_types.max
-    assert cls.__module__ == "torch.return_types"
-    obj = cls(map(Marker, range(cls.n_fields)))  # type: ignore[attr-defined]
-    fields: dict[str, int] = {}
-    for name in dir(obj):
-        if name[0] != "_" and isinstance(getattr(obj, name), Marker):
-            fields[name] = getattr(obj, name).index
-    assert len(fields) == cls.n_fields  # type: ignore[attr-defined]
-    return tuple(sorted(fields, key=fields.get))  # type: ignore[arg-type]
-
-
-def checkpoint_params(gm: torch.fx.GraphModule) -> Callable[[], None]:
-    with torch.no_grad():
-        rng_state = torch.clone(torch.random.get_rng_state())
-        if torch.cuda.is_available():
-            cuda_rng_state = torch.clone(torch.cuda.get_rng_state())
-        saved_state = [
-            (param, param._version, torch.clone(param))
-            # pyrefly: ignore [bad-argument-type]
-            for param in itertools.chain(gm.parameters(), gm.buffers())
-        ]
-
-    def restore() -> None:
-        with torch.no_grad():
-            torch.random.set_rng_state(rng_state)
-            if torch.cuda.is_available():
-                torch.cuda.set_rng_state(cuda_rng_state)
-            for param, version, original_value in saved_state:
-                if param._version != version:
-                    param.copy_(original_value)
-
-    return restore
-
-
-def timed(
-    model: Any, example_inputs: Iterable[Any], times: int = 1
-) -> tuple[Any, float]:
-    if torch.cuda.is_available():
-        synchronize = torch.cuda.synchronize
-    else:
-        synchronize = nothing
-
-    synchronize()
-    gc.collect()
-    torch.manual_seed(1337)
-    t0 = time.perf_counter()
-    for _ in range(times):
-        result = model(*example_inputs)
-        synchronize()
-    t1 = time.perf_counter()
-    return result, t1 - t0  # type: ignore[possibly-undefined]
-
-
-def check_is_cuda(gm: torch.fx.GraphModule, example_inputs: Iterable[Any]) -> bool:
-    return all(x.is_cuda for x in itertools.chain(example_inputs, gm.parameters(True)))
-
-
 @lru_cache(32)
 def rot_n_helper(n: int) -> Callable[..., Any]:
     assert n > 1
@@ -3247,357 +2942,6 @@ def deepcopy_to_fake_tensor(
         return wrap_fake_exception(lambda: copy.deepcopy(obj))
 
 
-def rmse(ref: torch.Tensor, res: torch.Tensor) -> torch.Tensor:
-    """
-    Calculate root mean squared error
-    """
-    return torch.sqrt(torch.mean(torch.square(ref - res)))
-
-
-def bitwise_same(ref: Any, res: Any, equal_nan: bool = False) -> bool:
-    return same(
-        ref,
-        res,
-        tol=0.0,
-        equal_nan=equal_nan,
-    )
-
-
-def same(
-    ref: Any,
-    res: Any,
-    fp64_ref: Any = None,
-    cos_similarity: bool = False,
-    tol: float = 1e-4,
-    equal_nan: bool = False,
-    exact_dtype: bool = True,
-    relax_numpy_equality: bool = False,
-    ignore_non_fp: bool = False,
-    log_error: Callable[..., None] = log.error,
-    use_larger_multiplier_for_smaller_tensor: bool = False,
-    force_max_multiplier: bool = False,
-    use_iou_for_bool: bool = False,
-    iou_threshold: float = 0.99,
-) -> bool:
-    """Check correctness to see if ref and res match"""
-    if fp64_ref is None:
-        fp64_ref = ref
-    if isinstance(
-        ref, (list, tuple, collections.deque, torch.nn.ParameterList, torch.Size)
-    ):
-        assert isinstance(res, (list, tuple, collections.deque)), (
-            f"type mismatch {type(ref)} {type(res)}"
-        )
-        if len(ref) != len(res):
-            log_error("Length mismatch")
-            return False
-        return len(ref) == len(res) and all(
-            same(
-                ai,
-                bi,
-                fp64_refi,
-                cos_similarity,
-                tol,
-                equal_nan,
-                exact_dtype,
-                relax_numpy_equality,
-                ignore_non_fp,
-                log_error=log_error,
-                use_larger_multiplier_for_smaller_tensor=use_larger_multiplier_for_smaller_tensor,
-                force_max_multiplier=force_max_multiplier,
-                use_iou_for_bool=use_iou_for_bool,
-                iou_threshold=iou_threshold,
-            )
-            for ai, bi, fp64_refi in zip(ref, res, fp64_ref)
-        )
-    elif type(ref).__name__ == "QuestionAnsweringModelOutput":
-        # This skips checking accuracy for start_logits/end_logits.
-        # Tentatively, start_logits/end_logits appear to be very prone to
-        # inaccuracies and is somewhat subsumed by checking the loss.
-        return same(
-            ref.loss,
-            res.loss,
-            fp64_ref.loss,
-            cos_similarity,
-            tol,
-            equal_nan,
-            exact_dtype,
-            relax_numpy_equality,
-            ignore_non_fp,
-            log_error=log_error,
-            use_larger_multiplier_for_smaller_tensor=use_larger_multiplier_for_smaller_tensor,
-            force_max_multiplier=force_max_multiplier,
-            use_iou_for_bool=use_iou_for_bool,
-            iou_threshold=iou_threshold,
-        )
-    elif isinstance(ref, dict):
-        assert isinstance(res, dict)
-        assert set(ref.keys()) == set(res.keys()), (
-            f"keys mismatch {set(ref.keys())} == {set(res.keys())}"
-        )
-        for k in sorted(ref.keys()):
-            if not (
-                same(
-                    ref[k],
-                    res[k],
-                    fp64_ref[k],
-                    cos_similarity=cos_similarity,
-                    tol=tol,
-                    equal_nan=equal_nan,
-                    exact_dtype=exact_dtype,
-                    relax_numpy_equality=relax_numpy_equality,
-                    ignore_non_fp=ignore_non_fp,
-                    log_error=log_error,
-                    use_larger_multiplier_for_smaller_tensor=use_larger_multiplier_for_smaller_tensor,
-                    force_max_multiplier=force_max_multiplier,
-                    use_iou_for_bool=use_iou_for_bool,
-                    iou_threshold=iou_threshold,
-                )
-            ):
-                log_error("Accuracy failed for key name %s", k)
-                return False
-        return True
-    elif isinstance(ref, set):
-        assert isinstance(res, set)
-        assert set(ref) == set(res), f"elements mismatch {set(ref)} == {set(res)}"
-        return True
-    elif isinstance(ref, (torch.Tensor, float)):
-        assert not isinstance(ref, torch._subclasses.FakeTensor)
-        assert not isinstance(res, torch._subclasses.FakeTensor)
-
-        def to_tensor(t: Any) -> torch.Tensor:
-            return t if isinstance(t, torch.Tensor) else torch.tensor(t)
-
-        ref, res, fp64_ref = (to_tensor(val) for val in (ref, res, fp64_ref))
-
-        if ref.is_sparse:
-            assert res.is_sparse
-            ref = ref.to_dense()
-            res = res.to_dense()
-        assert isinstance(res, torch.Tensor), f"type mismatch {type(ref)} {type(res)}"
-        if exact_dtype:
-            if ref.dtype != res.dtype:
-                log_error("dtype mismatch %s, %s", ref.dtype, res.dtype)
-                return False
-            if ref.dtype == torch.bool:
-                if ignore_non_fp:
-                    return True
-                if use_iou_for_bool:
-                    # Use IoU (Intersection over Union) metric for boolean mask comparison.
-                    # This is useful for segmentation models where small floating-point
-                    # differences get thresholded into boolean masks.
-                    intersection = (ref & res).sum().float()
-                    union = (ref | res).sum().float()
-                    if union == 0:
-                        # Both masks are empty
-                        return bool(intersection == 0)
-                    iou = (intersection / union).item()
-                    if iou < iou_threshold:
-                        log_error(
-                            "IoU accuracy failed: %.4f < %.2f (intersection=%d, union=%d, ref_sum=%d, res_sum=%d, shape=%s)",
-                            iou,
-                            iou_threshold,
-                            int(intersection.item()),
-                            int(union.item()),
-                            int(ref.sum().item()),
-                            int(res.sum().item()),
-                            list(ref.shape),
-                        )
-                        return False
-                    return True
-                # triton stores bool as int8, so add this for more accurate checking
-                r = torch.allclose(
-                    ref.to(dtype=torch.uint8),
-                    res.to(dtype=torch.uint8),
-                    atol=tol,
-                    rtol=tol,
-                    equal_nan=equal_nan,
-                )
-                if not r:
-                    log_error("Accuracy failed: uint8 tensor did not match")
-                return r
-
-        if cos_similarity:
-            ref = ref.flatten().to(torch.float32)
-            res = res.flatten().to(torch.float32)
-            if torch.allclose(ref, res, atol=tol, rtol=tol, equal_nan=True):
-                # early exit that handles zero/nan better
-                # cosine_similarity(zeros(10), zeros(10), dim=0) is 0
-                return True
-            score = torch.nn.functional.cosine_similarity(ref, res, dim=0, eps=1e-6)
-            if score < 0.99:
-                log.warning("Similarity score=%s", score.detach().cpu().item())
-            return bool(score >= 0.99)
-        else:
-            if not exact_dtype:
-                ref = ref.to(res.dtype)
-
-            # First try usual allclose
-            if torch.allclose(ref, res, atol=tol, rtol=tol, equal_nan=equal_nan):
-                return True
-
-            # Check error from fp64 version
-            if fp64_ref.dtype == torch.float64:
-                # Fix a corner case that res and fp64_ref does not contains NaN and match (with loose tolerance)
-                # while the ref contains NaN. In this case, RMSE should not match any ways.
-                # But res is 'BETTER' than ref so we count it pass.
-                #
-                # This happens for Super_SloMo when loop ordering after fusion is enabled:
-                # https://gist.github.com/shunting314/11f235c70f7db0d52718d26f4a701cab
-                loose_tol = 1e-2 * 4
-                if (
-                    not fp64_ref.isnan().any()
-                    and not res.isnan().any()
-                    and ref.isnan().any()
-                    and torch.allclose(
-                        fp64_ref.to(dtype=res.dtype),
-                        res,
-                        atol=loose_tol,
-                        rtol=loose_tol,
-                        equal_nan=equal_nan,
-                    )
-                ):
-                    return True
-                ref_error = rmse(fp64_ref, ref).item()
-                # ref unable to produce this with stable numerics in this precision, ignore
-                if math.isnan(ref_error):
-                    log.warning(
-                        "Found nan in reference. Consider running in higher precision."
-                    )
-
-                res_error = rmse(fp64_ref, res).item()
-
-                def get_multiplier() -> float:
-                    # In some particular cases, we expect high difference in results.
-                    # At the moment one of this cases is inductor freezing bfloat16 convolution const folding.
-                    # In case of it the res_error is at least one order of magnitude higher.
-                    if force_max_multiplier:
-                        return 10.0
-                    # In the case of using AMP (Automatic Mixed Precision), certain models have
-                    # failed the benchmark's correctness check. However, the end-to-end model's
-                    # accuracy when comparing AMP with FP32 is within a difference of less than 0.1%.
-                    # Thus, it's possible that the correctness check failures for these models are
-                    # false alarms. We use multiplier of 3 instead of 2 to avoid these false alarms.
-                    multiplier = (
-                        3.0 if res.dtype in (torch.float16, torch.bfloat16) else 2.0
-                    )
-
-                    if use_larger_multiplier_for_smaller_tensor and (
-                        fp64_ref.numel() <= 10
-                    ):
-                        multiplier = 10.0
-                    elif use_larger_multiplier_for_smaller_tensor and (
-                        fp64_ref.numel() <= 500
-                    ):
-                        multiplier = 8.0
-                    elif (
-                        fp64_ref.numel() < 1000
-                        or (ref.ndim == 4 and ref.shape[-1] == ref.shape[-2] == 1)
-                        # large tol means a benchmark has been specified as REQUIRE_HIGHER_TOLERANCE
-                        or tol >= 2 * 1e-2
-                    ):
-                        # In the presence of noise, noise might dominate our error
-                        # metric for smaller tensors.
-                        # Similarly, for 1x1 kernels, there seems to be high noise with amp.
-                        multiplier = 3.0
-                    return multiplier
-
-                multiplier = get_multiplier()
-
-                passes_test = res_error <= (multiplier * ref_error + tol / 10.0)
-                if (
-                    not passes_test
-                    and equal_nan
-                    and math.isnan(ref_error)
-                    and math.isnan(res_error)
-                    # Some unit test for the accuracy minifier relies on
-                    # returning false in this case.
-                    and not torch._inductor.config.cpp.inject_relu_bug_TESTING_ONLY
-                ):
-                    passes_test = True
-                if not passes_test:
-                    log_error(
-                        "RMSE (res-fp64): %.5f, (ref-fp64): %.5f and shape=%s. res.dtype: %s, multiplier: %f, tol: %f"
-                        ", use_larger_multiplier_for_smaller_tensor: %d",
-                        res_error,
-                        ref_error,
-                        res.size(),
-                        res.dtype,
-                        multiplier,
-                        tol,
-                        use_larger_multiplier_for_smaller_tensor,
-                    )
-                return passes_test
-
-            if ignore_non_fp:
-                return True
-
-            log_error("Accuracy failed: allclose not within tol=%s", tol)
-            return False
-    elif isinstance(ref, (str, int, type(None), bool, torch.device)):
-        if ignore_non_fp:
-            return True
-        r = ref == res
-        if not r:
-            log_error("Accuracy failed (%s): %s != %s", type(ref), ref, res)
-        return r
-    elif is_numpy_int_type(ref) or is_numpy_float_type(ref):
-        if relax_numpy_equality and not (
-            is_numpy_int_type(res) or is_numpy_float_type(res)
-        ):
-            ref = ref.item()
-        r = (type(ref) is type(res)) and (ref == res)
-        if not r:
-            log_error("Accuracy failed (numpy): %s != %s", ref, res)
-        return r
-    elif is_numpy_ndarray(ref):
-        return (type(ref) is type(res)) and same(
-            torch.as_tensor(ref),
-            torch.as_tensor(res),
-            fp64_ref,
-            cos_similarity=cos_similarity,
-            tol=tol,
-            equal_nan=equal_nan,
-            exact_dtype=exact_dtype,
-            relax_numpy_equality=relax_numpy_equality,
-            ignore_non_fp=ignore_non_fp,
-            log_error=log_error,
-            use_larger_multiplier_for_smaller_tensor=use_larger_multiplier_for_smaller_tensor,
-        )
-    elif type(ref).__name__ in (
-        "MaskedLMOutput",
-        "Seq2SeqLMOutput",
-        "CausalLMOutputWithCrossAttentions",
-        "LongformerMaskedLMOutput",
-        "Instances",
-        "SquashedNormal",
-        "Boxes",
-        "Normal",
-        "TanhTransform",
-        "Foo",
-        "Variable",
-    ):
-        assert type(ref) is type(res)
-        return all(
-            same(
-                getattr(ref, key),
-                getattr(res, key),
-                getattr(fp64_ref, key),
-                cos_similarity=cos_similarity,
-                tol=tol,
-                equal_nan=equal_nan,
-                exact_dtype=exact_dtype,
-                relax_numpy_equality=relax_numpy_equality,
-                ignore_non_fp=ignore_non_fp,
-                log_error=log_error,
-                use_larger_multiplier_for_smaller_tensor=use_larger_multiplier_for_smaller_tensor,
-            )
-            for key in ref.__dict__
-        )
-    else:
-        raise RuntimeError(f"unsupported type: {type(ref).__name__}")
-
-
 def format_func_info(code: CodeType) -> str:
     short_filename = code.co_filename.split("/")[-1]
     return f"'{code.co_name}' ({short_filename}:{code.co_firstlineno})"
@@ -4139,215 +3483,11 @@ def assert_no_fake_params_or_buffers(gm: torch.nn.Module) -> None:
         )
 
 
-def fqn(obj: Any) -> str:
-    """
-    Returns the fully qualified name of the object.
-    """
-    return f"{obj.__module__}.{obj.__qualname__}"
-
-
 def ifdynstaticdefault(count1: Any, count2: Any) -> Any:
     if torch._dynamo.config.assume_static_by_default:
         return count1
     else:
         return count2
-
-
-def import_submodule(mod: types.ModuleType) -> None:
-    """
-    Ensure all the files in a given submodule are imported
-    """
-    for filename in sorted(os.listdir(os.path.dirname(cast(str, mod.__file__)))):
-        if filename.endswith(".py") and filename[0] != "_":
-            importlib.import_module(f"{mod.__name__}.{filename[:-3]}")
-
-
-def object_has_getattribute(value: Any) -> bool:
-    return class_has_getattribute(type(value))
-
-
-def object_setattr_ignore_descriptor(obj: Any, name: str, value: Any) -> None:
-    # https://github.com/python/cpython/blob/3.11/Objects/object.c#L1286-L1335
-    d = object.__getattribute__(obj, "__dict__")
-    d[name] = value
-
-
-def class_has_getattribute(cls: type) -> bool:
-    try:
-        if isinstance(
-            inspect.getattr_static(cls, "__getattribute__"),
-            types.FunctionType,
-        ):
-            return True
-    except AttributeError:
-        pass
-    return False
-
-
-def get_custom_getattr(
-    value: Any, ignore_nn_module_getattr: bool = False
-) -> Any | None:
-    try:
-        getattr_fn = inspect.getattr_static(type(value), "__getattr__")
-    except AttributeError:
-        getattr_fn = None
-    if ignore_nn_module_getattr and getattr_fn is torch.nn.Module.__getattr__:
-        # ignore this case of getattr
-        getattr_fn = None
-    return getattr_fn
-
-
-class TensorStaticReason(enum.Enum):
-    PARAMETER = 2
-    NOT_TENSOR = 4
-    NN_MODULE_PROPERTY = 5
-
-
-def tensor_static_reason_to_message(reason: TensorStaticReason) -> str:
-    if reason == TensorStaticReason.PARAMETER:
-        return "mark_dynamic on parameter, parameters are always static today."
-    if reason == TensorStaticReason.NOT_TENSOR:
-        return "mark_dynamic on a non tensor, how did this happen?"
-    if reason == TensorStaticReason.NN_MODULE_PROPERTY:
-        return "tensor is static because it is nn module associated."
-    raise AssertionError(f"Illegal reason {reason}")
-
-
-def tensor_always_has_static_shape(
-    tensor: torch.Tensor | Any,
-    is_tensor: bool,
-    tensor_source: Source,
-) -> tuple[bool, TensorStaticReason | None]:
-    """
-    Given a tensor, source, and is_tensor flag, determine if a shape should be static.
-
-    Args:
-    tensor - the real tensor to evaluate, parameters force a static shape.
-    is_tensor - internal dynamo check, essentially "is_tensor": target_cls is TensorVariable,
-    tensors not in a TensorVariable for whatever reason are forced static.
-
-    Returns a tuple, where the first element is the bool of whether or not this tensor should have a static shape.
-    The second element is a TensorStaticReason, useful for passing to tensor_static_reason_to_message if needed.
-    """
-    from .source import is_from_unspecialized_param_buffer_source
-
-    if (
-        tensor_source.guard_source.is_specialized_nn_module()
-        or tensor_source.guard_source.is_unspecialized_builtin_nn_module()
-    ) and config.force_nn_module_property_static_shapes:
-        return True, TensorStaticReason.NN_MODULE_PROPERTY
-
-    if (
-        type(tensor) is torch.nn.Parameter
-        or is_from_unspecialized_param_buffer_source(tensor_source)
-    ) and config.force_parameter_static_shapes:
-        return True, TensorStaticReason.PARAMETER
-    if not is_tensor:
-        return True, TensorStaticReason.NOT_TENSOR
-    return False, None
-
-
-def lazy_format_graph_tabular(fn_name: str, gm: torch.fx.GraphModule) -> Any:
-    def inner() -> str:
-        try:
-            from tabulate import tabulate  # TODO: Check that this is installed
-        except ImportError:
-            return (
-                "Tabulate module missing, please install tabulate to log the graph in tabular format, logging code instead:\n"
-                + str(lazy_format_graph_code(fn_name, gm))
-            )
-
-        node_specs = [
-            [n.op, n.name, n.target, n.args, n.kwargs] for n in gm.graph.nodes
-        ]
-        graph_str = tabulate(
-            node_specs, headers=["opcode", "name", "target", "args", "kwargs"]
-        )
-        return _format_graph_code(fn_name, gm.forward.__code__.co_filename, graph_str)
-
-    return LazyString(inner)
-
-
-def format_bytecode(
-    prefix: str, name: str, filename: str, line_no: int, code: Any
-) -> str:
-    return f"{prefix} {name} {filename} line {line_no} \n{dis.Bytecode(code).dis()}\n"
-
-
-forward_hook_names = [
-    "_forward_pre_hooks",
-    "_forward_pre_hooks_with_kwargs",
-    "_forward_hooks_with_kwargs",
-    "_forward_hooks",
-]
-backward_hook_names = ["_backward_pre_hooks", "_backward_hooks"]
-state_dict_hook_names = [
-    "_state_dict_pre_hooks",
-    "_state_dict_hooks",
-    "_load_state_dict_pre_hooks",
-    "_load_state_dict_post_hooks",
-]
-all_hook_names = forward_hook_names + backward_hook_names + state_dict_hook_names
-
-
-def nn_module_has_global_hooks() -> bool:
-    # This is limited to backward hooks for now because NNModuleVariable
-    # supports fwd hooks underneath.
-    return bool(
-        len(torch.nn.modules.module._global_backward_hooks)
-        or len(torch.nn.modules.module._global_backward_pre_hooks)
-    )
-
-
-def nn_module_get_all_hooks(
-    mod: torch.nn.Module,
-    check_forward_hooks: bool = False,
-    check_backward_hooks: bool = False,
-    check_state_dict_hooks: bool = False,
-) -> list[Any]:
-    """
-    Sometimes its useful to differentiate between types of hooks such as forward/backward/pre
-    hooks executed during module.__call__, and state_dict hooks which are executed separately.
-    """
-    hook_dicts_to_check = []
-    check_all_hooks = (
-        not check_forward_hooks
-        and not check_backward_hooks
-        and not check_state_dict_hooks
-    )
-    if check_forward_hooks or check_all_hooks:
-        hook_dicts_to_check.extend(forward_hook_names)
-    if check_backward_hooks or check_all_hooks:
-        hook_dicts_to_check.extend(backward_hook_names)
-    if check_state_dict_hooks:
-        hook_dicts_to_check.extend(state_dict_hook_names)
-
-    all_hooks = []
-    for hook_dict_name in hook_dicts_to_check:
-        hooks = getattr(mod, hook_dict_name, [])
-        for hook_name in hooks:
-            hook = hooks[hook_name]
-
-            all_hooks.append(hook)
-    return all_hooks
-
-
-def nnmodule_has_hooks(
-    mod: torch.nn.Module,
-    check_forward_hooks: bool = False,
-    check_backward_hooks: bool = False,
-    check_state_dict_hooks: bool = False,
-) -> bool:
-    """
-    Helper function to check if a module has any hooks attached to it.
-    """
-    hooks = nn_module_get_all_hooks(
-        mod,
-        check_forward_hooks=check_forward_hooks,
-        check_backward_hooks=check_backward_hooks,
-        check_state_dict_hooks=check_state_dict_hooks,
-    )
-    return bool(hooks)
 
 
 def to_numpy_helper(value: Any) -> Any:
@@ -4534,288 +3674,6 @@ def is_compile_supported(device_type: DeviceLikeType) -> Any:
 # https://github.com/python/cpython/blob/v3.11.4/Lib/traceback.py
 # in order to output source code corresponding to bytecode in 3.11+.
 # We need our own versions since we want to support multiline expressions.
-def _fix_offset(str: str, offset: int) -> int:
-    """
-    Convert byte offset `offset` of `str` into character offset.
-    Byte offset is used for 3.11+ instruction column data.
-    Takes things like unicode characters into consideration.
-
-    Unchanged from CPython implementation.
-    """
-    as_utf8 = str.encode("utf-8")
-    return len(as_utf8[:offset].decode("utf-8", errors="replace"))
-
-
-@dataclasses.dataclass
-class _Anchors:
-    # inclusive
-    left_end_lineno: int
-    left_end_offset: int
-    right_start_lineno: int
-    # exclusive
-    right_start_offset: int
-
-
-def _extract_anchors_from_expr(segment: str) -> _Anchors | None:
-    """
-    Given source code `segment` corresponding to a bytecode
-    instruction, determine:
-        - for binary ops, the location of the binary op
-        - for indexing, the location of the brackets.
-    `segment` is expected to be a valid Python expression
-    """
-    assert sys.version_info >= (3, 11)
-
-    import ast
-
-    tree: Any | None = None
-    try:
-        # Without brackets, `segment` is parsed as a statement.
-        # We expect an expression, so wrap `segment` in
-        # brackets to handle multi-line expressions.
-        tree = ast.parse("(\n" + segment + "\n)")
-    except SyntaxError:
-        return None
-    assert tree is not None
-
-    if len(tree.body) != 1:
-        return None
-
-    lines = segment.split("\n")
-
-    # get character index given byte offset
-    def normalize(lineno: int, offset: int) -> int:
-        return _fix_offset(lines[lineno], offset)
-
-    # Gets the next valid character index in `lines`, if
-    # the current location is not valid. Handles empty lines.
-    def next_valid_char(lineno: int, col: int) -> tuple[int, int]:
-        while lineno < len(lines) and col >= len(lines[lineno]):
-            col = 0
-            lineno += 1
-        assert lineno < len(lines) and col < len(lines[lineno])
-        return lineno, col
-
-    # Get the next valid character index in `lines`.
-    def increment(lineno: int, col: int) -> tuple[int, int]:
-        col += 1
-        lineno, col = next_valid_char(lineno, col)
-        assert lineno < len(lines) and col < len(lines[lineno])
-        return lineno, col
-
-    # Get the next valid character at least on the next line
-    def nextline(lineno: int, col: int) -> tuple[int, int]:
-        col = 0
-        lineno += 1
-        lineno, col = next_valid_char(lineno, col)
-        assert lineno < len(lines) and col < len(lines[lineno])
-        return lineno, col
-
-    statement = tree.body[0]
-    if isinstance(statement, ast.Expr):
-        expr = statement.value
-        if isinstance(expr, ast.BinOp):
-            # ast gives locations for BinOp subexpressions, e.g.
-            # ( left_expr ) + ( right_expr )
-            #   left^^^^^       right^^^^^
-            # -2 since end_lineno is 1-indexed and because we added an extra
-            # bracket to `segment` when calling ast.parse
-            cur_lineno = cast(int, expr.left.end_lineno) - 2
-            assert expr.left.end_col_offset is not None
-            cur_col = normalize(cur_lineno, expr.left.end_col_offset)
-            cur_lineno, cur_col = next_valid_char(cur_lineno, cur_col)
-
-            # Heuristic to find the operator character.
-            # The original CPython implementation did not look for ), \, or #,
-            # leading to incorrect anchor location, e.g.
-            # (x) + (y)
-            # ~~^~~~~~~
-            while (ch := lines[cur_lineno][cur_col]).isspace() or ch in ")\\#":
-                if ch in "\\#":
-                    cur_lineno, cur_col = nextline(cur_lineno, cur_col)
-                else:
-                    cur_lineno, cur_col = increment(cur_lineno, cur_col)
-
-            # binary op is 1 or 2 characters long, on the same line
-            right_col = cur_col + 1
-            if (
-                right_col < len(lines[cur_lineno])
-                and not (ch := lines[cur_lineno][right_col]).isspace()
-                and ch not in "\\#"
-            ):
-                right_col += 1
-            # right_col can be invalid since it is exclusive
-
-            return _Anchors(cur_lineno, cur_col, cur_lineno, right_col)
-        elif isinstance(expr, ast.Subscript):
-            # ast gives locations for value and slice subexpressions, e.g.
-            # ( value_expr ) [ slice_expr ]
-            #   value^^^^^     slice^^^^^
-            # subscript^^^^^^^^^^^^^^^^^^^^
-            # find left bracket (first '[' after value)
-            left_lineno = cast(int, expr.value.end_lineno) - 2
-            assert expr.value.end_col_offset is not None
-            left_col = normalize(left_lineno, expr.value.end_col_offset)
-            left_lineno, left_col = next_valid_char(left_lineno, left_col)
-            while lines[left_lineno][left_col] != "[":
-                left_lineno, left_col = increment(left_lineno, left_col)
-            # find right bracket (final character of expression)
-            right_lineno = cast(int, expr.end_lineno) - 2
-            assert expr.end_col_offset is not None
-            right_col = normalize(right_lineno, expr.end_col_offset)
-            return _Anchors(left_lineno, left_col, right_lineno, right_col)
-        elif isinstance(expr, ast.Call):
-            # ( func_expr ) (args, kwargs)
-            #   func^^^^^
-            # call^^^^^^^^^^^^^^^^^^^^^^^^
-            # find left bracket (first '(' after func)
-            left_lineno = cast(int, expr.func.end_lineno) - 2
-            assert expr.func.end_col_offset is not None
-            left_col = normalize(left_lineno, expr.func.end_col_offset)
-            left_lineno, left_col = next_valid_char(left_lineno, left_col)
-            while lines[left_lineno][left_col] != "(":
-                left_lineno, left_col = increment(left_lineno, left_col)
-            # find right bracket (final character of expression)
-            right_lineno = cast(int, expr.end_lineno) - 2
-            assert expr.end_col_offset is not None
-            right_col = normalize(right_lineno, expr.end_col_offset)
-            return _Anchors(left_lineno, left_col, right_lineno, right_col)
-
-    return None
-
-
-def get_instruction_source_311(code: types.CodeType, inst: Instruction) -> str:
-    """
-    Python 3.11+ only. Returns lines of source code (from code object `code`)
-    corresponding to `inst`'s location data, and underlines relevant code to `inst`.
-
-    Example: CALL on `g`:
-    f(g(
-      ^^
-        h(x)))
-        ^^^^^
-
-    We need our own implementation in < 3.13 since `format_frame_summary` in
-    Python's `traceback` module doesn't handle multi-line expressions
-    (and their anchor extraction code is not completely correct).
-    """
-    if sys.version_info >= (3, 13):
-        # multiline traceback implemented in 3.13+
-        frame_summary = traceback.FrameSummary(
-            code.co_filename,
-            inst.positions.lineno,
-            code.co_name,
-            end_lineno=inst.positions.end_lineno,
-            colno=inst.positions.col_offset,
-            end_colno=inst.positions.end_col_offset,
-        )
-        result = traceback.format_list([frame_summary])[0]
-        # remove first line containing filename info
-        result = "\n".join(result.splitlines()[1:])
-        # indent lines with original indentation
-        orig_lines = [
-            linecache.getline(code.co_filename, lineno).rstrip()
-            for lineno in range(inst.positions.lineno, inst.positions.end_lineno + 1)
-        ]
-        orig_lines_dedent = textwrap.dedent("\n".join(orig_lines)).splitlines()
-        indent_len = len(orig_lines[0]) - len(orig_lines_dedent[0])
-        indent = orig_lines[0][:indent_len]
-        result = textwrap.indent(textwrap.dedent(result), indent)
-        return result
-
-    assert hasattr(inst, "positions") and inst.positions is not None
-    if inst.positions.lineno is None:
-        return ""
-    # The rstrip + "\n" pattern is used throughout this function to handle
-    # linecache.getline errors. Error lines are treated as empty strings "", but we want
-    # to treat them as blank lines "\n".
-    first_line = linecache.getline(code.co_filename, inst.positions.lineno).rstrip()
-    if inst.positions.end_lineno is None:
-        return first_line
-    if inst.positions.col_offset is None or inst.positions.end_col_offset is None:
-        return first_line
-
-    # character index of the start of the instruction
-    start_offset = _fix_offset(first_line, inst.positions.col_offset)
-    # character index of the end of the instruction
-    # compute later since end may be a different line
-    end_offset = None
-    # expression corresponding to the instruction so we can get anchors
-    segment = ""
-    # underline markers to be printed - start with `~` marker and replace with `^` later
-    markers = []
-
-    # Compute segment and initial markers
-    if inst.positions.end_lineno == inst.positions.lineno:
-        end_offset = _fix_offset(first_line, inst.positions.end_col_offset)
-        segment = first_line[start_offset:end_offset]
-        markers.append(" " * start_offset + "~" * (end_offset - start_offset))
-    else:
-        segment = first_line[start_offset:] + "\n"
-        markers.append(" " * start_offset + "~" * (len(first_line) - start_offset))
-        last_line = linecache.getline(
-            code.co_filename, inst.positions.end_lineno
-        ).rstrip()
-        end_offset = _fix_offset(last_line, inst.positions.end_col_offset)
-        for lineno in range(inst.positions.lineno + 1, inst.positions.end_lineno):
-            line = linecache.getline(code.co_filename, lineno).rstrip()
-            segment += line + "\n"
-            # don't underline leading spaces
-            num_spaces = len(line) - len(line.lstrip())
-            markers.append(" " * num_spaces + "~" * (len(line) - num_spaces))
-        segment += last_line[:end_offset]
-        num_spaces = len(last_line) - len(last_line.lstrip())
-        markers.append(" " * num_spaces + "~" * (end_offset - num_spaces))
-
-    anchors: _Anchors | None = None
-    try:
-        anchors = _extract_anchors_from_expr(segment)
-    except AssertionError:
-        pass
-
-    # replace `~` markers with `^` where necessary
-    if anchors is None:
-        markers = [marker.replace("~", "^") for marker in markers]
-    else:
-        # make markers mutable
-        mutable_markers: list[list[str]] = [list(marker) for marker in markers]
-
-        # anchor positions do not take start_offset into account
-        if anchors.left_end_lineno == 0:
-            anchors.left_end_offset += start_offset
-        if anchors.right_start_lineno == 0:
-            anchors.right_start_offset += start_offset
-
-        # Turn `~`` markers between anchors to `^`
-        for lineno in range(len(markers)):
-            for col in range(len(mutable_markers[lineno])):
-                if lineno < anchors.left_end_lineno:
-                    continue
-                if lineno == anchors.left_end_lineno and col < anchors.left_end_offset:
-                    continue
-                if (
-                    lineno == anchors.right_start_lineno
-                    and col >= anchors.right_start_offset
-                ):
-                    continue
-                if lineno > anchors.right_start_lineno:
-                    continue
-                if mutable_markers[lineno][col] == "~":
-                    mutable_markers[lineno][col] = "^"
-
-        # make markers into strings again
-        markers = ["".join(marker) for marker in mutable_markers]
-
-    result = ""
-    for i in range(len(markers)):
-        result += (
-            linecache.getline(code.co_filename, inst.positions.lineno + i).rstrip()
-            + "\n"
-        )
-        result += markers[i] + "\n"
-    return result
-
-
 def get_static_address_type(t: Any) -> Any:
     if isinstance(t, torch.Tensor):
         return getattr(t, "_dynamo_static_input_type", None)
@@ -4950,245 +3808,6 @@ def maybe_enable_compiled_autograd(
             yield ctx
 
 
-def invalid_removeable_handle() -> RemovableHandle:
-    # need a subclass so weakref works
-    class Invalid(dict):  # type: ignore[type-arg]
-        pass
-
-    return RemovableHandle(Invalid())
-
-
-# Returns a "proxy" (new object with the same class and dict) for (non-GraphModule) nn.Module's.
-# Attribute changes to the original object/proxy will be reflected in the other.
-# This is useful for cases where we want a keep-alive reference to a module without increasing
-# its reference count.
-def nn_module_proxy(mod: Any) -> Any:
-    if not isinstance(mod, torch.nn.Module):
-        return mod
-    if isinstance(mod, torch.fx.GraphModule):
-        # Dynamo-generated GM's shouldn't contain user-created GM's
-        return mod
-    proxy = mod.__class__.__new__(mod.__class__)
-    proxy.__dict__ = mod.__dict__
-    return proxy
-
-
-class GmWrapper(torch.nn.Module):
-    def __init__(
-        self, gm: torch.fx.GraphModule, unflatten_fn: Callable[[list[Any]], Any]
-    ) -> None:
-        super().__init__()
-        self.gm = gm
-        self.unflatten_fn = unflatten_fn
-
-    def forward(self, *args: Any) -> Any:
-        # pyrefly: ignore [redefinition]
-        args: list[Any] = list(args)
-        return self.gm(*self.unflatten_fn(args))
-
-
-def flatten_graph_inputs(
-    gm: torch.fx.GraphModule, inputs: Any, compile_gm: Callable[[Any, Any], Any]
-) -> Callable[..., Any]:
-    """
-    Mutate inputs so that they are flat and wrap gm such that it
-    accepts those inputs.  This is needed for graphs that take
-    bumpy inputs.
-    """
-    inputs_idx_to_clear = [
-        i
-        for i, node in enumerate(gm.graph.nodes)
-        if node.op == "placeholder" and node.meta.get("steal_arg", False)
-    ]
-
-    if torch._dynamo.compiled_autograd.in_compiled_autograd_region:
-        # fast path, avoid pytree overhead
-        # compiled autograd inputs are always a list of tensors, maybe followed by symints
-        assert inputs_idx_to_clear == [0]
-        assert isinstance(inputs[0], list)
-        boxed_inputs_count = len(inputs[0])
-
-        def flatten_fn(args: Any) -> Any:
-            return args[0] + list(args[1:])
-
-        def unflatten_fn(flat_args: Any) -> Any:
-            return (flat_args[:boxed_inputs_count], *flat_args[boxed_inputs_count:])
-
-        compiled_fn = compile_gm(GmWrapper(gm, unflatten_fn), flatten_fn(inputs))
-    else:
-        # slow path, don't know inputs structure
-        flat_inputs, spec = pytree.tree_flatten(inputs)
-        unflatten_fn = functools.partial(pytree.tree_unflatten, treespec=spec)
-        compiled_fn = compile_gm(GmWrapper(gm, unflatten_fn), flat_inputs)
-        # note this doesn't check the spec, assuming it is the same
-        flatten_fn = pytree.arg_tree_leaves
-
-    def wrapper(*args: Any) -> Any:
-        flat_args = flatten_fn(args)
-
-        # flat_args is a new list, so we need to clear references from the old list
-        for i in inputs_idx_to_clear:
-            args[i].clear()
-
-        # this call is boxed to avoid increasing refcount until we reach aot_module_simplified forward
-        return compiled_fn(flat_args)
-
-    return wrapper
-
-
-def get_locals_to_steal(maybe_gm: Any) -> list[Any]:
-    if not isinstance(maybe_gm, torch.fx.GraphModule) or not hasattr(maybe_gm, "meta"):
-        return []
-    return maybe_gm.meta.get("locals_to_steal", [])
-
-
-def set_locals_to_steal(gm: torch.fx.GraphModule, locals_to_steal: list[Any]) -> None:
-    gm.meta["locals_to_steal"] = locals_to_steal
-
-
-class Lit:
-    def __init__(self, s: str) -> None:
-        self.s = s
-
-    def __repr__(self) -> str:
-        return self.s
-
-
-warn_once_cache: set[str] = set()
-
-
-def warn_once(msg: str, stacklevel: int = 1) -> None:
-    # Dynamo causes all warnings.warn (in user code and in Dynamo code) to print all the time.
-    # https://github.com/pytorch/pytorch/issues/128427.
-    # warn_once is a workaround: if the msg has been warned on before, then we will not
-    # warn again.
-    # NB: it's totally ok to store a cache of all the strings: this is what warnings.warn does as well.
-    if msg in warn_once_cache:
-        return
-    warn_once_cache.add(msg)
-    warnings.warn(msg, stacklevel=stacklevel + 1)
-
-
-def strip_color_from_string(text: str) -> str:
-    # This regular expression matches ANSI escape codes
-    ansi_escape = re.compile(r"\x1B[@-_][0-?]*[ -/]*[@-~]")
-    return ansi_escape.sub("", text)
-
-
-@contextlib.contextmanager
-def _disable_saved_tensors_hooks_during_tracing() -> Generator[None, None, None]:
-    # See NOTE: [Deferring tensor pack/unpack hooks until runtime]
-    try:
-        prior = torch._C._autograd._saved_tensors_hooks_set_tracing(True)
-        yield
-    finally:
-        torch._C._autograd._saved_tensors_hooks_set_tracing(prior)
-
-
-def is_parameter_freezing() -> bool:
-    return torch._inductor.config.freezing and not torch.is_grad_enabled()
-
-
-def get_torch_function_mode_stack() -> list[Any]:
-    return [
-        get_torch_function_mode_stack_at(i) for i in range(_len_torch_function_stack())
-    ]
-
-
-def get_torch_function_mode_stack_at(ind: int) -> Any:
-    assert ind < _len_torch_function_stack() and ind >= 0
-    return torch._C._get_function_stack_at(ind)
-
-
-def set_torch_function_mode_stack(stack: list[Any]) -> None:
-    for _ in range(_len_torch_function_stack()):
-        _pop_torch_function_stack()
-
-    for mode in stack:
-        _push_on_torch_function_stack(mode)
-
-
-def clear_torch_function_mode_stack() -> None:
-    for _ in range(_len_torch_function_stack()):
-        _pop_torch_function_stack()
-
-
-def get_current_stream(device: torch.device) -> torch.Stream:
-    return torch.accelerator.current_stream(device)
-
-
-# call from C dynamo in order to inspect values in pdb
-def _breakpoint_for_c_dynamo(*args: Any) -> None:
-    breakpoint()
-
-
-def verify_guard_fn_signature(value: Any) -> None:
-    fn = value.__metadata_guard__
-    sig = inspect.signature(fn)
-    if len(sig.parameters) != 2:
-        from .exc import InternalTorchDynamoError
-
-        raise InternalTorchDynamoError(
-            "Tensor subclass method __metadata_guard__ must take exactly two subclass metadata arguments"
-        )
-    if fn.__self__ != value.__class__:
-        from .exc import InternalTorchDynamoError
-
-        raise InternalTorchDynamoError(
-            "Tensor subclass method __metadata_guard__ must be a classmethod"
-        )
-
-
-def does_not_override_dict_iter_methods(user_cls: Any) -> bool:
-    return (
-        user_cls.items in (dict.items, OrderedDict.items)
-        and user_cls.values in (dict.values, OrderedDict.values)
-        and user_cls.keys in (dict.keys, OrderedDict.keys)
-        and user_cls.__iter__ in (dict.__iter__, OrderedDict.__iter__)
-    )
-
-
-# Helper functions below are to prevent TorchDynamo to prevent tracing of
-# __torch_function__ calls triggered on tensor properties in the pre graph
-# bytecode.
-@torch._disable_dynamo
-def call_size(x: Any, i: int) -> int:
-    return x.size(i)
-
-
-@torch._disable_dynamo
-def call_stride(x: Any, i: int) -> int:
-    return x.stride(i)
-
-
-@torch._disable_dynamo
-def call_storage_offset(x: Any) -> int:
-    return x.storage_offset()
-
-
-# Helper function to extract relevant parts of a tensor's __dict__ to store in node meta.
-# To avoid ref cycles, it's important that no tensors are present here, so leave those out.
-def _extract_tensor_dict(t: torch.Tensor) -> dict[str, Any]:
-    KEYS_TO_COPY = [
-        "_dynamo_static_input_type",
-        "tag",
-    ]
-
-    tensor_dict = {
-        key: copy.copy(t.__dict__[key]) for key in KEYS_TO_COPY if key in t.__dict__
-    }
-
-    return tensor_dict
-
-
-def build_stream(args: tuple[Any], kwargs: dict[Any, Any]) -> torch.Stream:
-    return torch._C.Stream(*args, **kwargs)
-
-
-def build_event(args: tuple[Any], kwargs: dict[Any, Any]) -> torch.Event:
-    return torch._C.Event(*args, **kwargs)
-
-
 class CompileTimeInstructionCounter:
     _counter: int = 0
     _id: int = -1
@@ -5320,30 +3939,6 @@ def _get_error_on_graph_break() -> bool:
 def _set_error_on_graph_break(value: bool) -> None:
     global _error_on_graph_break
     _error_on_graph_break = value
-
-
-@torch._disable_dynamo
-def record_pregraph_bytecode_enter() -> AbstractContextManager[None]:
-    cm: AbstractContextManager[None] = (
-        torch._C._profiler._RecordFunctionFast("Pregraph bytecode")
-        if torch.autograd.profiler._is_profiler_enabled
-        else contextlib.nullcontext()
-    )
-    cm.__enter__()
-    return cm
-
-
-@torch._disable_dynamo
-def record_pregraph_bytecode_exit(cm: AbstractContextManager[None]) -> None:
-    cm.__exit__(None, None, None)
-
-
-# Returns a set of code objects present traced in the current TracingContext, or None
-# if there is no current TracingContext.
-def get_traced_code() -> list[CodeType] | None:
-    from torch._guards import TracingContext
-
-    return TracingContext.get_traced_code()
 
 
 def raise_on_overridden_hash(obj: Any, vt: VariableTracker) -> None:

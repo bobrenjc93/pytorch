@@ -1,4 +1,5 @@
 # Owner(s): ["module: dynamo"]
+import collections
 import dataclasses
 import json
 import os
@@ -18,6 +19,14 @@ _IS_WINDOWS = sys.platform == "win32"
 
 
 class TestUtils(TestCase):
+    def test_refactor_preserves_utils_reexports(self):
+        Point = collections.namedtuple("Point", ["x", "y"])
+
+        self.assertIs(utils.LazyString, torch._logging.LazyString)
+        self.assertTrue(callable(utils.lazy_format_graph_code))
+        self.assertTrue(callable(utils.clone_input))
+        self.assertEqual(utils.namedtuple_fields(Point), ("x", "y"))
+
     def test_nan(self):
         a = torch.Tensor([float("nan")])
         b = torch.Tensor([float("nan")])
