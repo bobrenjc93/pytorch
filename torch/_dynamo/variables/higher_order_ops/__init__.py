@@ -1,4 +1,3 @@
-from ..invoke_subgraph import InvokeSubgraphHigherOrderVariable
 from .attention import (
     FlexAttentionBackwardHighOrderVariable,
     FlexAttentionHigherOrderVariable,
@@ -78,6 +77,10 @@ from .misc import (
     StrictModeHigherOrderVariable,
     TraceWrappedHigherOrderOperatorVariable,
 )
+
+# Late import: invoke_subgraph inherits from WrapHigherOrderVariable, so
+# autograd must be imported first to avoid a circular import during package init.
+from ..invoke_subgraph import InvokeSubgraphHigherOrderVariable
 
 
 _hop_name_to_variable_class.update(
