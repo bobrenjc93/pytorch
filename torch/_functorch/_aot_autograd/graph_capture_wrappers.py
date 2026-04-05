@@ -1065,6 +1065,8 @@ def _apply_final_input_mutations(
             continue
 
         inpt_new = from_fun(f_inpt)
+        if not isinstance(inpt_new, torch.Tensor):
+            raise AssertionError(f"expected tensor from from_fun, got {type(inpt_new)}")
         mcs: MutationCounters | None = None
         if joint_state.f_args_mutation_counters_after_forward is not None:
             # This could happen for subclasses tracing.
