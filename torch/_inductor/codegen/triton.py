@@ -112,7 +112,7 @@ from .simd import (
     SIMDKernel,
     SIMDScheduling,
 )
-from .triton_ir import StructuredTritonKernelIR
+from .triton_ir import StructuredTritonKernelIR, StructuredTritonValue
 from .triton_utils import (
     config_of,
     equal_1_arg_indices,
@@ -2162,13 +2162,10 @@ class TritonKernelOverrides(TritonOverrides):
 
         value = None if need_where else other
 
-        structured_masked_scope = getattr(V.kernel, "structured_masked_scope", None)
-        masked_scope = (
-            structured_masked_scope(mask, other)
-            if structured_masked_scope is not None
-            else contextlib.nullcontext()
-        )
-        with masked_scope, V.kernel.mask_loads(mask, value=value) as new_mask:
+        with (
+            V.kernel.structured_masked_scope(mask, other),
+            V.kernel.mask_loads(mask, value=value) as new_mask,
+        ):
             result = body()
 
         if need_where:
@@ -2789,6 +2786,8 @@ class TritonKernel(SIMDKernel[TritonCSEVariable]):
             self.init_cooperative_reduction()
 
         self.codegen_range_tree()
+        # Keep the sidecar always-on so downstream tooling can inspect any
+        # generated Triton kernel without coordinating a separate compile flag.
         self.structured_ir = StructuredTritonKernelIR(
             kernel_name=self.kernel_name,
             kernel_kind=type(self).__name__,
@@ -4630,8 +4629,14 @@ class TritonKernel(SIMDKernel[TritonCSEVariable]):
 
             if reduction_type in ("argmax", "argmin"):
                 accumulator_index = f"_{result_var}_index"
-                self.structured_ir.register_loop_carried(accumulator_index)
                 index_dtype = self.features.select_index_dtype()
+                self.structured_ir.register_loop_carried(
+                    StructuredTritonValue(
+                        name=accumulator_index,
+                        dtype=str(index_dtype),
+                        shape=tuple(self.dense_size_list()),
+                    )
+                )
                 self.body.writeline(
                     f"{accumulator_index} = tl.full({self.dense_size_str()}, "
                     f"{torch.iinfo(index_dtype).max}, {self.dtype_to_str(index_dtype)})"
@@ -4663,7 +4668,16 @@ class TritonKernel(SIMDKernel[TritonCSEVariable]):
                 accumulator_max = f"_{result_var}_max"
                 accumulator_sum = f"_{result_var}_sum"
                 self.structured_ir.register_loop_carried(
-                    accumulator_max, accumulator_sum
+                    StructuredTritonValue(
+                        name=accumulator_max,
+                        dtype=str(torch_acc_type),
+                        shape=tuple(self.dense_size_list()),
+                    ),
+                    StructuredTritonValue(
+                        name=accumulator_sum,
+                        dtype=str(torch_acc_type),
+                        shape=tuple(self.dense_size_list()),
+                    ),
                 )
 
                 # setup accumulator

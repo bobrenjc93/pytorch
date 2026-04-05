@@ -16,6 +16,7 @@ from torch._inductor.codegen.common import (
 )
 from torch._inductor.codegen.triton import (
     _materialize_trunc_to_float_expr,
+    TritonKernel,
     TritonKernelOverrides,
 )
 from torch._inductor.codegen.triton_ir import StructuredTritonKernelIR
@@ -423,6 +424,49 @@ class TestCodegenTriton(InductorTestCase):
         self.assertEqual(structured["nodes"][0]["op"], "partial_accumulate")
         self.assertEqual(structured["nodes"][0]["attrs"]["buffer"], "acc")
         self.assertEqual(structured["nodes"][0]["attrs"]["reduction_type"], "sum")
+
+    @unittest.skipUnless(HAS_GPU_AND_TRITON, "requires GPU and Triton")
+    def test_real_triton_codegen_exposes_structured_ir(self):
+        captured_structured_irs = []
+        original_codegen_kernel = TritonKernel.codegen_kernel
+
+        def capture_codegen_kernel(kernel, name=None):
+            code = original_codegen_kernel(kernel, name)
+            captured_structured_irs.append(kernel.structured_ir_to_dict())
+            return code
+
+        def fn(x):
+            return torch.argmax(x, dim=1)
+
+        x = torch.randn(64, 32, device=GPU_TYPE)
+        expected = fn(x)
+        with unittest.mock.patch.object(
+            TritonKernel,
+            "codegen_kernel",
+            new=capture_codegen_kernel,
+        ):
+            actual = torch.compile(fn)(x)
+
+        self.assertEqual(actual, expected)
+        self.assertTrue(captured_structured_irs)
+        self.assertTrue(
+            any(
+                any(node["op"] == "argmax" for node in structured_ir["nodes"])
+                for structured_ir in captured_structured_irs
+            )
+        )
+        self.assertTrue(
+            any(
+                any(
+                    value["name"].endswith("_index")
+                    and value["dtype"] is not None
+                    and value["shape"] is not None
+                    for scope in structured_ir["scopes"]
+                    for value in scope["loop_carried"]
+                )
+                for structured_ir in captured_structured_irs
+            )
+        )
 
 
 if __name__ == "__main__":
