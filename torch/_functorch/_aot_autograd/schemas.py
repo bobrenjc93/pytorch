@@ -423,10 +423,6 @@ class _SavedTensorLayout:
     opaque_objects_saved_for_backwards_slice: slice
     symints_saved_for_backwards_slice: slice
 
-    @staticmethod
-    def _empty_slice() -> slice:
-        return slice(0, 0)
-
     @classmethod
     def from_partitioned_meta(
         cls, *, num_forward: int, partitioned_meta: PartitionedMeta
@@ -451,7 +447,7 @@ class _SavedTensorLayout:
                 no_vc_stop,
             )
         else:
-            tensors_saved_for_backwards_no_vc_check_slice = cls._empty_slice()
+            tensors_saved_for_backwards_no_vc_check_slice = slice(0, 0)
 
         if num_opaque > 0:
             opaque_stop = -num_symints if num_symints > 0 else None
@@ -460,12 +456,12 @@ class _SavedTensorLayout:
                 opaque_stop,
             )
         else:
-            opaque_objects_saved_for_backwards_slice = cls._empty_slice()
+            opaque_objects_saved_for_backwards_slice = slice(0, 0)
 
         if num_symints > 0:
             symints_saved_for_backwards_slice = slice(-num_symints, None)
         else:
-            symints_saved_for_backwards_slice = cls._empty_slice()
+            symints_saved_for_backwards_slice = slice(0, 0)
 
         return cls(
             tensors_saved_for_backwards_with_vc_check_slice=(
@@ -630,6 +626,7 @@ class ViewAndMutationMeta:
     partitioned_meta: PartitionedMeta | None = field(
         default=None, init=False, repr=False
     )
+    _num_mutated_inp_runtime_indices: int = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         # pre-compute the indices of the inputs that are mutated.
@@ -719,9 +716,7 @@ class ViewAndMutationMeta:
             unsafe_view_out_indices=unsafe_view_out_indices,
             num_outputs_non_aliased=num_outputs_non_aliased,
             num_outputs_aliased_to_inputs=num_outputs_aliased_to_inputs,
-            num_outputs_aliased_to_intermediates=(
-                num_outputs_aliased_to_intermediates
-            ),
+            num_outputs_aliased_to_intermediates=num_outputs_aliased_to_intermediates,
             dynamic_outputs=dynamic_outputs,
         )
 
@@ -775,6 +770,17 @@ class ViewAndMutationMeta:
             num_forward=self.num_forward,
             partitioned_meta=self._require_partitioned_meta(),
         )
+
+    @property
+    def num_mutated_inp_runtime_indices(self) -> int:
+        return self._num_mutated_inp_runtime_indices
+
+    @num_mutated_inp_runtime_indices.setter
+    def num_mutated_inp_runtime_indices(self, value: int) -> None:
+        # Export-specific metadata rewrites can update this count after
+        # partitioned metadata has already been populated.
+        self._num_mutated_inp_runtime_indices = value
+        self.__dict__.pop("_saved_tensor_layout", None)
 
     @property
     def num_mutated_graph_handled_indices(self) -> int:

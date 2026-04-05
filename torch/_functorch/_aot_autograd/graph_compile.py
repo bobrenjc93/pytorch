@@ -1287,6 +1287,8 @@ def maybe_inline_graph_saved_tensors_hooks(
                     and n.meta.get("saved_tensor_with_no_vc_check", False)
                 ]
             ),
+            # Donated-buffer filtering runs before partitioning materializes any
+            # opaque backward state objects into the forward outputs.
             num_opaque_objects_saved_for_bw=0,
         )
         bw_donated_idxs = collect_bw_donated_buffer_idxs(
@@ -1294,9 +1296,12 @@ def maybe_inline_graph_saved_tensors_hooks(
             bw_module,
             inner_meta,
         )
-        fw_donated_idxs = [
-            i - inner_meta.num_symints_saved_for_bw for i in bw_donated_idxs
-        ]
+        num_symints_saved_for_bw = inner_meta.num_symints_saved_for_bw
+        if num_symints_saved_for_bw is None:
+            raise AssertionError(
+                "inner_meta.num_symints_saved_for_bw must not be None"
+            )
+        fw_donated_idxs = [i - num_symints_saved_for_bw for i in bw_donated_idxs]
         allow_set = {fw_outs_saved_for_bw[i].name for i in fw_donated_idxs}  # type: ignore[union-attr]
     elif mode == "no_static":
         fw_g_inputs = fw_g.find_nodes(op="placeholder")

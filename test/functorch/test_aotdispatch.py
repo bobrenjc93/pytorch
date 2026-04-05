@@ -7008,14 +7008,21 @@ def forward(self, primals_1, tangents_1):
             traced_tangents_descs=[],
         )
         meta.is_rng_op_functionalized = False
+        meta.set_partitioned_meta(
+            num_symints_saved_for_bw=0,
+            num_tensors_saved_with_no_vc_check=0,
+            num_opaque_objects_saved_for_bw=0,
+        )
 
         self.assertEqual(meta.num_forward_returns, 0)
         self.assertEqual(meta.num_forward, 0)
+        self.assertEqual(meta.tensors_saved_for_backwards_slice, slice(0, None))
 
         meta.num_mutated_inp_runtime_indices += 2
 
         self.assertEqual(meta.num_forward_returns, 2)
         self.assertEqual(meta.num_forward, 2)
+        self.assertEqual(meta.tensors_saved_for_backwards_slice, slice(2, None))
 
     def test_collect_metadata_subclass_fw_outs_follow_input_mutation_type(self):
         from torch._functorch._aot_autograd.collect_metadata_analysis import (
