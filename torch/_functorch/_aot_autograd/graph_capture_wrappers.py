@@ -915,8 +915,7 @@ def _check_mutations_on_joint_primals(
                 set_partitioner_tag_must_be_in_backward(),
             ):
                 if not (
-                    isinstance(before, torch.Tensor)
-                    and isinstance(after, torch.Tensor)
+                    isinstance(before, torch.Tensor) and isinstance(after, torch.Tensor)
                 ):
                     raise AssertionError(
                         f"expected both before and after to be Tensors, got {type(before)} and {type(after)}"
@@ -1016,6 +1015,15 @@ def _apply_joint_forward_input_mutations(
     ):
         if inpt_info.mutation_type != MutationType.MUTATED_IN_GRAPH:
             continue
+
+        if not (
+            isinstance(before, torch.Tensor)
+            and isinstance(after, torch.Tensor)
+            and isinstance(f_inpt, torch.Tensor)
+        ):
+            raise AssertionError(
+                "expected before, after, and f_inpt to be Tensors for in-graph mutations"
+            )
 
         mcs_after_forward = joint_state.f_args_mutation_counters_after_forward[idx]
         with (
