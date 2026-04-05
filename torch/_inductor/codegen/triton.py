@@ -119,6 +119,7 @@ from .triton_utils import (
     should_unwrap_unspec_arg,
     signature_to_meta,
 )
+from .triton_ir import StructuredTritonKernelIR
 from .wrapper import SymbolicCallArg
 
 
@@ -2161,7 +2162,13 @@ class TritonKernelOverrides(TritonOverrides):
 
         value = None if need_where else other
 
-        with V.kernel.mask_loads(mask, value=value) as new_mask:
+        structured_masked_scope = getattr(V.kernel, "structured_masked_scope", None)
+        masked_scope = (
+            structured_masked_scope(mask, other)
+            if structured_masked_scope is not None
+            else contextlib.nullcontext()
+        )
+        with masked_scope, V.kernel.mask_loads(mask, value=value) as new_mask:
             result = body()
 
         if need_where:
@@ -2782,6 +2789,12 @@ class TritonKernel(SIMDKernel[TritonCSEVariable]):
             self.init_cooperative_reduction()
 
         self.codegen_range_tree()
+        self.structured_ir = StructuredTritonKernelIR(
+            kernel_name=self.kernel_name,
+            kernel_kind=type(self).__name__,
+            numels=self.numels,
+            range_trees=self._structured_range_trees(),
+        )
 
         if self.cooperative_reduction:
             self.init_cooperative_reduction_mask()
@@ -2789,6 +2802,234 @@ class TritonKernel(SIMDKernel[TritonCSEVariable]):
         self.has_load_with_contiguous_rdim = False
         # We track the store name since a store can be canceled later
         self.stores_with_contiguous_rdim: list[str] = []
+
+    def _structured_range_trees(self) -> list[dict[str, Any]]:
+        return [
+            {
+                "name": tree.name,
+                "prefix": tree.prefix,
+                "numel": tree.numel,
+                "is_loop": tree.is_loop,
+                "is_reduction": tree.is_reduction,
+                "grid_dim": tree.grid_dim,
+                "tensor_dim": tree.tensor_dim,
+            }
+            for tree in self.range_trees
+        ]
+
+    def _structured_ir_origin(self) -> str | None:
+        if self.current_node is None:
+            return None
+        return self.current_node.get_name()
+
+    def _record_structured_ir(
+        self,
+        *,
+        kind: str,
+        op: str,
+        section: str,
+        inputs: Any = (),
+        outputs: Any = (),
+        attrs: dict[str, Any] | None = None,
+        dedupe_outputs: bool = False,
+    ) -> None:
+        self.structured_ir.record_node(
+            kind=kind,
+            op=op,
+            section=section,
+            inputs=inputs,
+            outputs=outputs,
+            attrs=attrs,
+            origin=self._structured_ir_origin(),
+            dedupe_outputs=dedupe_outputs,
+        )
+
+    def structured_ir_to_dict(self) -> dict[str, Any]:
+        return self.structured_ir.to_dict()
+
+    def structured_masked_scope(
+        self, mask: CSEVariable | str | None, other: Any
+    ) -> contextlib.AbstractContextManager[None]:
+        return self.structured_ir.scope(
+            "masked",
+            "masked",
+            section="compute",
+            attrs={"mask": mask, "other": other},
+        )
+
+    def record_codegen_operation(
+        self,
+        *,
+        name: str,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+        raw_value: Any,
+        result: Any,
+        section: str,
+    ) -> None:
+        self._record_structured_ir(
+            kind="op",
+            op=name,
+            section=section,
+            inputs=args,
+            outputs=result,
+            attrs={"expr": raw_value, "kwargs": kwargs},
+            dedupe_outputs=True,
+        )
+
+    def record_codegen_load(
+        self, *, name: str, index: sympy.Expr, result: CSEVariable
+    ) -> None:
+        attrs: dict[str, Any] = {"buffer": name, "index": index}
+        if hasattr(result, "mask_vars"):
+            attrs["mask_vars"] = sorted(map(str, result.mask_vars))
+        self._record_structured_ir(
+            kind="memory",
+            op="load",
+            section="loads",
+            inputs=(index,),
+            outputs=(result,),
+            attrs=attrs,
+            dedupe_outputs=True,
+        )
+
+    def record_codegen_store(
+        self,
+        *,
+        name: str,
+        index: sympy.Expr,
+        value: CSEVariable,
+        mode: StoreMode,
+    ) -> None:
+        self._record_structured_ir(
+            kind="memory",
+            op="store",
+            section="stores",
+            inputs=(value, index),
+            attrs={"buffer": name, "mode": mode},
+        )
+
+    def record_codegen_partial_accumulate(
+        self,
+        name: str,
+        reduction_type: str,
+        value: CSEVariable,
+        extra_meta: dict[str, Any],
+    ) -> None:
+        self._record_structured_ir(
+            kind="reduction",
+            op="partial_accumulate",
+            section="compute",
+            inputs=(value,),
+            attrs={
+                "buffer": name,
+                "reduction_type": reduction_type,
+                "extra_meta": extra_meta,
+            },
+        )
+
+    def record_codegen_store_reduction(
+        self, *, name: str, index: sympy.Expr, value: CSEVariable
+    ) -> None:
+        self._record_structured_ir(
+            kind="memory",
+            op="store_reduction",
+            section="post_loop_store",
+            inputs=(value, index),
+            attrs={"buffer": name},
+        )
+
+    def record_codegen_reduction(
+        self,
+        *,
+        dtype: torch.dtype,
+        src_dtype: torch.dtype,
+        reduction_type: ReductionType,
+        value: CSEVariable | tuple[CSEVariable, ...],
+        result: CSEVariable | tuple[CSEVariable, ...],
+    ) -> None:
+        self._record_structured_ir(
+            kind="reduction",
+            op=reduction_type,
+            section="compute",
+            inputs=value,
+            outputs=result,
+            attrs={
+                "dtype": dtype,
+                "src_dtype": src_dtype,
+                "persistent_reduction": self.persistent_reduction,
+                "cooperative_reduction": self.cooperative_reduction,
+            },
+            dedupe_outputs=True,
+        )
+
+    def record_codegen_scan(
+        self,
+        *,
+        dtypes: tuple[torch.dtype, ...],
+        combine_fn: Callable[..., Any],
+        values: tuple[CSEVariable, ...],
+        result: tuple[CSEVariable, ...],
+    ) -> None:
+        self._record_structured_ir(
+            kind="scan",
+            op="scan",
+            section="compute",
+            inputs=values,
+            outputs=result,
+            attrs={"dtypes": dtypes, "combine_fn": combine_fn},
+            dedupe_outputs=True,
+        )
+
+    def record_codegen_sort(
+        self,
+        *,
+        dtypes: tuple[torch.dtype, ...],
+        values: tuple[CSEVariable, ...],
+        stable: bool,
+        descending: bool,
+        result: tuple[CSEVariable, ...],
+    ) -> None:
+        self._record_structured_ir(
+            kind="sort",
+            op="sort",
+            section="compute",
+            inputs=values,
+            outputs=result,
+            attrs={
+                "dtypes": dtypes,
+                "stable": stable,
+                "descending": descending,
+            },
+            dedupe_outputs=True,
+        )
+
+    def record_codegen_bucketize(
+        self,
+        *,
+        values: CSEVariable,
+        boundaries: tuple[str, sympy.Expr, sympy.Expr, sympy.Expr],
+        boundary_indices: CSEVariable,
+        indexing_dtype: torch.dtype,
+        right: bool,
+        sorter: tuple[str, sympy.Expr] | None,
+        sorter_indices: CSEVariable | None,
+        result: CSEVariable,
+    ) -> None:
+        self._record_structured_ir(
+            kind="search",
+            op="bucketize",
+            section="compute",
+            inputs=(values, boundary_indices, sorter_indices),
+            outputs=(result,),
+            attrs={
+                "boundaries": boundaries,
+                "indexing_dtype": indexing_dtype,
+                "right": right,
+                "sorter": sorter,
+            },
+            dedupe_outputs=True,
+        )
 
     @staticmethod
     def _has_stride1_on_rdim(index) -> bool:
@@ -4366,6 +4607,7 @@ class TritonKernel(SIMDKernel[TritonCSEVariable]):
                 dtype=torch_acc_type,
                 shape=tuple(self.dense_size_list()),
             )
+            self.structured_ir.register_loop_carried(accumulator)
             default = ir.Reduction.default_accumulator(reduction_type, src_dtype)
             default = self._map_tuple_or_scalar(constant_repr, default)
             if not isinstance(default, tuple):
@@ -4387,6 +4629,7 @@ class TritonKernel(SIMDKernel[TritonCSEVariable]):
 
             if reduction_type in ("argmax", "argmin"):
                 accumulator_index = f"_{result_var}_index"
+                self.structured_ir.register_loop_carried(accumulator_index)
                 index_dtype = self.features.select_index_dtype()
                 self.body.writeline(
                     f"{accumulator_index} = tl.full({self.dense_size_str()}, "
@@ -4418,6 +4661,9 @@ class TritonKernel(SIMDKernel[TritonCSEVariable]):
             elif reduction_type == "online_softmax_reduce":
                 accumulator_max = f"_{result_var}_max"
                 accumulator_sum = f"_{result_var}_sum"
+                self.structured_ir.register_loop_carried(
+                    accumulator_max, accumulator_sum
+                )
 
                 # setup accumulator
                 self.body.writeline(
@@ -4643,6 +4889,9 @@ class TritonKernel(SIMDKernel[TritonCSEVariable]):
             shape=tuple(self.dense_size_list()),
             dtype=acc_type,
             bounds=ValueRanges.unknown(),
+        )
+        self.structured_ir.register_loop_carried(
+            accumulator, accumulator_m2, accumulator_weight
         )
         self.body.writeline(
             f"{accumulator} = tl.zeros({self.dense_size_str()}, {acc_type})"
@@ -4952,6 +5201,7 @@ class TritonKernel(SIMDKernel[TritonCSEVariable]):
                 )
 
                 accumulators.append(accumulator)
+                self.structured_ir.register_loop_carried(accumulator)
 
         def csv(values):
             return " ".join(f"{value}," for value in values)
@@ -5146,6 +5396,7 @@ class TritonKernel(SIMDKernel[TritonCSEVariable]):
                 accumname2var[name] = self.cse.namedvar(
                     name, dtype=torch.float, shape=("1", "R0_BLOCK")
                 )
+                self.structured_ir.register_loop_carried(accumname2var[name])
             self.body.writeline("split_size = min(RSPLIT_SIZE, xnumel - xoffset)")
             self.body.writeline(
                 "for _ in tl.range(0, split_size, XBLOCK, num_stages=NUM_STAGES):"
@@ -5848,6 +6099,7 @@ class TritonKernel(SIMDKernel[TritonCSEVariable]):
             """
         code.splice(heuristics_line)
         kernel_name = name or str(Placeholder.KERNEL_NAME)
+        self.structured_ir.set_kernel_name(kernel_name)
         code.writeline(
             f"def {kernel_name}({', '.join(x.full_name() for x in argdefs)}):"
         )

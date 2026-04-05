@@ -2718,7 +2718,20 @@ class CSEProxy(DefaultHandler):
 
             return csevar
 
-        return pytree.tree_map(do_cse, value)
+        result = pytree.tree_map(do_cse, value)
+        record_codegen_operation = getattr(
+            self.kernel, "record_codegen_operation", None
+        )
+        if record_codegen_operation is not None:
+            record_codegen_operation(
+                name=name,
+                args=args,
+                kwargs=kwargs,
+                raw_value=value,
+                result=result,
+                section="compute",
+            )
+        return result
 
     def _bound_variable(self, name: str, *args: Any, **kwargs: Any) -> ValueRanges[Any]:
         """
@@ -2834,7 +2847,11 @@ class CSEProxy(DefaultHandler):
             # keep the actual buffer around
             V.kernel.must_keep_buffers.add(name)
         if free_symbol_is_type(index, SymT.TMP):
-            return self.kernel.indirect_load(name, index)
+            out = self.kernel.indirect_load(name, index)
+            record_codegen_load = getattr(self.kernel, "record_codegen_load", None)
+            if record_codegen_load is not None:
+                record_codegen_load(name=name, index=index, result=out)
+            return out
         store_cache = self.kernel.cse.store_cache
         if name in store_cache:
             return store_cache[name]
@@ -2843,6 +2860,9 @@ class CSEProxy(DefaultHandler):
         # cse cache.
         if out.use_count == 1:
             self.kernel.num_load += 1
+        record_codegen_load = getattr(self.kernel, "record_codegen_load", None)
+        if record_codegen_load is not None:
+            record_codegen_load(name=name, index=index, result=out)
         return out
 
     def _update_store_cache(self, name: str, value: CSEVariable) -> None:
@@ -2862,6 +2882,9 @@ class CSEProxy(DefaultHandler):
         if name not in V.graph.removed_buffers:
             self.kernel.store(name, index, value, mode=mode)
             self.kernel.num_store += 1
+            record_codegen_store = getattr(self.kernel, "record_codegen_store", None)
+            if record_codegen_store is not None:
+                record_codegen_store(name=name, index=index, value=value, mode=mode)
 
     def device_assert_async(self, cond: CSEVariable, msg: str) -> None:
         self.kernel.device_assert_async(cond, msg)
@@ -2869,6 +2892,11 @@ class CSEProxy(DefaultHandler):
     # pyrefly: ignore [bad-override]
     def partial_accumulate(self, *args: Any) -> None:
         self.kernel.partial_accumulate(*args)
+        record_codegen_partial_accumulate = getattr(
+            self.kernel, "record_codegen_partial_accumulate", None
+        )
+        if record_codegen_partial_accumulate is not None:
+            record_codegen_partial_accumulate(*args)
 
     def store_reduction(self, name: str, index: sympy.Expr, value: CSEVariable) -> None:
         self.kernel.store_buffer_names.add(name)
@@ -2876,7 +2904,13 @@ class CSEProxy(DefaultHandler):
 
         if name not in V.graph.removed_buffers:
             self.kernel.num_store += 1
-            return self.kernel.store_reduction(name, index, value)
+            result = self.kernel.store_reduction(name, index, value)
+            record_codegen_store_reduction = getattr(
+                self.kernel, "record_codegen_store_reduction", None
+            )
+            if record_codegen_store_reduction is not None:
+                record_codegen_store_reduction(name=name, index=index, value=value)
+            return result
 
     def reduction(
         self,
@@ -2886,7 +2920,17 @@ class CSEProxy(DefaultHandler):
         value: CSEVariable | tuple[CSEVariable, ...],
     ) -> CSEVariable | tuple[CSEVariable, ...]:
         self.kernel.num_reduction += 1
-        return self.kernel.reduction(dtype, src_dtype, reduction_type, value)
+        result = self.kernel.reduction(dtype, src_dtype, reduction_type, value)
+        record_codegen_reduction = getattr(self.kernel, "record_codegen_reduction", None)
+        if record_codegen_reduction is not None:
+            record_codegen_reduction(
+                dtype=dtype,
+                src_dtype=src_dtype,
+                reduction_type=reduction_type,
+                value=value,
+                result=result,
+            )
+        return result
 
     def scan(
         self,
@@ -2897,7 +2941,13 @@ class CSEProxy(DefaultHandler):
         ],
         values: tuple[CSEVariable, ...],
     ) -> tuple[CSEVariable, ...]:
-        return self.kernel.scan(dtypes, combine_fn, values)
+        result = self.kernel.scan(dtypes, combine_fn, values)
+        record_codegen_scan = getattr(self.kernel, "record_codegen_scan", None)
+        if record_codegen_scan is not None:
+            record_codegen_scan(
+                dtypes=dtypes, combine_fn=combine_fn, values=values, result=result
+            )
+        return result
 
     def sort(
         self,
@@ -2906,7 +2956,17 @@ class CSEProxy(DefaultHandler):
         stable: bool,
         descending: bool,
     ) -> tuple[CSEVariable, ...]:
-        return self.kernel.sort(dtypes, values, stable, descending)
+        result = self.kernel.sort(dtypes, values, stable, descending)
+        record_codegen_sort = getattr(self.kernel, "record_codegen_sort", None)
+        if record_codegen_sort is not None:
+            record_codegen_sort(
+                dtypes=dtypes,
+                values=values,
+                stable=stable,
+                descending=descending,
+                result=result,
+            )
+        return result
 
     def bucketize(
         self,
@@ -2978,7 +3038,7 @@ class CSEProxy(DefaultHandler):
         would re-index offsets in a non-decreasing order (e.g. the second output
         of torch.sort(offsets)).  Otherwise, the result is undefined.
         """
-        return self.kernel.bucketize(
+        result = self.kernel.bucketize(
             values,
             boundaries,
             boundary_indices,
@@ -2987,3 +3047,16 @@ class CSEProxy(DefaultHandler):
             sorter,
             sorter_indices,
         )
+        record_codegen_bucketize = getattr(self.kernel, "record_codegen_bucketize", None)
+        if record_codegen_bucketize is not None:
+            record_codegen_bucketize(
+                values=values,
+                boundaries=boundaries,
+                boundary_indices=boundary_indices,
+                indexing_dtype=indexing_dtype,
+                right=right,
+                sorter=sorter,
+                sorter_indices=sorter_indices,
+                result=result,
+            )
+        return result
