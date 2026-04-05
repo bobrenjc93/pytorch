@@ -125,8 +125,8 @@ class BundledOutputCodeLoadable(InductorOutput[TOutputCode], Generic[TOutputCode
                 payload_fn=lambda: json.dumps(cache_info),
             )
             result = graph  # type: ignore[assignment]
-            result.compile_region_name = (
-                fx_config.get(  # pyrefly: ignore[missing-attribute]
+            result.compile_region_name = (  # pyrefly: ignore[missing-attribute]
+                fx_config.get(
                     "compile_region_name"
                 )
             )
