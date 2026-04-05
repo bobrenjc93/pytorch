@@ -2,26 +2,26 @@ from typing import TYPE_CHECKING
 
 from .common import (
     Any,
-    DictGetItemSource,
-    GraphModule,
-    ListVariable,
-    Proxy,
-    Sequence,
-    TorchHigherOrderOperatorVariable,
-    TupleVariable,
-    UnspecializedNNModuleVariable,
-    Unsupported,
-    VariableTracker,
     cast,
+    DictGetItemSource,
     discard_graph_changes,
     graph_break_hints,
+    GraphModule,
+    ListVariable,
     make_attr,
+    Proxy,
     proxy_args_kwargs,
     pytree,
+    Sequence,
     set_example_value,
     speculate_subgraph,
     torch,
+    TorchHigherOrderOperatorVariable,
+    TupleVariable,
     unimplemented,
+    UnspecializedNNModuleVariable,
+    Unsupported,
+    VariableTracker,
 )
 
 
@@ -304,6 +304,7 @@ class FlexAttentionBackwardHighOrderVariable(TorchHigherOrderOperatorVariable):
             ),
             example_value=None,
         )
+
 
 class FlexAttentionHigherOrderVariable(TorchHigherOrderOperatorVariable):
     _HOP_NAME = "torch.ops.higher_order.flex_attention"

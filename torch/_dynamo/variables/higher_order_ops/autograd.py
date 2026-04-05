@@ -1,54 +1,55 @@
 from typing import TYPE_CHECKING
 
 from .common import (
-    Any,
-    AttrSource,
-    CONSTANT_VARIABLE_NONE,
-    ConstDictVariable,
-    GraphModule,
-    HigherOrderOperator,
-    LazyVariableTracker,
-    ListVariable,
-    OrderedSet,
-    Proxy,
-    RepararametrizeModuleContextVariable,
-    Sequence,
-    Source,
-    SubgraphTracingInfo,
-    TorchHigherOrderOperatorVariable,
-    TupleVariable,
-    UserFunctionVariable,
-    VariableTracker,
     _call_function_and_unflatten_output,
     _call_function_with_auto_output_flattening,
     _check_supported_callable_arg,
     _get_fake_value,
     _make_inlined,
-    add_hop_context,
     add_call_function,
+    add_hop_context,
+    Any,
+    AttrSource,
+    CONSTANT_VARIABLE_NONE,
+    ConstDictVariable,
     copy,
     discard_graph_changes,
     enable_python_dispatcher,
     graph_break_hints,
+    GraphModule,
+    HigherOrderOperator,
     itertools,
+    LazyVariableTracker,
+    ListVariable,
     make_attr,
+    OrderedSet,
     overwrite_tensor_vt_proxy,
     overwrite_tensor_vt_requires_grad,
+    Proxy,
     proxy_args_kwargs,
     pytree,
+    RepararametrizeModuleContextVariable,
+    Sequence,
     set_example_value,
+    Source,
     speculate_subgraph,
     speculate_subgraph_with_auto_output_flattening,
+    SubgraphTracingInfo,
     torch,
+    TorchHigherOrderOperatorVariable,
+    TupleVariable,
     types,
     unimplemented,
+    UserFunctionVariable,
     variables,
+    VariableTracker,
 )
 
 
 if TYPE_CHECKING:
     from torch._dynamo.output_graph import SubgraphTracer
     from torch._dynamo.symbolic_convert import InstructionTranslator
+
     from .. import AutogradFunctionContextVariable
 
 
@@ -74,6 +75,7 @@ class CustomFunctionHigherOrderOperatorVariable(TorchHigherOrderOperatorVariable
             source=AttrSource(self.source, "__call__"),
         ).call_function(tx, args, kwargs)
 
+
 class FunctorchHigherOrderVariable(UserFunctionVariable):
     def call_function(
         self,
@@ -86,6 +88,7 @@ class FunctorchHigherOrderVariable(UserFunctionVariable):
     def should_allow_nested_graph_breaks(self) -> bool:
         return False
 
+
 class FunctionalCallVariable(FunctorchHigherOrderVariable):
     def call_function(
         self,
@@ -94,6 +97,7 @@ class FunctionalCallVariable(FunctorchHigherOrderVariable):
         kwargs: dict[str, VariableTracker],
     ) -> VariableTracker:
         return super().call_function(tx, args, kwargs)
+
 
 class ReparametrizeModuleCallVariable(FunctorchHigherOrderVariable):
     def __init__(self, *args: Any, **kwargs: Any) -> None:
@@ -107,6 +111,7 @@ class ReparametrizeModuleCallVariable(FunctorchHigherOrderVariable):
     ) -> VariableTracker:
         ctx_manager_vt = super().call_function(tx, args, kwargs)
         return RepararametrizeModuleContextVariable(ctx_manager_vt, args[0])  # type: ignore[arg-type]
+
 
 class WrapHigherOrderVariable(TorchHigherOrderOperatorVariable):
     _HOP_NAME = "torch.ops.higher_order.wrap"
@@ -241,6 +246,7 @@ class WrapHigherOrderVariable(TorchHigherOrderOperatorVariable):
             body_graph_output_vts,
         )
 
+
 class WrapWithSetGradEnabledHigherOrderVariable(TorchHigherOrderOperatorVariable):
     """
     This hop is not exposed to users but is inserted into the graph
@@ -329,6 +335,7 @@ class WrapWithSetGradEnabledHigherOrderVariable(TorchHigherOrderOperatorVariable
         return _call_function_and_unflatten_output(
             tx, self.value, proxy_args, {}, example_value, treespec, body_r
         )
+
 
 class WrapWithAutocastHigherOrderVariable(TorchHigherOrderOperatorVariable):
     """
@@ -427,6 +434,7 @@ class WrapWithAutocastHigherOrderVariable(TorchHigherOrderOperatorVariable):
             tx, self.value, proxy_args, {}, example_value, treespec, body_r
         )
 
+
 class HintsWrapperHigherOrderVariable(WrapHigherOrderVariable):
     _HOP_NAME = "torch.ops.higher_order.hints_wrapper"
     _ALLOW_FALLBACK_TO_EAGER = False
@@ -516,6 +524,7 @@ class HintsWrapperHigherOrderVariable(WrapHigherOrderVariable):
             body_graph_output_vts,
         )
 
+
 class CheckpointHigherOrderVariable(WrapHigherOrderVariable):
     _HOP_NAME = "torch.utils.checkpoint.checkpoint"
 
@@ -583,6 +592,7 @@ class CheckpointHigherOrderVariable(WrapHigherOrderVariable):
             body_graph_output_vts,
         )
 
+
 class DynamoBypassingWrapperHigherOrderVariable(WrapHigherOrderVariable):
     _HOP_NAME = "torch.ops.higher_order.dynamo_bypassing_wrapper"
 
@@ -638,6 +648,7 @@ class DynamoBypassingWrapperHigherOrderVariable(WrapHigherOrderVariable):
             _body_r,
             body_graph_output_vts,
         )
+
 
 @add_hop_context
 class AutogradFunctionApplyVariable(VariableTracker):
@@ -1439,6 +1450,7 @@ class AutogradFunctionApplyVariable(VariableTracker):
             )
         assert fn_vt is not None and fn_args is not None
         return fn_vt, fn_args
+
 
 class BaseHOPVariable(WrapHigherOrderVariable):
     # Generic fallback for BaseHOP instances not explicitly mapped

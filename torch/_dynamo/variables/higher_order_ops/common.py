@@ -34,8 +34,8 @@ import torch._C
 import torch.fx
 import torch.nn
 from torch._dispatch.python import enable_python_dispatcher
-from torch._dynamo.utils import get_fake_value
-from torch._dynamo.variables.constant import CONSTANT_VARIABLE_NONE
+from torch._dynamo.utils import _make_inlined, get_fake_value
+from torch._dynamo.variables.constant import CONSTANT_VARIABLE_NONE, ConstantVariable
 from torch._dynamo.variables.ctx_manager import RepararametrizeModuleContextVariable
 from torch._dynamo.variables.functions import UserFunctionVariable
 from torch._dynamo.variables.nn_module import UnspecializedNNModuleVariable
@@ -64,7 +64,6 @@ from ..base import VariableTracker
 from ..dicts import ConstDictVariable
 from ..lazy import LazyVariableTracker
 from ..lists import ListVariable, TupleVariable
-from torch._dynamo.utils import _make_inlined
 
 
 if TYPE_CHECKING:
@@ -91,6 +90,7 @@ __all__ = [
     "Any",
     "AttrSource",
     "CONSTANT_VARIABLE_NONE",
+    "ConstantVariable",
     "ConstDictVariable",
     "DictGetItemSource",
     "Generator",
@@ -176,6 +176,7 @@ __all__ = [
     "warnings",
 ]
 
+
 @dataclass
 class OutputSpec:
     """
@@ -204,6 +205,7 @@ class OutputSpec:
         ):
             assert len(self.masks_to_filter_const_values) == len(self.const_values)
 
+
 @dataclass(frozen=True)
 class SubgraphTracingInfo:
     """Properties observed during subgraph tracing.
@@ -218,6 +220,7 @@ class SubgraphTracingInfo:
     # All sources accessed via VariableBuilder during the subgraph trace.
     traced_sources: OrderedSet[Any] = field(default_factory=OrderedSet)
 
+
 @contextlib.contextmanager
 def discard_graph_changes(tx: "InstructionTranslator") -> Generator[None, None, None]:
     ctx = tx.output.subtracer("subgraph_wrapper", None)
@@ -226,6 +229,7 @@ def discard_graph_changes(tx: "InstructionTranslator") -> Generator[None, None, 
         yield
     finally:
         ctx.__exit__(None, None, None)
+
 
 def check_meta_consistency_vt(
     vars1: list[VariableTracker],
@@ -263,6 +267,7 @@ def check_meta_consistency_vt(
         include_contiguity=include_contiguity,
     )
 
+
 @contextlib.contextmanager
 def dynamo_enable_grad(
     tx: "InstructionTranslator", enable: bool = True
@@ -276,6 +281,7 @@ def dynamo_enable_grad(
     finally:
         GradModeVariable.create(tx, org_value, initialized=True)
 
+
 @contextlib.contextmanager
 def dynamo_allow_side_effects_in_hop(
     tx: "InstructionTranslator",
@@ -286,6 +292,7 @@ def dynamo_allow_side_effects_in_hop(
         yield
     finally:
         tx.output.current_tracer.allow_side_effects_in_hop = orig_val
+
 
 def find_mismatched_vars(
     var: Any, types: type | tuple[type, ...], allow_none: bool = False
@@ -314,11 +321,13 @@ def find_mismatched_vars(
             mismatched_vars.add(var)
     return mismatched_vars
 
+
 def only_consist_of(
     var: Any, types: tuple[type, ...], allow_none: bool = False
 ) -> bool:
     mismatch_vars = find_mismatched_vars(var, types, allow_none=allow_none)
     return len(mismatch_vars) == 0
+
 
 def add_call_function(
     tx: "InstructionTranslator",
@@ -353,6 +362,7 @@ def add_call_function(
     )
     return flat_variable
 
+
 def overwrite_tensor_vt_requires_grad(
     graph_output_vts: Iterable[VariableTracker], flat_variable: VariableTracker
 ) -> None:
@@ -368,6 +378,7 @@ def overwrite_tensor_vt_requires_grad(
             orig_vt.requires_grad = subgraph_vt.requires_grad
             if orig_vt.requires_grad:
                 orig_vt.has_grad_fn = True
+
 
 def overwrite_tensor_vt_proxy(
     graph_output_vts: Iterable[VariableTracker], flat_variable: VariableTracker
@@ -401,6 +412,7 @@ def overwrite_tensor_vt_proxy(
                 subgraph_vt, (SymNodeVariable, TorchScriptObjectVariable)
             )
             orig_vt.proxy = subgraph_vt.proxy
+
 
 def _call_function_with_auto_output_flattening(
     tx: "InstructionTranslator",
@@ -440,6 +452,7 @@ def _call_function_with_auto_output_flattening(
         # pyrefly: ignore[bad-argument-type]
         overwrite_tensor_vt_proxy(graph_output_vts, flat_variable)
     return body_r
+
 
 def _call_function_and_unflatten_output(
     tx: "InstructionTranslator",
@@ -508,6 +521,7 @@ def _call_function_and_unflatten_output(
         else flat_variable
     )
 
+
 def _assert_tensors_nonaliasing(inputs: Any, outputs: Any) -> None:
     input_tensor_ids = {
         id(t) for t in pytree.tree_leaves(inputs) if isinstance(t, torch.Tensor)
@@ -518,6 +532,7 @@ def _assert_tensors_nonaliasing(inputs: Any, outputs: Any) -> None:
     assert input_tensor_ids.isdisjoint(output_tensor_ids), (
         "inputs to function body cannot alias outputs"
     )
+
 
 def get_tensor_storages(tensor: torch.Tensor) -> set[StorageWeakRef]:
     """
@@ -551,6 +566,7 @@ def get_tensor_storages(tensor: torch.Tensor) -> set[StorageWeakRef]:
         storages.add(StorageWeakRef(tensor._typed_storage()))
 
     return storages
+
 
 class StorageAliasingTracker:
     """
@@ -628,6 +644,7 @@ class StorageAliasingTracker:
 
         return True
 
+
 def collect_intermediate_outputs(
     tx: "InstructionTranslator",
     subtracer: "SubgraphTracer",
@@ -669,6 +686,7 @@ def collect_intermediate_outputs(
 
     return extra_outputs
 
+
 def _check_all_tensorvariable(args: Sequence[VariableTracker]) -> None:
     if not all(type(a.realize()) is TensorVariable for a in args):
         unimplemented(
@@ -677,6 +695,7 @@ def _check_all_tensorvariable(args: Sequence[VariableTracker]) -> None:
             explanation="Expected all leaves to be of torch.Tensor type.",
             hints=[],
         )
+
 
 def _check_supported_callable_arg(
     tx: "InstructionTranslator", func_var: VariableTracker, arg_name: str
@@ -695,6 +714,7 @@ def _check_supported_callable_arg(
             explanation=f"{arg_name} should be a callable but is of type {str(func_var)}.",
             hints=[],
         )
+
 
 def validate_subgraph_output_types(
     output: VariableTracker | Sequence[VariableTracker],
@@ -726,6 +746,7 @@ def validate_subgraph_output_types(
                     *graph_break_hints.USER_ERROR,
                 ],
             )
+
 
 def _call_while_loop(
     self: Union[
@@ -988,6 +1009,7 @@ def _call_while_loop(
         body_r,
     )
 
+
 def are_same_graph_modules(
     fn_name: str, a_mod: GraphModule, b_mod: GraphModule, fake_mode: "FakeTensorMode"
 ) -> bool:
@@ -1098,6 +1120,7 @@ def are_same_graph_modules(
         node_map[a_node] = b_node
 
     return True
+
 
 def validate_args_and_maybe_create_graph_inputs(
     sub_args: list[VariableTracker],
@@ -1217,6 +1240,7 @@ def validate_args_and_maybe_create_graph_inputs(
             args.append(new_arg)
         return args
 
+
 def _merge_graph_inputs(
     l_graph: torch.fx.Graph,
     l_lifted_freevars: dict[Proxy, Proxy],
@@ -1333,6 +1357,7 @@ def _merge_graph_inputs(
     fixup_branch_inps(r_graph, r_lifted_freevars, r_shared, unique_l, unique_r)
     return l_graph, r_graph, l_shared, r_shared, unique_l, unique_r
 
+
 def move_lifted_freevars_phs_to_end(
     graph: torch.fx.Graph, lifted_freevars: dict[Proxy, Proxy]
 ) -> None:
@@ -1379,6 +1404,7 @@ def move_lifted_freevars_phs_to_end(
 
     graph.lint()
 
+
 def check_aliasing_and_input_mutation(
     subtracer: "SubgraphTracer",
     graph: torch.fx.Graph,
@@ -1415,6 +1441,7 @@ def check_aliasing_and_input_mutation(
                     "Please open an issue.",
                 ],
             )
+
 
 def trace_hop_function(
     f: VariableTracker,
@@ -1474,6 +1501,7 @@ def trace_hop_function(
         tx.output.side_effects = prev_side_effects
     return output
 
+
 def trace_hop_function_with_auto_output_flattening(
     f: VariableTracker,
     tx: "InstructionTranslator",
@@ -1498,6 +1526,7 @@ def trace_hop_function_with_auto_output_flattening(
         output = f.call_function(tx, args, sub_kwargs)
 
     return output
+
 
 def get_hop_args(
     tx: "InstructionTranslator",
@@ -1529,6 +1558,7 @@ def get_hop_args(
         description=description,
     )
     return args
+
 
 def speculate_subgraph_with_auto_output_flattening(
     tx: "InstructionTranslator",
@@ -1897,6 +1927,7 @@ def speculate_subgraph_with_auto_output_flattening(
         log.info(ex)  # noqa: G200
         raise ex
 
+
 def speculate_subgraph(
     tx: "InstructionTranslator",
     f: VariableTracker,
@@ -2095,6 +2126,7 @@ def speculate_subgraph(
         log.info(ex)  # noqa: G200
         raise ex
 
+
 def make_attr(tx: "InstructionTranslator", name: str) -> Proxy:
     node = tx.output.create_proxy(
         "get_attr",
@@ -2103,6 +2135,7 @@ def make_attr(tx: "InstructionTranslator", name: str) -> Proxy:
         {},
     )
     return node
+
 
 def add_hop_context(cls: type[HOP_VT_Alias]) -> type[HOP_VT_Alias]:
     """
@@ -2157,6 +2190,7 @@ def add_hop_context(cls: type[HOP_VT_Alias]) -> type[HOP_VT_Alias]:
     cls.call_function = wrapped_call_function
     return cls
 
+
 class TorchHigherOrderOperatorVariable(VariableTracker):
     # Subclasses should set _HOP_NAME to enable automatic HOP context in error messages
     _HOP_NAME: str | None = None
@@ -2184,6 +2218,7 @@ class TorchHigherOrderOperatorVariable(VariableTracker):
             return variable_class(value, source, **kwargs)
 
         from torch._higher_order_ops import BaseHOP
+
         from .autograd import BaseHOPVariable
 
         if isinstance(value, BaseHOP):
@@ -2243,6 +2278,7 @@ class TorchHigherOrderOperatorVariable(VariableTracker):
             and self.as_python_constant() == other.as_python_constant()
         )
 
+
 def _get_fake_value(x: Union[VariableTracker, Proxy, "FakeTensor"]) -> "FakeTensor":
     if isinstance(x, variables.VariableTracker):
         return x.as_proxy().node.meta["example_value"]
@@ -2250,6 +2286,7 @@ def _get_fake_value(x: Union[VariableTracker, Proxy, "FakeTensor"]) -> "FakeTens
         return x.node.meta["example_value"]
     else:
         return x
+
 
 def maybe_positional_arg_names(func: VariableTracker) -> list[str] | None:
     result = []

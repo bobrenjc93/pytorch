@@ -1,23 +1,23 @@
 from typing import TYPE_CHECKING
 
 from .common import (
+    _call_function_and_unflatten_output,
     Any,
     ConstDictVariable,
+    graph_break_hints,
     HigherOrderOperator,
     LazyVariableTracker,
     ListVariable,
-    Sequence,
-    Source,
-    TorchHigherOrderOperatorVariable,
-    TupleVariable,
-    VariableTracker,
-    _call_function_and_unflatten_output,
-    graph_break_hints,
     make_attr,
     pytree,
+    Sequence,
+    Source,
     speculate_subgraph,
     torch,
+    TorchHigherOrderOperatorVariable,
+    TupleVariable,
     unimplemented,
+    VariableTracker,
 )
 
 
@@ -63,6 +63,7 @@ class CallTorchbindHigherOrderVariable(TorchHigherOrderOperatorVariable):
             ),
         )
 
+
 class PrintHigherOrderVariable(TorchHigherOrderOperatorVariable):
     _HOP_NAME = "torch.ops.higher_order.print"
 
@@ -87,6 +88,7 @@ class PrintHigherOrderVariable(TorchHigherOrderOperatorVariable):
                 kwargs=kwargs_proxy,
             ),
         )
+
 
 class OutDtypeHigherOrderVariable(TorchHigherOrderOperatorVariable):
     _HOP_NAME = "torch.ops.higher_order.out_dtype"
@@ -130,6 +132,7 @@ class OutDtypeHigherOrderVariable(TorchHigherOrderOperatorVariable):
             ),
             example_value=example_value,
         )
+
 
 class StrictModeHigherOrderVariable(TorchHigherOrderOperatorVariable):
     _HOP_NAME = "torch.ops.higher_order.strict_mode"
@@ -208,6 +211,7 @@ class StrictModeHigherOrderVariable(TorchHigherOrderOperatorVariable):
             ret_val,
         )
 
+
 class ExportTracepointHigherOrderVariable(TorchHigherOrderOperatorVariable):
     _HOP_NAME = "torch.ops.higher_order._export_tracepoint"
 
@@ -231,6 +235,7 @@ class ExportTracepointHigherOrderVariable(TorchHigherOrderOperatorVariable):
             ),
             example_value=None,
         )
+
 
 class RunWithRNGStateHigherOrderVariable(TorchHigherOrderOperatorVariable):
     _HOP_NAME = "torch.ops.higher_order.run_with_rng_state"
@@ -256,6 +261,7 @@ class RunWithRNGStateHigherOrderVariable(TorchHigherOrderOperatorVariable):
             example_value=None,
         )
 
+
 class InlineAsmElementwiseHigherOrderVariable(TorchHigherOrderOperatorVariable):
     _HOP_NAME = "inline_asm_elementwise"
 
@@ -280,6 +286,7 @@ class InlineAsmElementwiseHigherOrderVariable(TorchHigherOrderOperatorVariable):
             example_value=None,
         )
 
+
 class AutoFunctionalizeHigherOrderVariable(TorchHigherOrderOperatorVariable):
     _HOP_NAME = "torch.ops.higher_order.auto_functionalized"
 
@@ -303,6 +310,7 @@ class AutoFunctionalizeHigherOrderVariable(TorchHigherOrderOperatorVariable):
             ),
             example_value=None,
         )
+
 
 class TraceWrappedHigherOrderOperatorVariable(TorchHigherOrderOperatorVariable):
     """

@@ -1,17 +1,6 @@
 from typing import TYPE_CHECKING
 
 from .common import (
-    ConstantVariable,
-    LazyVariableTracker,
-    ListVariable,
-    OutputSpec,
-    Proxy,
-    Sequence,
-    SymNodeVariable,
-    TensorVariable,
-    TorchHigherOrderOperatorVariable,
-    TupleVariable,
-    VariableTracker,
     _call_function_and_unflatten_output,
     _call_while_loop,
     _check_all_tensorvariable,
@@ -19,18 +8,29 @@ from .common import (
     _make_inlined,
     _merge_graph_inputs,
     check_meta_consistency_vt,
+    ConstantVariable,
     discard_graph_changes,
     functools,
     get_fake_value,
     graph_break_hints,
     itertools,
+    LazyVariableTracker,
+    ListVariable,
     make_attr,
     only_consist_of,
+    OutputSpec,
+    Proxy,
     pytree,
+    Sequence,
     speculate_subgraph,
+    SymNodeVariable,
+    TensorVariable,
     torch,
+    TorchHigherOrderOperatorVariable,
+    TupleVariable,
     unimplemented,
     variables,
+    VariableTracker,
     warnings,
 )
 
@@ -275,6 +275,7 @@ class CondHigherOrderVariable(TorchHigherOrderOperatorVariable):
             true_r,
         )
 
+
 class WhileLoopHigherOrderVariable(TorchHigherOrderOperatorVariable):
     _HOP_NAME = "torch.while_loop"
     _ALLOW_FALLBACK_TO_EAGER = False
@@ -292,6 +293,7 @@ class WhileLoopHigherOrderVariable(TorchHigherOrderOperatorVariable):
             self, tx, args, kwargs, stack_output=False, hop_name=self._HOP_NAME
         )
 
+
 class WhileLoopStackOutputHigherOrderVariable(TorchHigherOrderOperatorVariable):
     _HOP_NAME = "torch.while_loop"
     _ALLOW_FALLBACK_TO_EAGER = False
@@ -308,6 +310,7 @@ class WhileLoopStackOutputHigherOrderVariable(TorchHigherOrderOperatorVariable):
         return _call_while_loop(
             self, tx, args, kwargs, stack_output=True, hop_name=self._HOP_NAME
         )
+
 
 class AssociativeScanHigherOrderVariable(TorchHigherOrderOperatorVariable):
     _HOP_NAME = "torch.ops.higher_order.associative_scan"
@@ -548,6 +551,7 @@ class AssociativeScanHigherOrderVariable(TorchHigherOrderOperatorVariable):
             OutputSpec(xs_treespec),  # type: ignore[arg-type]
             None,
         )
+
 
 class ScanHigherOrderVariable(TorchHigherOrderOperatorVariable):
     _HOP_NAME = "torch.ops.higher_order.scan"
@@ -793,6 +797,7 @@ class ScanHigherOrderVariable(TorchHigherOrderOperatorVariable):
             _combine_spec,
             None,
         )
+
 
 class MapHigherOrderVariable(TorchHigherOrderOperatorVariable):
     _HOP_NAME = "torch.ops.higher_order.map_impl"

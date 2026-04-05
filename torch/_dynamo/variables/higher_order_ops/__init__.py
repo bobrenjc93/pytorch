@@ -1,3 +1,4 @@
+from ..invoke_subgraph import InvokeSubgraphHigherOrderVariable
 from .attention import (
     FlexAttentionBackwardHighOrderVariable,
     FlexAttentionHigherOrderVariable,
@@ -17,10 +18,6 @@ from .autograd import (
     WrapWithSetGradEnabledHigherOrderVariable,
 )
 from .common import (
-    OutputSpec,
-    StorageAliasingTracker,
-    SubgraphTracingInfo,
-    TorchHigherOrderOperatorVariable,
     _assert_tensors_nonaliasing,
     _call_function_and_unflatten_output,
     _call_function_with_auto_output_flattening,
@@ -45,10 +42,14 @@ from .common import (
     maybe_positional_arg_names,
     move_lifted_freevars_phs_to_end,
     only_consist_of,
+    OutputSpec,
     overwrite_tensor_vt_proxy,
     overwrite_tensor_vt_requires_grad,
     speculate_subgraph,
     speculate_subgraph_with_auto_output_flattening,
+    StorageAliasingTracker,
+    SubgraphTracingInfo,
+    TorchHigherOrderOperatorVariable,
     trace_hop_function,
     trace_hop_function_with_auto_output_flattening,
     validate_args_and_maybe_create_graph_inputs,
@@ -77,8 +78,6 @@ from .misc import (
     StrictModeHigherOrderVariable,
     TraceWrappedHigherOrderOperatorVariable,
 )
-
-from ..invoke_subgraph import InvokeSubgraphHigherOrderVariable
 
 
 _hop_name_to_variable_class.update(
