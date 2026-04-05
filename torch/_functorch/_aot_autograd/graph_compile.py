@@ -1298,9 +1298,7 @@ def maybe_inline_graph_saved_tensors_hooks(
         )
         num_symints_saved_for_bw = inner_meta.num_symints_saved_for_bw
         if num_symints_saved_for_bw is None:
-            raise AssertionError(
-                "inner_meta.num_symints_saved_for_bw must not be None"
-            )
+            raise AssertionError("inner_meta.num_symints_saved_for_bw must not be None")
         fw_donated_idxs = [i - num_symints_saved_for_bw for i in bw_donated_idxs]
         allow_set = {fw_outs_saved_for_bw[i].name for i in fw_donated_idxs}  # type: ignore[union-attr]
     elif mode == "no_static":
@@ -1873,16 +1871,12 @@ def _aot_stage2a_partition(
                     num_tensors_saved_with_no_vc_check += 1
             fw_metadata.set_partitioned_meta(
                 num_symints_saved_for_bw=num_symints_saved_for_bw,
-                num_tensors_saved_with_no_vc_check=(
-                    num_tensors_saved_with_no_vc_check
-                ),
+                num_tensors_saved_with_no_vc_check=(num_tensors_saved_with_no_vc_check),
                 num_opaque_objects_saved_for_bw=num_opaque_objects_saved_for_bw,
             )
             inner_meta.set_partitioned_meta(
                 num_symints_saved_for_bw=num_symints_saved_for_bw,
-                num_tensors_saved_with_no_vc_check=(
-                    num_tensors_saved_with_no_vc_check
-                ),
+                num_tensors_saved_with_no_vc_check=(num_tensors_saved_with_no_vc_check),
                 num_opaque_objects_saved_for_bw=num_opaque_objects_saved_for_bw,
             )
 

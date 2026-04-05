@@ -728,15 +728,11 @@ class ViewAndMutationMeta:
         num_opaque_objects_saved_for_bw: int,
     ) -> None:
         self.num_symints_saved_for_bw = num_symints_saved_for_bw
-        self.num_tensors_saved_with_no_vc_check = (
-            num_tensors_saved_with_no_vc_check
-        )
+        self.num_tensors_saved_with_no_vc_check = num_tensors_saved_with_no_vc_check
         self.num_opaque_objects_saved_for_bw = num_opaque_objects_saved_for_bw
         self.partitioned_meta = PartitionedMeta(
             num_symints_saved_for_bw=num_symints_saved_for_bw,
-            num_tensors_saved_with_no_vc_check=(
-                num_tensors_saved_with_no_vc_check
-            ),
+            num_tensors_saved_with_no_vc_check=(num_tensors_saved_with_no_vc_check),
             num_opaque_objects_saved_for_bw=num_opaque_objects_saved_for_bw,
         )
         self.__dict__.pop("_saved_tensor_layout", None)
@@ -757,9 +753,7 @@ class ViewAndMutationMeta:
             num_tensors_saved_with_no_vc_check=(
                 self.num_tensors_saved_with_no_vc_check
             ),
-            num_opaque_objects_saved_for_bw=(
-                self.num_opaque_objects_saved_for_bw or 0
-            ),
+            num_opaque_objects_saved_for_bw=(self.num_opaque_objects_saved_for_bw or 0),
         )
         self.partitioned_meta = partitioned_meta
         return partitioned_meta
