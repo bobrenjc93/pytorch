@@ -3,6 +3,7 @@ import contextlib
 import unittest
 
 import sympy
+
 import torch
 import torch._inductor.config as inductor_config
 from torch._inductor.codegen import triton_utils
@@ -14,8 +15,8 @@ from torch._inductor.codegen.common import (
     SizeArg,
 )
 from torch._inductor.codegen.triton import (
-    TritonKernelOverrides,
     _materialize_trunc_to_float_expr,
+    TritonKernelOverrides,
 )
 from torch._inductor.codegen.triton_ir import StructuredTritonKernelIR
 from torch._inductor.dtype_propagation import DtypePropagationOpsHandler, promote_types
@@ -54,8 +55,8 @@ class TestCodegenTriton(InductorTestCase):
     @inductor_config.patch("triton.divisible_by_16", True)
     def test_config_of_sizearg(self):
         from torch._inductor.utils import (
-            TritonAttrsDescriptorVersion,
             get_triton_attrs_descriptor_version,
+            TritonAttrsDescriptorVersion,
         )
 
         two = sympy.Integer(2)
