@@ -13,12 +13,12 @@ import os
 import re
 import tempfile
 from abc import ABC, abstractmethod
-from enum import auto, Enum
+from enum import Enum, auto
 from itertools import chain
-from typing import Any, cast, ClassVar, Generic, NamedTuple, TYPE_CHECKING
-from typing_extensions import Self, TypeVar
+from typing import TYPE_CHECKING, Any, ClassVar, Generic, NamedTuple, cast
 
 import sympy
+from typing_extensions import Self, TypeVar
 
 import torch
 import torch.fx
@@ -28,21 +28,21 @@ from torch.utils._config_module import ConfigModule
 from torch.utils._ordered_set import OrderedSet
 from torch.utils._sympy.numbers import int_oo
 from torch.utils._sympy.printers import PythonPrinter as _PythonPrinter
-from torch.utils._sympy.symbol import free_symbol_is_type, symbol_is_type, SymT
-from torch.utils._sympy.value_ranges import bound_sympy, ValueRanges
+from torch.utils._sympy.symbol import SymT, free_symbol_is_type, symbol_is_type
+from torch.utils._sympy.value_ranges import ValueRanges, bound_sympy
 
 from .. import config, metrics
 from ..dtype_propagation import DtypePropagationOpsHandler
 from ..ops_handler import BasicMathOpsMixin, DefaultHandler
 from ..shape_propagation import ShapePropagationOpsHandler
 from ..utils import (
-    boolean_ops,
     DeferredLineBase,
+    IndentedBuffer,
+    ScopedDict,
+    boolean_ops,
     generate_assert,
     get_current_backend,
-    IndentedBuffer,
     ir_dataclass,
-    ScopedDict,
     sympy_dot,
     sympy_index_symbol,
     sympy_subs,
@@ -51,14 +51,13 @@ from ..utils import (
 )
 from ..virtualized import (
     NullHandler,
-    ops,
     OpsHandler,
     OpsValue,
     ReductionType,
     StoreMode,
     V,
+    ops,
 )
-
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator, MutableMapping, Sequence
@@ -723,7 +722,7 @@ def check_dtype(
     if config.test_configs.runtime_triton_dtype_assert and backend == "triton":
         buffer.writeline(f"tl.static_assert({var}.dtype == {triton_type(dtype)})")
     elif config.test_configs.static_cpp_dtype_assert and backend == "cpp":
-        from .cpp_utils import CppCSEVariable, DTYPE_TO_CPP
+        from .cpp_utils import DTYPE_TO_CPP, CppCSEVariable
 
         assert isinstance(var, CppCSEVariable), type(var)
         if dtype == torch.bool:
@@ -1290,9 +1289,9 @@ pointwise_overrides_data: dict[str, OverridesData] = dict(
     mul_rn=OverridesData(
         type_promotion_kind=ELEMENTWISE_TYPE_PROMOTION_KIND.DEFAULT,
         cpp=lambda x, y: f"({x}) * ({y})",  # C++ doesn't need special handling
-        triton=lambda x, y: f"({x}) * ({y})"
-        if torch.version.hip
-        else f"libdevice.mul_rn({x}, {y})",
+        triton=lambda x, y: (
+            f"({x}) * ({y})" if torch.version.hip else f"libdevice.mul_rn({x}, {y})"
+        ),
         name="mul_rn",
     ),
     # erfinv, exp2, expit, gammaln
@@ -1381,8 +1380,9 @@ pointwise_overrides_data: dict[str, OverridesData] = dict(
     ),
     polygamma=OverridesData(
         type_promotion_kind=ELEMENTWISE_TYPE_PROMOTION_KIND.INT_TO_FLOAT,
-        cpp=lambda x,
-        y: f"{x} == 0 ? calc_digamma({y}) : ({x} == 1 ? trigamma({y}) : calc_polygamma({y}, {x}))",
+        cpp=lambda x, y: (
+            f"{x} == 0 ? calc_digamma({y}) : ({x} == 1 ? trigamma({y}) : calc_polygamma({y}, {x}))"
+        ),
         name="polygamma",
     ),
     # psi - alias to digamma
@@ -2854,6 +2854,8 @@ class CSEProxy(DefaultHandler):
             return out
         store_cache = self.kernel.cse.store_cache
         if name in store_cache:
+            # Store-cache hits intentionally reuse the producer of the forwarded
+            # value instead of emitting a synthetic load node in the sidecar IR.
             return store_cache[name]
         out = self.kernel.load(name, index)
         # count load that is not in the store_cache, and also not in the
@@ -2890,13 +2892,24 @@ class CSEProxy(DefaultHandler):
         self.kernel.device_assert_async(cond, msg)
 
     # pyrefly: ignore [bad-override]
-    def partial_accumulate(self, *args: Any) -> None:
-        self.kernel.partial_accumulate(*args)
+    def partial_accumulate(
+        self,
+        name: str,
+        reduction_type: ReductionType,
+        value: CSEVariable,
+        extra_meta: dict[str, Any],
+    ) -> None:
+        self.kernel.partial_accumulate(name, reduction_type, value, extra_meta)
         record_codegen_partial_accumulate = getattr(
             self.kernel, "record_codegen_partial_accumulate", None
         )
         if record_codegen_partial_accumulate is not None:
-            record_codegen_partial_accumulate(*args)
+            record_codegen_partial_accumulate(
+                name=name,
+                reduction_type=reduction_type,
+                value=value,
+                extra_meta=extra_meta,
+            )
 
     def store_reduction(self, name: str, index: sympy.Expr, value: CSEVariable) -> None:
         self.kernel.store_buffer_names.add(name)
@@ -2921,7 +2934,9 @@ class CSEProxy(DefaultHandler):
     ) -> CSEVariable | tuple[CSEVariable, ...]:
         self.kernel.num_reduction += 1
         result = self.kernel.reduction(dtype, src_dtype, reduction_type, value)
-        record_codegen_reduction = getattr(self.kernel, "record_codegen_reduction", None)
+        record_codegen_reduction = getattr(
+            self.kernel, "record_codegen_reduction", None
+        )
         if record_codegen_reduction is not None:
             record_codegen_reduction(
                 dtype=dtype,
@@ -3047,7 +3062,9 @@ class CSEProxy(DefaultHandler):
             sorter,
             sorter_indices,
         )
-        record_codegen_bucketize = getattr(self.kernel, "record_codegen_bucketize", None)
+        record_codegen_bucketize = getattr(
+            self.kernel, "record_codegen_bucketize", None
+        )
         if record_codegen_bucketize is not None:
             record_codegen_bucketize(
                 values=values,

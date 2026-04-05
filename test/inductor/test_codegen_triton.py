@@ -3,7 +3,6 @@ import contextlib
 import unittest
 
 import sympy
-
 import torch
 import torch._inductor.config as inductor_config
 from torch._inductor.codegen import triton_utils
@@ -15,8 +14,8 @@ from torch._inductor.codegen.common import (
     SizeArg,
 )
 from torch._inductor.codegen.triton import (
-    _materialize_trunc_to_float_expr,
     TritonKernelOverrides,
+    _materialize_trunc_to_float_expr,
 )
 from torch._inductor.codegen.triton_ir import StructuredTritonKernelIR
 from torch._inductor.dtype_propagation import DtypePropagationOpsHandler, promote_types
@@ -55,8 +54,8 @@ class TestCodegenTriton(InductorTestCase):
     @inductor_config.patch("triton.divisible_by_16", True)
     def test_config_of_sizearg(self):
         from torch._inductor.utils import (
-            get_triton_attrs_descriptor_version,
             TritonAttrsDescriptorVersion,
+            get_triton_attrs_descriptor_version,
         )
 
         two = sympy.Integer(2)
@@ -325,6 +324,9 @@ class TestCodegenTriton(InductorTestCase):
                     ],
                 )
 
+            def create_cse_var(self, name, bounds, dtype, shape):
+                return CSEVariable(name, bounds, dtype, shape)
+
             def record_codegen_operation(
                 self, *, name, args, kwargs, raw_value, result, section
             ):
@@ -362,6 +364,64 @@ class TestCodegenTriton(InductorTestCase):
         self.assertEqual(structured["nodes"][0]["outputs"][0]["name"], str(first))
         self.assertEqual(structured["nodes"][0]["inputs"][0]["value"], "tmp_lhs")
         self.assertEqual(structured["nodes"][0]["inputs"][1]["value"], "tmp_rhs")
+
+    def test_cse_proxy_records_partial_accumulate_with_named_args(self):
+        class FakeTritonKernel:
+            def __init__(self):
+                self.compute = IndentedBuffer()
+                self.cse = CSE()
+                self.current_node = None
+                self.node_to_bounds = None
+                self.saved_partial_accumulates = []
+                self.structured_ir = StructuredTritonKernelIR(
+                    kernel_name="fake_kernel",
+                    kernel_kind="FakeTritonKernel",
+                    numels={},
+                    range_trees=[],
+                )
+
+            def partial_accumulate(self, name, reduction_type, value, extra_meta):
+                self.saved_partial_accumulates.append(
+                    (name, reduction_type, value, extra_meta)
+                )
+
+            def record_codegen_partial_accumulate(
+                self, *, name, reduction_type, value, extra_meta
+            ):
+                self.structured_ir.record_node(
+                    kind="reduction",
+                    op="partial_accumulate",
+                    section="compute",
+                    inputs=(value,),
+                    attrs={
+                        "buffer": name,
+                        "reduction_type": reduction_type,
+                        "extra_meta": extra_meta,
+                    },
+                )
+
+        kernel = FakeTritonKernel()
+        proxy = CSEProxy(kernel, TritonKernelOverrides())
+        value = CSEVariable(
+            "tmp_val", ValueRanges.unknown(), torch.float32, ("XBLOCK",)
+        )
+
+        proxy.partial_accumulate(
+            "acc",
+            "sum",
+            value,
+            {"is_first_reduction": True},
+        )
+
+        self.assertEqual(
+            kernel.saved_partial_accumulates,
+            [("acc", "sum", value, {"is_first_reduction": True})],
+        )
+        structured = kernel.structured_ir.to_dict()
+        self.assertEqual(len(structured["nodes"]), 1)
+        self.assertEqual(structured["nodes"][0]["op"], "partial_accumulate")
+        self.assertEqual(structured["nodes"][0]["attrs"]["buffer"], "acc")
+        self.assertEqual(structured["nodes"][0]["attrs"]["reduction_type"], "sum")
 
 
 if __name__ == "__main__":

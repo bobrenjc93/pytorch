@@ -16,7 +16,7 @@ import textwrap
 from abc import abstractmethod
 from collections.abc import Callable, Iterable, Sequence
 from functools import lru_cache
-from typing import Any, cast, TYPE_CHECKING, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 import sympy
 from sympy.printing.precedence import PRECEDENCE
@@ -41,21 +41,21 @@ from torch.utils._triton import (
     has_triton_stable_tma_api,
 )
 
-from ...utils._sympy.symbol import free_symbol_is_type, prefix_str, symbol_is_type, SymT
+from ...utils._sympy.symbol import SymT, free_symbol_is_type, prefix_str, symbol_is_type
 from ...utils._sympy.value_ranges import ValueRanges
 from .. import config, ir, metrics, utils
 from ..async_compile import AsyncCompile
-from ..codecache import code_hash, get_path, PyCodeCache, write_atomic
+from ..codecache import PyCodeCache, code_hash, get_path, write_atomic
 from ..debug import set_kernel_post_grad_provenance_tracing
 from ..ops_handler import DefaultHandler
 from ..runtime import triton_heuristics
 from ..runtime.benchmarking import benchmarker
 from ..runtime.hints import (
+    TRITON_MAX_BLOCK,
+    TRITON_MAX_RSPLIT,
     AutotuneHint,
     DeviceProperties,
     ReductionHint,
-    TRITON_MAX_BLOCK,
-    TRITON_MAX_RSPLIT,
 )
 from ..runtime.runtime_utils import get_max_y_grid, next_power_of_2
 from ..scheduler import (
@@ -67,13 +67,13 @@ from ..scheduler import (
 )
 from ..shape_propagation import get_broadcasted_shape
 from ..utils import (
-    cache_on_self,
     DelayReplaceLine,
+    Placeholder,
+    cache_on_self,
     get_bounds_index_expr,
     get_fused_kernel_name,
     get_kernel_metadata,
     is_welford_reduction,
-    Placeholder,
     prefix_is_reduction,
     sympy_dot,
     sympy_product,
@@ -82,19 +82,19 @@ from ..utils import (
     triton_version_uses_attrs_dict,
     upcast_compute_type,
 )
-from ..virtualized import _ops as ops, ReductionType, StoreMode, V
+from ..virtualized import ReductionType, StoreMode, V
+from ..virtualized import _ops as ops
 from ..wrapper_benchmark import get_kernel_category_by_source_code
 from .block_analysis import BlockPatternMatcher
 from .common import (
+    CSE,
     ArgName,
     BackendFeature,
     ConstexprArg,
-    CSE,
     CSEVariable,
     DeferredLine,
     IndentedBuffer,
     InplacedBuffer,
-    is_buffer_removed,
     OpOverrides,
     PythonPrinter,
     RemovedArg,
@@ -102,16 +102,18 @@ from .common import (
     TensorArg,
     WorkspaceArg,
     WorkspaceZeroMode,
+    is_buffer_removed,
 )
 from .simd import (
-    constant_repr,
     IterationRanges,
     IterationRangesEntry,
     IterationRangesRoot,
     PartialAccumulate,
     SIMDKernel,
     SIMDScheduling,
+    constant_repr,
 )
+from .triton_ir import StructuredTritonKernelIR
 from .triton_utils import (
     config_of,
     equal_1_arg_indices,
@@ -119,9 +121,7 @@ from .triton_utils import (
     should_unwrap_unspec_arg,
     signature_to_meta,
 )
-from .triton_ir import StructuredTritonKernelIR
 from .wrapper import SymbolicCallArg
-
 
 if TYPE_CHECKING:
     from types import ModuleType

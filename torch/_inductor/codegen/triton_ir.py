@@ -8,7 +8,6 @@ import sympy
 
 import torch
 
-
 _SECTION_ORDER = (
     "body",
     "prologue",
@@ -117,7 +116,8 @@ class StructuredTritonKernelIR:
         self.kernel_name = kernel_name
         self.kernel_kind = kernel_kind
         self.numels = {
-            prefix: self._normalize_attr_value(numel) for prefix, numel in numels.items()
+            prefix: self._normalize_attr_value(numel)
+            for prefix, numel in numels.items()
         }
         self.range_trees = [
             {
@@ -144,7 +144,9 @@ class StructuredTritonKernelIR:
             self.section_scopes[section] = self.root_scope
 
         self.reduction_loop_scope: int | None = None
-        loop_ranges = [range_tree for range_tree in self.range_trees if range_tree["is_loop"]]
+        loop_ranges = [
+            range_tree for range_tree in self.range_trees if range_tree["is_loop"]
+        ]
         if loop_ranges:
             loop_scope = self._new_scope(
                 kind="loop",
@@ -191,7 +193,9 @@ class StructuredTritonKernelIR:
         loop_scope = self.scopes[self.reduction_loop_scope]
         for value in self._flatten(values):
             normalized = self._normalize_output(value)
-            if all(existing.name != normalized.name for existing in loop_scope.loop_carried):
+            if all(
+                existing.name != normalized.name for existing in loop_scope.loop_carried
+            ):
                 loop_scope.loop_carried.append(normalized)
 
     def record_node(
@@ -343,7 +347,9 @@ class StructuredTritonKernelIR:
         if getattr(value, "name", None) is not None:
             return self._normalize_output(value).to_dict()
         if callable(value):
-            return getattr(value, "__qualname__", getattr(value, "__name__", repr(value)))
+            return getattr(
+                value, "__qualname__", getattr(value, "__name__", repr(value))
+            )
         return repr(value)
 
     def _flatten(self, values: Any) -> list[Any]:
