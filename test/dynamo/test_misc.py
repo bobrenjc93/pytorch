@@ -458,7 +458,9 @@ graph():
 
         x = torch.ones(5)
         with YoloMode(), YoloMode2():
-            with self.assertRaisesRegex(torch._dynamo.exc.Unsupported, "fullgraph=True"):
+            with self.assertRaisesRegex(
+                torch._dynamo.exc.Unsupported, "fullgraph=True"
+            ):
                 torch.compile(
                     lambda x, y: torch.add(x, y), fullgraph=True, backend=backend
                 )(x, x)
@@ -533,7 +535,9 @@ graph():
 
         x = torch.ones(5)
         with YoloMode(), YoloMode2():
-            with self.assertRaisesRegex(torch._dynamo.exc.Unsupported, "fullgraph=True"):
+            with self.assertRaisesRegex(
+                torch._dynamo.exc.Unsupported, "fullgraph=True"
+            ):
                 torch.compile(
                     lambda x, y: torch.add(x, y), fullgraph=True, backend=backend
                 )(x, x)
@@ -549,7 +553,9 @@ graph():
         backend = torch._dynamo.testing.EagerAndRecordGraphs()
 
         with YoloMode2(), YoloMode():
-            with self.assertRaisesRegex(torch._dynamo.exc.Unsupported, "fullgraph=True"):
+            with self.assertRaisesRegex(
+                torch._dynamo.exc.Unsupported, "fullgraph=True"
+            ):
                 torch.compile(
                     lambda x, y: torch.add(x, y), fullgraph=True, backend=backend
                 )(x, x)

@@ -163,7 +163,9 @@ class TorchDispatchModeTests(torch._dynamo.test_case.TestCase):
 
         with ChecksumFoo():
             foo(x)
-            with self.assertRaisesRegex(torch._dynamo.exc.Unsupported, "fullgraph=True"):
+            with self.assertRaisesRegex(
+                torch._dynamo.exc.Unsupported, "fullgraph=True"
+            ):
                 g(x)
             foo(x)
 
