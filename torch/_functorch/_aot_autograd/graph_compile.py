@@ -13,22 +13,13 @@ import dataclasses
 import itertools
 import logging
 import operator
+import threading
 import time
 import traceback
 from collections import defaultdict
 from collections.abc import Callable, Generator
-from contextlib import nullcontext
-from typing import Any, TYPE_CHECKING
-
-from torch._library.fake_class_registry import FakeScriptObject
-from torch._opaque_base import OpaqueBase
-
-
-if TYPE_CHECKING:
-    from collections.abc import Sequence
-
-import threading
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
+from typing import Any
 
 import torch
 import torch.utils._pytree as pytree
@@ -41,8 +32,10 @@ from torch._dynamo.utils import (
     lazy_format_graph_code,
 )
 from torch._guards import CompileContext, TracingContext
+from torch._library.fake_class_registry import FakeScriptObject
 from torch._library.opaque_object import is_opaque_value
 from torch._logging import getArtifactLogger, trace_structured
+from torch._opaque_base import OpaqueBase
 from torch._subclasses import FakeTensor
 from torch._subclasses.meta_utils import is_sparse_any
 from torch.fx.experimental._backward_state import BackwardState
@@ -1867,12 +1860,8 @@ def _categorize_saved_tensors_for_backward(
         if isinstance(node, torch.fx.Node)
         and node.meta.get("saved_tensor_with_no_vc_check", False)
     )
-    fw_metadata.num_tensors_saved_with_no_vc_check = (
-        num_tensors_saved_with_no_vc_check
-    )
-    inner_meta.num_tensors_saved_with_no_vc_check = (
-        num_tensors_saved_with_no_vc_check
-    )
+    fw_metadata.num_tensors_saved_with_no_vc_check = num_tensors_saved_with_no_vc_check
+    inner_meta.num_tensors_saved_with_no_vc_check = num_tensors_saved_with_no_vc_check
 
     if torch._functorch.config.donated_buffer:
         fw_metadata.bw_donated_idxs = collect_bw_donated_buffer_idxs(
