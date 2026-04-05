@@ -32,8 +32,6 @@ from .common import (
     Sequence,
     set_example_value,
     Source,
-    speculate_subgraph,
-    speculate_subgraph_with_auto_output_flattening,
     SubgraphTracingInfo,
     torch,
     TorchHigherOrderOperatorVariable,
@@ -51,6 +49,12 @@ if TYPE_CHECKING:
     from torch._dynamo.symbolic_convert import InstructionTranslator
 
     from .. import AutogradFunctionContextVariable
+
+
+def _higher_order_ops():
+    # Preserve the old monolithic module lookup so package-level monkeypatches
+    # keep affecting speculative tracing after the file split.
+    return torch._dynamo.variables.higher_order_ops
 
 
 class CustomFunctionHigherOrderOperatorVariable(TorchHigherOrderOperatorVariable):
@@ -159,7 +163,7 @@ class WrapHigherOrderVariable(TorchHigherOrderOperatorVariable):
             body_lifted_freevars,
             body_graph_output_vts,
             tracing_info,
-        ) = speculate_subgraph_with_auto_output_flattening(
+        ) = _higher_order_ops().speculate_subgraph_with_auto_output_flattening(
             tx,
             fn_vt,
             fn_args_vt,
@@ -293,7 +297,7 @@ class WrapWithSetGradEnabledHigherOrderVariable(TorchHigherOrderOperatorVariable
                 (body_r, treespec),
                 body_graph,
                 body_lifted_freevars,
-            ) = speculate_subgraph(
+            ) = _higher_order_ops().speculate_subgraph(
                 tx,
                 fn_var,
                 [*rest_args],
@@ -390,7 +394,7 @@ class WrapWithAutocastHigherOrderVariable(TorchHigherOrderOperatorVariable):
                 (body_r, treespec),
                 body_graph,
                 body_lifted_freevars,
-            ) = speculate_subgraph(
+            ) = _higher_order_ops().speculate_subgraph(
                 tx,
                 fn_var,
                 [*rest_args],
@@ -892,7 +896,7 @@ class AutogradFunctionApplyVariable(VariableTracker):
 
         # Speculate subgraph on the fwd
         fwd_out, fwd_graph, fwd_freevars, fwd_graph_output_vts, _ = (
-            speculate_subgraph_with_auto_output_flattening(
+            _higher_order_ops().speculate_subgraph_with_auto_output_flattening(
                 tx,
                 fwd_fn,
                 fwd_args,
@@ -992,7 +996,7 @@ class AutogradFunctionApplyVariable(VariableTracker):
         ):
             try:
                 bwd_out, bwd_graph, bwd_freevars, bwd_graph_output_vts, _ = (
-                    speculate_subgraph_with_auto_output_flattening(
+                    _higher_order_ops().speculate_subgraph_with_auto_output_flattening(
                         tx,
                         bwd_fn,
                         bwd_args,
@@ -1044,7 +1048,7 @@ class AutogradFunctionApplyVariable(VariableTracker):
                     [],
                 ):
                     bwd_out, bwd_graph, bwd_freevars, bwd_graph_output_vts, _ = (
-                        speculate_subgraph_with_auto_output_flattening(
+                        _higher_order_ops().speculate_subgraph_with_auto_output_flattening(
                             tx,
                             bwd_fn,
                             bwd_args,
