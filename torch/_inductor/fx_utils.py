@@ -80,6 +80,7 @@ class FakeTensorUpdater:
 
     def __init__(self, graph: torch.fx.Graph) -> None:
         self.processed_hashes = OrderedSet[Any]()
+        self.tracked_node_ids = {id(node) for node in graph.nodes}
         self.graph = graph
 
         for node in self.graph.nodes:
@@ -208,24 +209,39 @@ class FakeTensorUpdater:
 
         to_process = OrderedSet[int]()
         for node in self.graph.nodes:
+            node_id = id(node)
+            node_hash = self.hash_node(node)
             # NB: Be very careful about skipping nodes (via continues) here
             # and ask for a careful review when changing this code. The
             # consequence for incorrect FakeTensor metadata is difficult-to-debug
             # silent incorrectness.
-            if (
-                self.hash_node(node) in self.processed_hashes
-                and id(node) not in to_process
-            ):
+            if node_hash in self.processed_hashes and node_id not in to_process:
+                continue
+
+            if hasattr(node.target, "_inductor_lowering_function"):
+                if node_id in self.tracked_node_ids:
+                    raise RuntimeError(
+                        "FakeTensorUpdater cannot recompute metadata for tracked "
+                        "_inductor_lowering_function nodes after their inputs or "
+                        "dependencies change because those targets expect "
+                        "Inductor IR inputs rather than FakeTensor inputs. "
+                        f"Encountered changed node: {node.format_node()}"
+                    )
+                if "val" not in node.meta:
+                    raise RuntimeError(
+                        "FakeTensorUpdater requires newly inserted "
+                        "_inductor_lowering_function nodes to already carry fake "
+                        "metadata in node.meta['val']. "
+                        f"Encountered new node without metadata: {node.format_node()}"
+                    )
+                # Pattern-based lowerings copy metadata from the node they replace,
+                # so newly inserted lowering nodes can be tracked without running
+                # their targets under fake mode.
+                self.processed_hashes.add(node_hash)
+                self.tracked_node_ids.add(node_id)
                 continue
 
             if not should_process_node(node):
-                if hasattr(node.target, "_inductor_lowering_function"):
-                    raise RuntimeError(
-                        "FakeTensorUpdater cannot recompute metadata for changed "
-                        "_inductor_lowering_function nodes because those targets "
-                        "expect Inductor IR inputs rather than FakeTensor inputs. "
-                        f"Encountered changed node: {node.format_node()}"
-                    )
                 continue
 
             is_valid, args, kwargs = get_fake_args_kwargs(node)
@@ -253,7 +269,8 @@ class FakeTensorUpdater:
 
             to_process.update([id(user) for user in node.users])
 
-            self.processed_hashes.add(self.hash_node(node))
+            self.processed_hashes.add(node_hash)
+            self.tracked_node_ids.add(node_id)
 
 
 def get_storage(t: torch.Tensor) -> int:

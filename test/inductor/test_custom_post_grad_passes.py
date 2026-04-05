@@ -90,6 +90,32 @@ class TestFakeTensorUpdater(TestCase):
 
         self.assertEqual(lowered.meta["val"].shape, x.meta["val"].shape)
 
+    def test_new_inductor_lowering_node_with_metadata_is_ignored(self):
+        def lowering_fn(x):
+            raise AssertionError("lowering_fn should not run under FakeTensorUpdater")
+
+        lowering_fn._inductor_lowering_function = True  # type: ignore[attr-defined]
+
+        graph = fx.Graph()
+        x = graph.placeholder("x")
+        neg = graph.call_function(torch.ops.aten.neg.default, (x,))
+        output = graph.output(neg)
+
+        with FakeTensorMode() as mode, torch.no_grad():
+            x.meta["val"] = mode.from_tensor(torch.randn(2, 3))
+            neg.meta["val"] = torch.ops.aten.neg.default(x.meta["val"])
+
+            updater = FakeTensorUpdater(graph)
+            with graph.inserting_before(output):
+                lowered = graph.call_function(lowering_fn, (neg,))
+            lowered.meta["val"] = neg.meta["val"]
+            output.args = (lowered,)
+
+            with V.set_fake_mode(mode):
+                updater.incremental_update()
+
+        self.assertEqual(lowered.meta["val"].shape, x.meta["val"].shape)
+
     def test_raises_on_changed_inductor_lowering_node(self):
         graph, x, y, neg, lowered = self._build_graph_with_inductor_lowering_node()
 
