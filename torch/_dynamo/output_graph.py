@@ -742,7 +742,9 @@ class GraphArgManager:
         return [node.meta["grapharg"] for node in self.placeholders]
 
     def example_inputs(self) -> list[torch.Tensor]:
-        return self.graph_args.example_inputs()
+        result = [arg.example for arg in self.graphargs]
+        # pyrefly: ignore[bad-return]
+        return result
 
     def remove_unused_graphargs(self) -> None:
         output_graph = self.output_graph
@@ -885,9 +887,7 @@ class GraphArgManager:
                     if is_opaque_type(type(node.meta["grapharg"].example)):
                         continue
                     fake = (
-                        arg.fake_tensor
-                        if arg.fake_tensor is not None
-                        else arg.example
+                        arg.fake_tensor if arg.fake_tensor is not None else arg.example
                     )
                     update_used_symbols(used_symbols, fake)
 
@@ -945,6 +945,12 @@ class GraphCompiler:
         self.compiler_fn: CompilerFn | None = compiler_fn
         self.register_finalizer_fns: list[Callable[[fx.GraphModule], None]] = []
 
+    @property
+    def root_tx(self) -> "InstructionTranslatorBase":
+        root_tx = self.output_graph.root_tx
+        assert root_tx is not None
+        return root_tx
+
     def compile_and_call_fx_graph(
         self,
         tx: "InstructionTranslatorBase",
@@ -995,9 +1001,7 @@ class GraphCompiler:
             sub_gms = self.dedup_pass()
             root.add_nn_modules(sub_gms)  # type: ignore[arg-type]
 
-            output_graph.current_tracer._maybe_preserve_original_meta(
-                tx, output_node
-            )
+            output_graph.current_tracer._maybe_preserve_original_meta(tx, output_node)
             if not config.do_not_emit_runtime_asserts:
                 # There is a rare scenario where codegen_suffix adds a new entry
                 # to self.nn_modules while `root` knows only about the
@@ -1166,6 +1170,8 @@ class GraphCompiler:
             if specializations := old_fake_mode.shape_env.specializations:
                 specialization_guards = []
                 specialization_cache: dict[Specialization, Callable[[Any], Any]] = {}
+                shape_env = output_graph.shape_env
+                tracing_context = output_graph.tracing_context
                 sources = [a.source for a in output_graph.graphargs]
                 for specialization in specializations:
                     source_index = sources.index(specialization.source)
@@ -1205,20 +1211,18 @@ class GraphCompiler:
                                     *args, **kwargs
                                 )
 
-                            with output_graph.shape_env.patch_source_specialization(
+                            with shape_env.patch_source_specialization(
                                 specialization.source, specialization.check_fn
                             ):
                                 # Modify gm so AOTAutogradCache key changes per specialization
                                 gm.meta["specialization"] = specialization
                                 example_inputs: list[Tensor] = list(args)
-                                with tracing(output_graph.tracing_context):
+                                with tracing(tracing_context):
                                     specialization_cache[specialization] = (
                                         self.call_user_compiler(gm, example_inputs)
                                     )
 
-                            return specialization_cache[specialization](
-                                *args, **kwargs
-                            )
+                            return specialization_cache[specialization](*args, **kwargs)
                     return compiled_fn(*args, **kwargs)
 
                 # This is safe because we pre-process name to be unique
@@ -1349,9 +1353,9 @@ class GraphCompiler:
                 ).with_traceback(e.__traceback__) from None
             unimplemented_with_warning(
                 e,
-                output_graph.root_tx.f_code,
+                self.root_tx.f_code,
                 gb_type="Backend compiler exception",
-                context=f"Backend: {name}\nException:{str(e)}\nTraceback:\n{output_graph.root_tx.format_frame_summary()}",
+                context=f"Backend: {name}\nException:{str(e)}\nTraceback:\n{self.root_tx.format_frame_summary()}",
                 explanation=f"Backend compiler `{name}` failed with {str(e)}. Adding a graph break.",
                 hints=[
                     "Report an issue to the backend compiler repo.",
@@ -3355,9 +3359,7 @@ class OutputGraph(OutputGraphCommon):
         return next_name
 
     def example_inputs(self) -> list[torch.Tensor]:
-        result = [arg.example for arg in self.graphargs]
-        # pyrefly: ignore[bad-return]
-        return result
+        return self.graph_args.example_inputs()
 
     def remove_unused_get_attr_nodes(self) -> None:
         for node in sorted(self.graph.find_nodes(op="get_attr"), reverse=True):
