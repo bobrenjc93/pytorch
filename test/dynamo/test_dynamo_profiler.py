@@ -16,6 +16,58 @@ import torch._dynamo.testing
 
 
 class DynamoProfilerTests(torch._dynamo.test_case.TestCase):
+    def test_bytecode_tracing_stop_captures_root_tx_before_close(self):
+        from torch._dynamo.output_graph import BytecodeEmitter
+
+        class FakeRootTx:
+            def __init__(self) -> None:
+                self.f_code = DynamoProfilerTests.test_function_trace_timing.__code__
+
+        class FakeProfilerState:
+            def __init__(self) -> None:
+                self.recorded_timings = []
+                self.dumped_output = None
+
+            def pop(self):
+                return type(
+                    "StackEntry",
+                    (),
+                    {
+                        "func_name": "fn",
+                        "filename": __file__,
+                        "firstlineno": 1,
+                        "start_time_ns": 10,
+                        "child_time_ns": 0,
+                        "is_primitive_call": False,
+                    },
+                )()
+
+            def record_timing(self, timing) -> None:
+                self.recorded_timings.append(timing)
+
+            def dump_stats(self, output_file) -> None:
+                self.dumped_output = output_file
+
+        class FakeOutputGraph:
+            def __init__(self) -> None:
+                self.root_tx = FakeRootTx()
+                self.profiler_state = FakeProfilerState()
+
+        output_graph = FakeOutputGraph()
+        emitter = BytecodeEmitter(output_graph)
+        emitter.compiler_trace_stack.callback(
+            lambda: setattr(output_graph, "root_tx", None)
+        )
+
+        with torch._dynamo.config.patch(dynamo_profiler=True):
+            emitter.mark_bytecode_tracing_stop()
+
+        self.assertEqual(len(output_graph.profiler_state.recorded_timings), 1)
+        self.assertEqual(
+            output_graph.profiler_state.recorded_timings[0].bytecode_count,
+            len(FakeRootTx().f_code.co_code),
+        )
+
     def test_function_trace_timing(self):
         """Test that inline function timing data is captured during compilation."""
 
