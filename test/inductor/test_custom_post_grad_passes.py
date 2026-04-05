@@ -15,9 +15,12 @@ from torch._inductor.custom_graph_pass import (
     CustomInferenceAwareGraphPass,
     get_hash_for_files,
 )
+from torch._inductor.fx_utils import FakeTensorUpdater
 from torch._inductor.lowering import lowerings as L
 from torch._inductor.pattern_matcher import Arg, CallFunction, PatternMatcherPass
 from torch._inductor.test_case import run_tests, TestCase
+from torch._inductor.virtualized import V
+from torch._subclasses.fake_tensor import FakeTensorMode
 from torch.testing._internal.common_utils import IS_LINUX
 from torch.testing._internal.inductor_utils import HAS_CPU, patch_inductor_backend
 
@@ -55,6 +58,58 @@ class TestCustomPassBase(TestCase):
                 counters["inductor"]["pattern_matcher_nodes"],
                 matcher_nodes,
             )
+
+
+class TestFakeTensorUpdater(TestCase):
+    def _build_graph_with_inductor_lowering_node(self):
+        def lowering_fn(x):
+            raise AssertionError("lowering_fn should not run under FakeTensorUpdater")
+
+        lowering_fn._inductor_lowering_function = True  # type: ignore[attr-defined]
+
+        graph = fx.Graph()
+        x = graph.placeholder("x")
+        y = graph.placeholder("y")
+        neg = graph.call_function(torch.ops.aten.neg.default, (x,))
+        lowered = graph.call_function(lowering_fn, (neg,))
+        graph.output(lowered)
+        return graph, x, y, neg, lowered
+
+    def test_unchanged_inductor_lowering_node_is_ignored(self):
+        graph, x, y, neg, lowered = self._build_graph_with_inductor_lowering_node()
+
+        with FakeTensorMode() as mode, torch.no_grad():
+            x.meta["val"] = mode.from_tensor(torch.randn(2, 3))
+            y.meta["val"] = mode.from_tensor(torch.randn(4, 5))
+            neg.meta["val"] = torch.ops.aten.neg.default(x.meta["val"])
+            lowered.meta["val"] = neg.meta["val"]
+
+            updater = FakeTensorUpdater(graph)
+            with V.set_fake_mode(mode):
+                updater.incremental_update()
+
+        self.assertEqual(lowered.meta["val"].shape, x.meta["val"].shape)
+
+    def test_raises_on_changed_inductor_lowering_node(self):
+        graph, x, y, neg, lowered = self._build_graph_with_inductor_lowering_node()
+
+        with FakeTensorMode() as mode, torch.no_grad():
+            x.meta["val"] = mode.from_tensor(torch.randn(2, 3))
+            y.meta["val"] = mode.from_tensor(torch.randn(4, 5))
+            neg.meta["val"] = torch.ops.aten.neg.default(x.meta["val"])
+            lowered.meta["val"] = neg.meta["val"]
+
+        updater = FakeTensorUpdater(graph)
+        with graph.inserting_before(lowered):
+            neg_replacement = graph.call_function(torch.ops.aten.neg.default, (y,))
+        lowered.args = (neg_replacement,)
+
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "_inductor_lowering_function nodes",
+        ):
+            with V.set_fake_mode(mode):
+                updater.incremental_update()
 
 
 aten = torch.ops.aten

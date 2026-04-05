@@ -219,6 +219,13 @@ class FakeTensorUpdater:
                 continue
 
             if not should_process_node(node):
+                if hasattr(node.target, "_inductor_lowering_function"):
+                    raise RuntimeError(
+                        "FakeTensorUpdater cannot recompute metadata for changed "
+                        "_inductor_lowering_function nodes because those targets "
+                        "expect Inductor IR inputs rather than FakeTensor inputs. "
+                        f"Encountered changed node: {node.format_node()}"
+                    )
                 continue
 
             is_valid, args, kwargs = get_fake_args_kwargs(node)
