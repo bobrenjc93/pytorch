@@ -19,10 +19,9 @@ import torch._dynamo.testing
 
 class DynamoProfilerTests(torch._dynamo.test_case.TestCase):
     def test_graph_compiler_runtime_context_survives_output_graph_teardown(self):
-        from torch.fx import Graph, GraphModule
-
         from torch._dynamo.output_graph import GraphCompiler
         from torch._dynamo.source import LocalSource
+        from torch.fx import Graph, GraphModule
 
         class FakeRootTx:
             f_code = DynamoProfilerTests.test_function_trace_timing.__code__
@@ -61,9 +60,7 @@ class DynamoProfilerTests(torch._dynamo.test_case.TestCase):
         result = compiled(torch.ones(2))
 
         self.assertIs(gm._param_name_to_source, runtime_context.param_name_to_source)
-        self.assertIs(
-            gm._source_to_user_stacks, runtime_context.source_to_user_stacks
-        )
+        self.assertIs(gm._source_to_user_stacks, runtime_context.source_to_user_stacks)
         self.assertTrue(torch.equal(result, torch.ones(2)))
 
     def test_bytecode_tracing_stop_captures_root_tx_before_close(self):
