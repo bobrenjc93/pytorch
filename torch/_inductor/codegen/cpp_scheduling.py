@@ -7,6 +7,7 @@ from enum import Enum
 from typing import Any, cast
 
 import sympy
+from typing_extensions import override
 
 import torch
 from torch._inductor import dependencies
@@ -50,6 +51,8 @@ class ReasonFusedNodes(Enum):
 
 
 class CppScheduling(BaseScheduling):
+    """Schedule and fuse C++ Inductor kernels for CPU code generation."""
+
     # Subclass CppKernelProxy to customize codegen without copying codegen_node().
     # Use kernel_proxy_cls to inject custom proxies in CppScheduling subclasses.
     # Avoid duplicating codegen_node() just to swap in a custom kernel proxy class.
@@ -84,6 +87,7 @@ class CppScheduling(BaseScheduling):
     def reset_kernel_group(self):
         self.kernel_group = KernelGroup()
 
+    @override
     def fuse(self, node1, node2):
         if node1.is_foreach() or node2.is_foreach():
             return ForeachKernelSchedulerNode.fuse(node1, node2)
