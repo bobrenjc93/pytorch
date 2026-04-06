@@ -3,24 +3,19 @@
 import abc
 
 import torch
-import torch.utils._pytree as pytree
-from torch._C import DispatchKey
 from torch._dispatch.python import suspend_functionalization
 from torch._higher_order_ops.auto_functionalize import FunctionalCallableWithEpilogue
 from torch._higher_order_ops.utils import (
     check_input_alias_and_mutation_return_outputs,
+    create_hop_call_proxy,
     HopInstance,
     materialize_as_graph,
-    reenter_make_fx,
+    register_hop_dispatches,
+    trace_and_register_subgraphs,
 )
 from torch._ops import HigherOrderOperator
-from torch._subclasses import FakeTensorMode
 from torch._subclasses.functional_tensor import disable_functional_mode
-from torch.fx.experimental.proxy_tensor import (
-    disable_proxy_modes_tracing,
-    ProxyTorchDispatchMode,
-    track_tensor_tree,
-)
+from torch.fx.experimental.proxy_tensor import disable_proxy_modes_tracing, track_tensor_tree
 
 
 class BaseHOP(HigherOrderOperator, abc.ABC):
@@ -62,12 +57,13 @@ class BaseHOP(HigherOrderOperator, abc.ABC):
 
         # Set up the registrations
         # If you want to override any of these, override them in your subclass.
-        self.py_autograd_impl(self._call_Autograd)
-        self.py_functionalize_impl(self._call_Functionalize)
-        self.py_impl(ProxyTorchDispatchMode)(self._call_ProxyTorchDispatchMode)
-        self.py_impl(FakeTensorMode)(self._call_FakeTensorMode)
-        self.py_impl(DispatchKey.CompositeExplicitAutograd)(
-            self._call_CompositeExplicitAutograd
+        register_hop_dispatches(
+            self,
+            autograd_impl=self._call_Autograd,
+            functionalize_impl=self._call_Functionalize,
+            proxy_mode_impl=self._call_ProxyTorchDispatchMode,
+            fake_tensor_impl=self._call_FakeTensorMode,
+            composite_impl=self._call_CompositeExplicitAutograd,
         )
 
     def __call__(self, subgraph, *operands, **kwargs):
@@ -104,19 +100,22 @@ class BaseHOP(HigherOrderOperator, abc.ABC):
         return subgraph(*operands)
 
     def _call_ProxyTorchDispatchMode(self, proxy_mode, subgraph, *operands, **kwargs):
-        traced_graph = reenter_make_fx(subgraph)(*operands)
+        (registered_subgraph,) = trace_and_register_subgraphs(
+            proxy_mode,
+            ("subgraph", subgraph, operands),
+        )
+        traced_graph = registered_subgraph.graph
         if not isinstance(proxy_mode.tracer, torch.fx.Tracer):
             raise AssertionError(
                 f"expected proxy_mode.tracer to be torch.fx.Tracer, got {type(proxy_mode.tracer)}"
             )
-        qualname = proxy_mode.tracer.get_fresh_qualname("subgraph")
-        proxy_mode.tracer.root.register_module(qualname, traced_graph)
 
         node_args = (traced_graph, *operands)
-        proxy_args = pytree.tree_map(proxy_mode.tracer.unwrap_proxy, node_args)  # type: ignore[attr-defined]
-        proxy_kwargs = pytree.tree_map(proxy_mode.tracer.unwrap_proxy, kwargs)  # type: ignore[attr-defined]
-        out_proxy = proxy_mode.tracer.create_proxy(
-            "call_function", self, proxy_args, proxy_kwargs
+        out_proxy = create_hop_call_proxy(
+            proxy_mode,
+            self,
+            node_args,
+            kwargs,
         )
 
         out = self(subgraph, *operands, **kwargs)
