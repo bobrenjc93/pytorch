@@ -767,6 +767,7 @@ __all__ = [
     "bitwise_xor",
     "copy_",
     "div",
+    "div_prim",
     "div_mode",
     "exp",
     "exp2",
