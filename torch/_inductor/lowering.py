@@ -5726,6 +5726,7 @@ def lower_inline_asm_elementwise(
         ranges=list(inputs[0].get_size()),
     )
 
+
 # Keep the extracted lowering groups near the end of the file so the helpers
 # they import from `torch._inductor.lowering` are already defined. Re-export
 # `elementwise_lowerings` first because the other extracted groups import from it,
@@ -5746,8 +5747,8 @@ from .elementwise_lowerings import (  # noqa: F401
     bitwise_xor,
     copy_,
     div,
-    div_prim,
     div_mode,
+    div_prim,
     exp,
     exp2,
     expm1,
@@ -5855,6 +5856,7 @@ from .reduction_lowerings import (  # noqa: F401
     var_mean_sum_,
     var_mean_welford_,
 )
+
 
 # populate lowerings defined in kernel/*
 from . import kernel  # usort: skip
