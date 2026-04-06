@@ -9,6 +9,7 @@ from torch._inductor.utils import IndentedBuffer
 
 from .rocm_template import ArgInfo
 
+
 log = logging.getLogger(__name__)
 
 

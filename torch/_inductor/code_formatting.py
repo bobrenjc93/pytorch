@@ -7,7 +7,6 @@ import sys
 import textwrap
 from io import StringIO
 from typing import Any, NamedTuple, TYPE_CHECKING
-
 from typing_extensions import Self
 
 
@@ -58,6 +57,8 @@ class DeferredLineBase:
 
 
 class IndentedBuffer:
+    """Indent-aware buffer for code generation that can preserve line context."""
+
     tabwidth = 4
 
     def __init__(self, initial_indent: int = 0) -> None:

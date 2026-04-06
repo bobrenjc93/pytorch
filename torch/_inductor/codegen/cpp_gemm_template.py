@@ -106,6 +106,7 @@ def use_cpp_gemm_template(
         and (mat2.is_module_buffer() or not require_constant_mat2)
     )
 
+
 GEMM_TEMPLATE_INIT_BLOCKING_BASIC_BLOCK = r"""
     constexpr int64_t num_threads = {{num_threads}};
     constexpr int64_t N = {{N}};

@@ -119,10 +119,8 @@ from torch.utils._sympy.functions import (
 )
 from torch.utils._sympy.value_ranges import bound_sympy, ValueRanges
 
-from . import code_formatting as _code_formatting
-from . import config
+from . import code_formatting as _code_formatting, config, sympy_utils as _sympy_utils
 from .runtime.runtime_utils import ceildiv as runtime_ceildiv
-from . import sympy_utils as _sympy_utils
 
 
 DelayReplaceLine = _code_formatting.DelayReplaceLine
@@ -2139,9 +2137,7 @@ def use_ck_template(layout: Layout) -> bool:
 
 
 def use_ck_gemm_template(layout: Layout, m: int, n: int, k: int) -> bool:
-    from .codegen.rocm.ck_template import (
-        use_ck_gemm_template as _use_ck_gemm_template,
-    )
+    from .codegen.rocm.ck_template import use_ck_gemm_template as _use_ck_gemm_template
 
     return _use_ck_gemm_template(layout, m, n, k)
 
@@ -2155,9 +2151,7 @@ def use_ck_tile_gemm_template(layout: Layout, m: int, n: int, k: int) -> bool:
 
 
 def use_ck_conv_template(layout: Layout) -> bool:
-    from .codegen.rocm.ck_template import (
-        use_ck_conv_template as _use_ck_conv_template,
-    )
+    from .codegen.rocm.ck_template import use_ck_conv_template as _use_ck_conv_template
 
     return _use_ck_conv_template(layout)
 
@@ -2202,7 +2196,9 @@ def use_cpp_gemm_template(
     is_woq_int4: bool = False,
     q_group_size: int | None = None,
 ) -> bool:
-    from .codegen.cpp_gemm_template import use_cpp_gemm_template as _use_cpp_gemm_template
+    from .codegen.cpp_gemm_template import (
+        use_cpp_gemm_template as _use_cpp_gemm_template,
+    )
 
     return _use_cpp_gemm_template(
         layout,
