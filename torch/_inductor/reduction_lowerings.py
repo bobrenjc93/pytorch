@@ -14,7 +14,6 @@ from .lowering import (
     ExpandView,
     PermuteView,
     Reduction,
-    V,
     _validate_dim,
     aten,
     clone,

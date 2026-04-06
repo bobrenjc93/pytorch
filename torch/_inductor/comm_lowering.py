@@ -200,9 +200,9 @@ def register_comm_lowerings():
         add_layout_constraint,
         clone,
         constrain_to_fx_strides,
-        copy_,
         register_lowering,
     )
+    from .elementwise_lowerings import copy_
 
     def register_comm_lowering(fn):
         add_layout_constraint(fn, constrain_to_fx_strides)

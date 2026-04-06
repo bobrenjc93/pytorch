@@ -59,6 +59,7 @@ from torch.utils._sympy.functions import (
 
 from .._dynamo.utils import import_submodule
 from . import config, inductor_prims, ir, test_operators  # NOQA: F401
+from .codegen.common import BackendFeature
 from .decomposition import decompositions, get_decompositions
 from .ir import (
     BaseView,
@@ -5749,23 +5750,131 @@ def lower_inline_asm_elementwise(
         ranges=list(inputs[0].get_size()),
     )
 
-
-def _reexport_lowering_symbols(module) -> None:
-    # Keep existing torch._inductor.lowering attribute lookups working
-    # while the implementation lives in smaller category modules.
-    for name in module.__all__:
-        globals()[name] = getattr(module, name)
-
-
-from . import elementwise_lowerings, pooling_lowerings, reduction_lowerings
-
-
-for lowering_module in (
-    elementwise_lowerings,
-    reduction_lowerings,
-    pooling_lowerings,
-):
-    _reexport_lowering_symbols(lowering_module)
+# Keep the extracted lowering groups near the end of the file so the helpers
+# they import from `torch._inductor.lowering` are already defined.
+from .elementwise_lowerings import (  # noqa: F401
+    _foreach_addcdiv_scalar,
+    _foreach_addcmul_scalar,
+    abs,
+    add,
+    addcdiv,
+    addcmul,
+    bitwise_and,
+    bitwise_left_shift,
+    bitwise_not,
+    bitwise_or,
+    bitwise_right_shift,
+    bitwise_xor,
+    copy_,
+    div,
+    div_mode,
+    exp,
+    exp2,
+    expm1,
+    fill_,
+    floordiv,
+    fmod,
+    foreach_add_list,
+    foreach_add_scalar,
+    foreach_copy,
+    foreach_div_list,
+    foreach_div_scalar,
+    foreach_mul_list,
+    foreach_mul_scalar,
+    get_constant_value,
+    gt,
+    logical_and,
+    logical_not,
+    logical_or,
+    logical_xor,
+    maximum,
+    minimum,
+    mul,
+    mutate_to,
+    neg,
+    pow,
+    pow_native,
+    pow_recursive,
+    reciprocal,
+    register_inplace,
+    register_pointwise_numeric,
+    register_pointwise_numeric_ldf64,
+    relu,
+    rsqrt,
+    sigmoid,
+    sign,
+    sqrt,
+    square,
+    sub,
+    truncdiv,
+)
+from .pooling_lowerings import (  # noqa: F401
+    _adaptive_avg_pool2d,
+    _adaptive_pooling_fn,
+    _adaptive_pooling_fn_with_idx,
+    _avg_poolnd,
+    _fractional_max_pool,
+    _fractional_pooling_offsets,
+    _low_memory_max_pool_offsets_to_indices,
+    _low_memory_max_pool_with_offsets,
+    _max_pool_with_indices,
+    _max_pool_with_offsets,
+    _pool_offsets_to_indices,
+    adaptive_max_pool2d,
+    avg_pool2d,
+    avg_pool2d_backward,
+    avg_pool3d,
+    avg_pool3d_backward,
+    compute_indices_adaptive_pooling,
+    fallback_adaptive_avg_pool2d,
+    fallback_adaptive_max_pool2d,
+    fallback_avg_pool2d_backward,
+    fallback_avg_pool3d_backward,
+    fallback_max_pool2d_with_indices_backward,
+    fallbacks_avg_poolnd,
+    fractional_max_pool2d,
+    fractional_max_pool3d,
+    max_pool2d_with_indices,
+    max_pool2d_with_indices_backward,
+    max_pool3d_with_indices,
+    max_pool_checks,
+    pad_adaptive_loader,
+    pooling_size,
+    should_fallback_max_pool_with_indices,
+    upsample_nearest2d_backward,
+)
+from .reduction_lowerings import (  # noqa: F401
+    _make_reduction_inner,
+    _make_scan_inner,
+    _validate_reduction_axis,
+    cummax,
+    cummin,
+    cumprod,
+    cumsum,
+    fallback_cummax,
+    fallback_cummin,
+    fallback_cumprod,
+    fallback_cumsum,
+    fallback_logcumsumexp,
+    logcumsumexp,
+    make_reduction,
+    mean,
+    prod,
+    reduce_amax,
+    reduce_amin,
+    reduce_any,
+    reduce_argmax,
+    reduce_argmin,
+    reduce_max,
+    reduce_min,
+    sum_,
+    use_two_step_variance,
+    var_,
+    var_mean,
+    var_mean_helper_,
+    var_mean_sum_,
+    var_mean_welford_,
+)
 
 
 # populate lowerings defined in kernel/*

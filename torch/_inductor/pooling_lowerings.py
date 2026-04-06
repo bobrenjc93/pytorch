@@ -1,20 +1,20 @@
 # mypy: allow-untyped-defs
 from __future__ import annotations
 
+import contextlib
 import functools
-from collections.abc import Sequence
+import itertools
+import operator
+from typing import TYPE_CHECKING, Any
 
 import sympy
 
 import torch
+from torch.utils._sympy.functions import CeilDiv, FloorDiv
 
 from .elementwise_lowerings import div_prim
 from .lowering import (
-    Any,
-    Callable,
-    CeilDiv,
     ELEMENTWISE_TYPE_PROMOTION_KIND,
-    FloorDiv,
     Pointwise,
     Reduction,
     TensorBox,
@@ -24,21 +24,22 @@ from .lowering import (
     clone,
     config,
     constant_boundary_condition,
-    contextlib,
     empty,
     fallback_handler,
     get_promoted_dtype,
     inductor_prims,
     ir,
-    itertools,
     ones_like,
-    operator,
     ops,
     pad_listlike,
     prims,
     register_lowering,
     to_dtype,
 )
+
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Sequence
 
 
 def pooling_size(x, i, kernel_size, stride, padding, ceil_mode, *, dilation=None):
@@ -337,6 +338,7 @@ fallback_max_pool2d_with_indices_backward = fallback_handler(
 def max_pool2d_with_indices_backward(
     grad_output, x, kernel_size, stride, padding, dilation, ceil_mode, indices
 ):
+    """Lower max_pool2d_with_indices backward for small, non-dilated windows."""
     if padding == 0:
         padding = [0, 0]
     if dilation == 1:
@@ -1144,6 +1146,7 @@ def avg_pool2d_backward(
     count_include_pad,
     divisor_override=None,
 ):
+    """Lower avg_pool2d backward when the pooling window is small enough to inline."""
     assert divisor_override is None or divisor_override != 0, "divisor must be not zero"
     if not stride:
         stride = kernel_size
@@ -1315,6 +1318,7 @@ def avg_pool3d_backward(
     count_include_pad,
     divisor_override=None,
 ):
+    """Lower avg_pool3d backward when the pooling window is small enough to inline."""
     assert divisor_override is None or divisor_override != 0, "divisor must be not zero"
     if not stride:
         stride = kernel_size
@@ -1503,37 +1507,39 @@ def avg_pool3d_backward(
     )
     return rv
 
+
 __all__ = [
-    '_adaptive_avg_pool2d',
-    '_adaptive_pooling_fn',
-    '_adaptive_pooling_fn_with_idx',
-    '_avg_poolnd',
-    '_fractional_max_pool',
-    '_fractional_pooling_offsets',
-    '_low_memory_max_pool_offsets_to_indices',
-    '_low_memory_max_pool_with_offsets',
-    '_max_pool_with_indices',
-    '_max_pool_with_offsets',
-    '_pool_offsets_to_indices',
-    'adaptive_max_pool2d',
-    'avg_pool2d',
-    'avg_pool2d_backward',
-    'avg_pool3d',
-    'avg_pool3d_backward',
-    'compute_indices_adaptive_pooling',
-    'fallback_adaptive_avg_pool2d',
-    'fallback_adaptive_max_pool2d',
-    'fallback_avg_pool2d_backward',
-    'fallback_avg_pool3d_backward',
-    'fallback_max_pool2d_with_indices_backward',
-    'fallbacks_avg_poolnd',
-    'fractional_max_pool2d',
-    'fractional_max_pool3d',
-    'max_pool2d_with_indices',
-    'max_pool2d_with_indices_backward',
-    'max_pool3d_with_indices',
-    'max_pool_checks',
-    'pad_adaptive_loader',
-    'pooling_size',
-    'should_fallback_max_pool_with_indices',
+    "_adaptive_avg_pool2d",
+    "_adaptive_pooling_fn",
+    "_adaptive_pooling_fn_with_idx",
+    "_avg_poolnd",
+    "_fractional_max_pool",
+    "_fractional_pooling_offsets",
+    "_low_memory_max_pool_offsets_to_indices",
+    "_low_memory_max_pool_with_offsets",
+    "_max_pool_with_indices",
+    "_max_pool_with_offsets",
+    "_pool_offsets_to_indices",
+    "adaptive_max_pool2d",
+    "avg_pool2d",
+    "avg_pool2d_backward",
+    "avg_pool3d",
+    "avg_pool3d_backward",
+    "compute_indices_adaptive_pooling",
+    "fallback_adaptive_avg_pool2d",
+    "fallback_adaptive_max_pool2d",
+    "fallback_avg_pool2d_backward",
+    "fallback_avg_pool3d_backward",
+    "fallback_max_pool2d_with_indices_backward",
+    "fallbacks_avg_poolnd",
+    "fractional_max_pool2d",
+    "fractional_max_pool3d",
+    "max_pool2d_with_indices",
+    "max_pool2d_with_indices_backward",
+    "max_pool3d_with_indices",
+    "max_pool_checks",
+    "pad_adaptive_loader",
+    "pooling_size",
+    "should_fallback_max_pool_with_indices",
+    "upsample_nearest2d_backward",
 ]
