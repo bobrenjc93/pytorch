@@ -43,6 +43,11 @@ class RegisteredSubgraph:
     graph: torch.fx.GraphModule
 
 
+TracedSubgraphSpec = tuple[str, torch.fx.GraphModule]
+UntracedSubgraphSpec = tuple[str, Callable[..., Any], tuple[Any, ...]]
+SubgraphSpec = TracedSubgraphSpec | UntracedSubgraphSpec
+
+
 def autograd_not_implemented_inner(
     operator: OperatorBase, delayed_error: bool, *args: Any, **kwargs: Any
 ) -> Any:
@@ -514,10 +519,10 @@ def unique_graph_names_with_root(
 
 
 def trace_and_register_subgraphs(
-    proxy_mode, *subgraph_specs: tuple[Any, ...]
+    proxy_mode: ProxyTorchDispatchMode, *subgraph_specs: SubgraphSpec
 ) -> tuple[RegisteredSubgraph, ...]:
-    traced_graphs = []
-    prefixes = []
+    traced_graphs: list[torch.fx.GraphModule] = []
+    prefixes: list[str] = []
     for spec in subgraph_specs:
         if len(spec) == 2:
             prefix, graph = spec
@@ -536,7 +541,7 @@ def trace_and_register_subgraphs(
         traced_graphs.append(graph)
 
     _, names = unique_graph_names_with_root(proxy_mode.tracer.root, *prefixes)
-    registered_subgraphs = []
+    registered_subgraphs: list[RegisteredSubgraph] = []
     for name, graph in zip(names, traced_graphs):
         proxy_mode.tracer.root.register_module(name, graph)
         registered_subgraphs.append(RegisteredSubgraph(name, graph))
@@ -544,7 +549,14 @@ def trace_and_register_subgraphs(
     return tuple(registered_subgraphs)
 
 
-def create_hop_call_proxy(proxy_mode, hop, args, kwargs=None, *, name=None):
+def create_hop_call_proxy(
+    proxy_mode: ProxyTorchDispatchMode,
+    hop: OperatorBase,
+    args: Any,
+    kwargs: Mapping[str, Any] | None = None,
+    *,
+    name: str | None = None,
+) -> torch.fx.Proxy:
     proxy_args = pytree.tree_map(proxy_mode.tracer.unwrap_proxy, args)
     proxy_kwargs = pytree.tree_map(proxy_mode.tracer.unwrap_proxy, kwargs or {})
     return proxy_mode.tracer.create_proxy(

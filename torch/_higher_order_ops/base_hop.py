@@ -3,6 +3,7 @@
 import abc
 
 import torch
+import torch.utils._pytree as pytree
 from torch._dispatch.python import suspend_functionalization
 from torch._higher_order_ops.auto_functionalize import FunctionalCallableWithEpilogue
 from torch._higher_order_ops.utils import (
@@ -11,7 +12,7 @@ from torch._higher_order_ops.utils import (
     HopInstance,
     materialize_as_graph,
     register_hop_dispatches,
-    trace_and_register_subgraphs,
+    reenter_make_fx,
 )
 from torch._ops import HigherOrderOperator
 from torch._subclasses.functional_tensor import disable_functional_mode
@@ -100,15 +101,13 @@ class BaseHOP(HigherOrderOperator, abc.ABC):
         return subgraph(*operands)
 
     def _call_ProxyTorchDispatchMode(self, proxy_mode, subgraph, *operands, **kwargs):
-        (registered_subgraph,) = trace_and_register_subgraphs(
-            proxy_mode,
-            ("subgraph", subgraph, operands),
-        )
-        traced_graph = registered_subgraph.graph
+        traced_graph = reenter_make_fx(subgraph)(*operands)
         if not isinstance(proxy_mode.tracer, torch.fx.Tracer):
             raise AssertionError(
                 f"expected proxy_mode.tracer to be torch.fx.Tracer, got {type(proxy_mode.tracer)}"
             )
+        qualname = proxy_mode.tracer.get_fresh_qualname("subgraph")
+        proxy_mode.tracer.root.register_module(qualname, traced_graph)
 
         node_args = (traced_graph, *operands)
         out_proxy = create_hop_call_proxy(
