@@ -25,7 +25,6 @@ from collections.abc import (
     Callable,
     Collection,
     Generator,
-    Iterator,
     Mapping,
     MutableMapping,
     MutableSet,
@@ -73,7 +72,7 @@ from torch.fx.experimental.symbolic_shapes import (
 
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Sequence, ValuesView
+    from collections.abc import Iterable, Iterator, Sequence, ValuesView
     from pathlib import Path
 
     from torch import SymBool, SymFloat, SymInt
