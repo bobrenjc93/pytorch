@@ -5061,16 +5061,6 @@ def constant_boundary_condition(
     return load
 
 
-
-
-
-
-
-
-
-
-
-
 sort_fallback = fallback_handler(aten.sort.stable, add_to_fallback_set=False)
 
 
@@ -5117,8 +5107,6 @@ def sort_stable(x, *, stable=None, dim=-1, descending=False):
 @register_lowering(aten.sort.default, type_promotion_kind=None)
 def sort(x, dim=-1, descending=False):
     return sort_stable(x, stable=False, dim=dim, descending=descending)
-
-
 
 
 @register_lowering(aten.sym_constrain_range)
@@ -5738,8 +5726,13 @@ def lower_inline_asm_elementwise(
         ranges=list(inputs[0].get_size()),
     )
 
+
+# populate lowerings defined in kernel/*
+from . import kernel  # usort: skip
+
 # Keep the extracted lowering groups near the end of the file so the helpers
-# they import from `torch._inductor.lowering` are already defined.
+# they import from `torch._inductor.lowering` are already defined. Re-export
+# `elementwise_lowerings` first because the other extracted groups import from it.
 from .elementwise_lowerings import (  # noqa: F401
     _foreach_addcdiv_scalar,
     _foreach_addcmul_scalar,
@@ -5863,10 +5856,6 @@ from .reduction_lowerings import (  # noqa: F401
     var_mean_sum_,
     var_mean_welford_,
 )
-
-
-# populate lowerings defined in kernel/*
-from . import kernel
 
 
 import_submodule(kernel)

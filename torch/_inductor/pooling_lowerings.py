@@ -5,7 +5,7 @@ import contextlib
 import functools
 import itertools
 import operator
-from typing import TYPE_CHECKING, Any
+from typing import Any, TYPE_CHECKING
 
 import sympy
 
@@ -15,15 +15,12 @@ from torch.utils._sympy.functions import CeilDiv, FloorDiv
 from .elementwise_lowerings import div_prim
 from .ir import Reduction
 from .lowering import (
-    ELEMENTWISE_TYPE_PROMOTION_KIND,
-    Pointwise,
-    TensorBox,
-    V,
     aten,
     ceildiv,
     clone,
     config,
     constant_boundary_condition,
+    ELEMENTWISE_TYPE_PROMOTION_KIND,
     empty,
     fallback_handler,
     get_promoted_dtype,
@@ -31,9 +28,12 @@ from .lowering import (
     ir,
     ones_like,
     ops,
+    Pointwise,
     prims,
     register_lowering,
+    TensorBox,
     to_dtype,
+    V,
 )
 from .utils import pad_listlike
 
