@@ -5648,6 +5648,7 @@ class ShapeEnv:
 
     def _create_no_constraints_context(self, t: Tensor) -> StatelessSymbolicContext:
         return StatelessSymbolicContext(
+            # Ignored; only the constraints part is relevant below.
             dynamic_sizes=[DimDynamic.DYNAMIC] * t.dim(),
             dynamic_strides=[DimDynamic.INFER_STRIDE] * t.dim(),
             constraint_sizes=[None] * t.dim(),
@@ -5663,7 +5664,7 @@ class ShapeEnv:
 
         if input_contexts is None:
             return [
-                self._create_no_constraints_context(t)
+                self._create_no_constraints_context(cast(torch.Tensor, t))
                 if isinstance(t, Tensorlike)
                 else None
                 for t in placeholders
@@ -5675,7 +5676,9 @@ class ShapeEnv:
         for i, (t, context) in enumerate(zip(placeholders, input_contexts)):
             if isinstance(t, Tensorlike):
                 if context is None:
-                    input_contexts[i] = self._create_no_constraints_context(t)
+                    input_contexts[i] = self._create_no_constraints_context(
+                        cast(torch.Tensor, t)
+                    )
             else:
                 if not isinstance(t, (SymInt, int, SymFloat, float)):
                     raise AssertionError(
@@ -5684,7 +5687,7 @@ class ShapeEnv:
                 if isinstance(context, list):
                     raise AssertionError("context must not be a list")
 
-        return input_contexts
+        return cast(list[SymbolicContext | None], input_contexts)
 
     def _create_produce_guards_context(
         self,
@@ -5905,7 +5908,11 @@ class ShapeEnv:
         *,
         ctx: _ProduceGuardsContext,
     ) -> None:
-        from torch._dynamo.source import AttrSource, TensorProperty, TensorPropertySource
+        from torch._dynamo.source import (
+            AttrSource,
+            TensorProperty,
+            TensorPropertySource,
+        )
 
         if context is None:
             raise AssertionError("context must not be None for tensor inputs")
@@ -5943,7 +5950,12 @@ class ShapeEnv:
                 (source, t, context.constraint_sizes, context.constraint_strides)  # type: ignore[attr-defined]
             ]
 
-        for src, curr_t, constraint_size, constraint_stride in sources_tensors_constraints:
+        for (
+            src,
+            curr_t,
+            constraint_size,
+            constraint_stride,
+        ) in sources_tensors_constraints:
             if is_sparse_any(curr_t):
                 for i, ss in enumerate(curr_t.size()):
                     property_source = TensorPropertySource(src, TensorProperty.SIZE, i)
@@ -5980,6 +5992,10 @@ class ShapeEnv:
     ) -> None:
         Tensorlike = (torch.Tensor, FakeTensorMeta)
 
+        # Fresh variables can only be bound by inputs, so we record where each
+        # symbol came from. In practice this means only the outermost ShapeEnv
+        # user can evaluate guards: Dynamo may guard on tensors that are later
+        # pruned, so inner users may not even have those inputs available.
         for t, source, context in zip(placeholders, sources, input_contexts):
             if isinstance(source, str):
                 from torch._dynamo.source import LocalSource
@@ -6000,7 +6016,9 @@ class ShapeEnv:
                 continue
             if not isinstance(t, Tensorlike):
                 raise AssertionError(f"Expected Tensorlike, got {type(t)}")
-            self._track_tensor_input_sources(source, t, context, ctx=ctx)
+            self._track_tensor_input_sources(
+                source, cast(torch.Tensor, t), context, ctx=ctx
+            )
 
     def _emit_input_equality_guards(
         self,
@@ -6020,7 +6038,10 @@ class ShapeEnv:
 
         for source, expr in ctx.input_guards:
             srcname = source.name
-            if self._translation_validation_enabled and srcname in self.source_to_symbol:
+            if (
+                self._translation_validation_enabled
+                and srcname in self.source_to_symbol
+            ):
                 self._add_target_expr(sympy.Eq(self.source_to_symbol[srcname], expr))
 
             if (
@@ -6030,8 +6051,17 @@ class ShapeEnv:
             ):
                 continue
 
-            if ignore_static and isinstance(source, TensorPropertySource) and expr.is_number:
-                self.log.debug("Skipping guard %s", f"{ctx.source_ref(source)} == {expr}")
+            # This logic excludes static values found on tensors from guarding,
+            # because Dynamo's check_tensor_fn does that (see guards.cpp).
+            # However, for non-tensor sources, we still need to guard here.
+            if (
+                ignore_static
+                and isinstance(source, TensorPropertySource)
+                and expr.is_number
+            ):
+                self.log.debug(
+                    "Skipping guard %s", f"{ctx.source_ref(source)} == {expr}"
+                )
                 continue
 
             if self._is_dim_source(source):
@@ -6178,6 +6208,12 @@ class ShapeEnv:
         if self.dim_constraints is None:
             raise AssertionError("dim_constraints must not be None")
 
+        # Because there are guards that export's constraint solver can suggest
+        # good fixes for, that we may have deferred as runtime asserts, and that
+        # produce_guards() alone won't do anything with (e.g. divisibility
+        # guards), we want to send runtime asserts to export's constraint solver
+        # too. These will still stay in the graph as asserts, but export's
+        # constraint solver can decide whether to do anything with them.
         for ra in self.deferred_runtime_asserts.get(None, []):
             if self._maybe_evaluate_static(ra.expr, axioms=()) is not None:
                 continue
@@ -6214,9 +6250,7 @@ class ShapeEnv:
                     self.dim_constraints.add(sympy.Le(symbol, r.upper))
                 bounds.append(sympy.Le(symbol, r.upper, evaluate=False))
                 if verbose_expr:
-                    verbose_expr = (
-                        f"{r.lower} <= {rf} <= {r.upper}  # {vr_sloc.lower} and {vr_sloc.upper}"
-                    )
+                    verbose_expr = f"{r.lower} <= {rf} <= {r.upper}  # {vr_sloc.lower} and {vr_sloc.upper}"
                 else:
                     verbose_expr = f"{rf} <= {r.upper}  # {vr_sloc.upper}"
             if bounds:
@@ -6248,6 +6282,10 @@ class ShapeEnv:
                                 self._debug_name(source),
                                 msg,
                             )
+            # We NaN specialize, which means similar to 0/1 specialization we
+            # should assume that the float is NOT nan. This is load bearing if
+            # you have something like an equality guard, where nan will play
+            # merry hell with the reasoning.
             if symbol_is_type(symbol, SymT.FLOAT):
                 res = f"not math.isnan({ctx.py_printer.print_source(source)})"
                 for exprs, printer, lang in zip(ctx.all_exprs, ctx.printers, ctx.langs):
@@ -6265,6 +6303,62 @@ class ShapeEnv:
     def _emit_exclusion_guards(self, *, ctx: _ProduceGuardsContext) -> None:
         import torch._dynamo.config as dynamo_config
 
+        # Exclusion guard for stable graph selection with automatic dynamic.
+        #
+        # When automatic_dynamic promotes a static dim to dynamic, the new
+        # (more general) graph is inserted *before* the old (specialized) graph
+        # in the guard cache. Without an exclusion guard, inputs that exactly
+        # match the old graph's static sizes would be captured by the new
+        # dynamic graph instead, violating the invariant "once an input is
+        # served by graph X it is always served by graph X". This condition is
+        # true iff there is no branching on dynamic shapes.
+        #
+        # Soundness argument (cache-flip / LIFO order):
+        #   Graph_new sits before Graph_old in the cache. Graph_old accepts
+        #   only inputs whose sizes match its static constraints exactly.
+        #   Graph_new must therefore reject exactly that set of inputs so they
+        #   fall through to Graph_old. The excluded values are the static sizes
+        #   from Graph_old, so the guard
+        #       Or(Ne(s0, v0), Ne(s1, v1), ...)
+        #   passes iff at least one dim differs from the old sizes, i.e. the
+        #   input does NOT fully match Graph_old. Conversely, when every dim
+        #   matches the old sizes the guard fails and the input falls through to
+        #   Graph_old, which is guaranteed to accept it.
+        #
+        # Theorem: For graphs G0, ..., Gn compiled via progressive dynamism
+        # (one dim per step), each input is accepted by at most one graph.
+        #
+        #   Setup: G0 is all-static with shape S. Gk is created by making
+        #   dim d_k dynamic, with exclusion guard d_k != S[d_k].
+        #
+        #   Proof by induction on n:
+        #
+        #   Base case (n=0): Only G0, all-static. Trivially unique.
+        #
+        #   Inductive step: Assume the property holds for G0, ..., G_{n-1}.
+        #   We add Gn with newly-dynamic dim d_n and exclusion d_n != S[d_n].
+        #
+        #   For any input X that passes Gn's shape guards, exactly one of:
+        #
+        #   Case A - exclusion passes (X[d_n] != S[d_n]):
+        #     Dim d_n is static in all G0, ..., G_{n-1} with value S[d_n],
+        #     so X fails all prior graphs on that dim. Only Gn accepts X.
+        #
+        #   Case B - exclusion rejects (X[d_n] == S[d_n]):
+        #     X matches Gn's shape guards on all other dims, and matches the
+        #     static value for d_n. So X satisfies G_{n-1}'s shape guards. By
+        #     the inductive hypothesis, exactly one of G0, ..., G_{n-1} accepts
+        #     X. Gn rejects X.
+        #
+        #   Corollary: Evaluation order does not affect correctness.
+        #
+        # All exclusion pairs across all tensors and scalars are flattened into
+        # a single list; each pair is just (symbol, excluded_int), and the
+        # multi-tensor case is the same logic as multi-dim within one tensor.
+        # The combined Or rejects only when ALL pairs match simultaneously,
+        # which is the exact condition for Graph_old to accept. If the current
+        # concrete values already match every excluded value the guard is
+        # skipped, because it would fail on creation.
         if (
             not dynamo_config.automatic_dynamic_exclusion_guard
             or dynamo_config.enable_compiler_collectives
@@ -6291,9 +6385,7 @@ class ShapeEnv:
         for exprs, printer, lang in zip(ctx.all_exprs, ctx.printers, ctx.langs):
             guard_expr = printer.doprint(excl_expr)
             if lang == "verbose_python":
-                guard_expr = (
-                    f"{guard_expr}  # exclusion guard for automatic dynamic"
-                )
+                guard_expr = f"{guard_expr}  # exclusion guard for automatic dynamic"
             exprs.append(guard_expr)
 
     def _detect_constraint_violations(self, *, ctx: _ProduceGuardsContext) -> None:
@@ -6418,13 +6510,77 @@ class ShapeEnv:
 
         if len(placeholders) != len(sources):
             raise AssertionError(f"len({placeholders}) != len({sources})")
-        input_contexts = self._normalize_input_contexts(placeholders, input_contexts)
+        normalized_input_contexts = self._normalize_input_contexts(
+            placeholders, input_contexts
+        )
         ctx = self._create_produce_guards_context(langs, source_ref)
+
+        # It took a lot of sweat to figure out the algorithm here. Let's
+        # explain how it works.
+        #
+        # The ShapeEnv lifecycle looks something like this:
+        #
+        # - For each input, you either generate a fresh Sympy symbol (s0) to
+        #   represent its value (a binding site), or you reuse some
+        #   preexisting symbol or expression, skipping the symbol allocation
+        #   (e.g., duck sizing to a preexisting symbol, or expressing a
+        #   stride as a multiplication of a separate stride and size.)
+        #   Naively, you might expect to bind a fresh Sympy symbol for every
+        #   input, but this is fairly wasteful as most of these symbols
+        #   immediately simplify away, and if you don't eagerly specialize,
+        #   e.g., 0/1 symbols, you end up with very complicated expressions
+        #   that are not optimizable in practice.
+        #
+        # - You perform some compute on these symbols, occasionally
+        #   introducing guards on boolean expressions on these symbols. In
+        #   particular, whenever we guard on equality (_maybe_guard_rel), we
+        #   can simplify shapes; e.g., when s0 == s1 * 2, we can now replace
+        #   all occurrences of s0 with s1 * 2. Sometimes, a boolean expression
+        #   evaluation doesn't introduce a guard, as the guard is already
+        #   entailed by the simplifications we have applied.
+        #
+        # - In the end, you have a bunch of replacements (saying how to
+        #   simplify shapes) and a bunch of guards (all the equality guards are
+        #   trivial, because they're covered by the replacements).
+        #
+        # From the ShapeEnv, we must generate a Python expression that, when
+        # evaluated on a set of inputs, tells us whether or not these boolean
+        # expressions would have evaluated in the same way. However, we cannot
+        # easily compute this, as we elide recording boolean expressions when
+        # we think they are vacuously true. Thus, we seek an approximation: we
+        # must generate an expression, if true, would have produced an
+        # "equivalent" ShapeEnv, which would answer guard expressions in the
+        # same way.
+        #
+        # Our notion of equivalence is a bit subtle. For example, consider the
+        # ShapeEnv created from an input of size (5, 4) versus (4, 4) (no other
+        # guards.) Duck sizing would generate (s0, s1) in the first case but
+        # (s0, s0) in the second. We do NOT assume that size variables are
+        # disjoint; so in fact a graph that assumes the input could be
+        # (s0, s1) subsumes (s0, s0) (setting s0 == s1), but not vice versa.
+        # However, consider an analogous case (1,) versus (2,). Duck sizing
+        # generates (1,) and (s0,); the (s0,) graph does NOT subsume the (1,)
+        # graph because we assume that any size variable is NOT 0/1 (and make
+        # simplifications according to this; e.g., if we queried s0 == 0, we
+        # would immediately return False without returning a guard.)
+        #
+        # So, it is perhaps easier to flip things on their head: the guard
+        # expressions we generate here say what simplifications are valid, and
+        # what are not. Below, we explain each of the guard expressions we
+        # generate.
+        #
+        # TODO: Make this more efficient by binding all the size/stride/offsets
+        # to locals before performing tests on them.
 
         # Guard generation proceeds in ordered phases so each transformation has
         # a single responsibility and consumes the artifacts of the prior phase.
         self._process_input_equalities(placeholders, sources, equalities_inputs, ctx)
-        self._track_symbol_to_source(placeholders, sources, input_contexts, ctx=ctx)
+        self._track_symbol_to_source(
+            placeholders,
+            sources,
+            normalized_input_contexts,
+            ctx=ctx,
+        )
 
         self.dim_constraints = DimConstraints(
             ctx.symbol_to_source,
