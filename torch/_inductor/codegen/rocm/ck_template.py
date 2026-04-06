@@ -4,14 +4,8 @@ from typing_extensions import override
 
 import torch
 from torch._inductor.codegen.rocm.rocm_template import ROCmTemplate
-from torch._inductor.code_formatting import IndentedBuffer
 from torch._inductor.ir import IRNode, Layout
-from torch._inductor.utils import (
-    _rocm_native_device_arch_name,
-    _use_autotune_backend,
-    _use_conv_autotune_backend,
-    try_import_ck_lib,
-)
+from torch._inductor.utils import IndentedBuffer
 
 from .rocm_template import ArgInfo
 
@@ -20,6 +14,7 @@ log = logging.getLogger(__name__)
 
 def use_ck_template(layout: Layout) -> bool:
     from ... import config
+    from ...utils import _rocm_native_device_arch_name, try_import_ck_lib
 
     # config knobs check 1
     if not (config.max_autotune or config.max_autotune_gemm):
@@ -58,6 +53,7 @@ def use_ck_template(layout: Layout) -> bool:
 
 
 def use_ck_gemm_template(layout: Layout, m: int, n: int, k: int) -> bool:
+    from ...utils import _use_autotune_backend
     from ...virtualized import V
 
     return (
@@ -68,6 +64,7 @@ def use_ck_gemm_template(layout: Layout, m: int, n: int, k: int) -> bool:
 
 
 def use_ck_tile_gemm_template(layout: Layout, m: int, n: int, k: int) -> bool:
+    from ...utils import _use_autotune_backend
     from ...virtualized import V
 
     return (
@@ -78,6 +75,8 @@ def use_ck_tile_gemm_template(layout: Layout, m: int, n: int, k: int) -> bool:
 
 
 def use_ck_conv_template(layout: Layout) -> bool:
+    from ...utils import _use_conv_autotune_backend
+
     return _use_conv_autotune_backend("CK") and use_ck_template(layout)
 
 

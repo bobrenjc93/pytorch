@@ -17,8 +17,6 @@ from .. import config, ir, lowering as L
 from ..kernel.mm_common import mm_args
 from ..select_algorithm import DataProcessorTemplateWrapper
 from ..utils import (
-    _use_autotune_backend,
-    _use_template_for_cpu,
     has_free_symbols,
     is_same_mkldnn_tensor,
     is_same_tensor,
@@ -57,6 +55,8 @@ def use_cpp_gemm_template(
     is_woq_int4: bool = False,
     q_group_size: int | None = None,
 ) -> bool:
+    from ..utils import _use_autotune_backend, _use_template_for_cpu
+
     if not _use_template_for_cpu(layout) or not _use_autotune_backend("CPP"):
         return False
 

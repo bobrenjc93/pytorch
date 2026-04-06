@@ -15,11 +15,7 @@ import sympy
 
 import torch
 from torch._inductor.runtime.runtime_utils import dynamo_timed
-from torch._inductor.utils import (
-    _use_autotune_backend,
-    _use_template_for_gpu,
-    clear_on_fresh_cache,
-)
+from torch._inductor.utils import clear_on_fresh_cache
 from torch.utils._ordered_set import OrderedSet
 
 from ... import config
@@ -40,6 +36,8 @@ XW_DTYPES: OrderedSet[torch.dtype] = OrderedSet(
 
 
 def use_cutlass_template(layout: Layout, m: int, n: int, k: int) -> bool:
+    from torch._inductor.utils import _use_autotune_backend, _use_template_for_gpu
+
     # TODO: Enable CUTLASS in non-AOT cpp_wrapper mode. The CUTLASS
     # codegen (CUDATemplateKernel.call_kernel) already has cpp_wrapper-aware
     # arg handling, but the other half is missing: the non-triton branch of

@@ -120,23 +120,25 @@ from torch.utils._sympy.functions import (
 )
 from torch.utils._sympy.value_ranges import bound_sympy, ValueRanges
 
+from . import code_formatting as _code_formatting
 from . import config
-from .code_formatting import (
-    DelayReplaceLine,
-    DeferredLineBase,
-    FakeIndentedBuffer,
-    IndentedBuffer,
-    LineContext,
-    restore_stdout_stderr,
-    ValueWithLineMap,
-)
 from .runtime.runtime_utils import ceildiv as runtime_ceildiv
-from .sympy_utils import (
-    sympy_index_symbol,
-    sympy_index_symbol_with_prefix,
-    sympy_product,
-    sympy_subs,
-)
+from . import sympy_utils as _sympy_utils
+
+
+DelayReplaceLine = _code_formatting.DelayReplaceLine
+DeferredLineBase = _code_formatting.DeferredLineBase
+FakeIndentedBuffer = _code_formatting.FakeIndentedBuffer
+IndentedBuffer = _code_formatting.IndentedBuffer
+LineContext = _code_formatting.LineContext
+restore_stdout_stderr = _code_formatting.restore_stdout_stderr
+ValueWithLineMap = _code_formatting.ValueWithLineMap
+
+SymT = _sympy_utils.SymT
+sympy_index_symbol = _sympy_utils.sympy_index_symbol
+sympy_index_symbol_with_prefix = _sympy_utils.sympy_index_symbol_with_prefix
+sympy_product = _sympy_utils.sympy_product
+sympy_subs = _sympy_utils.sympy_subs
 
 
 _IS_WINDOWS = sys.platform == "win32"
