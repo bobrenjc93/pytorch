@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import functools
 import operator
-from collections.abc import Iterable
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 import sympy
 
 from torch.fx.experimental._size_hinting import _sympy_subs
 from torch.utils._sympy.symbol import make_symbol, SymT
+
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
 
 
 def sympy_product(it: Iterable[sympy.Expr]) -> sympy.Expr:

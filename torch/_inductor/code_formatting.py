@@ -5,11 +5,14 @@ import dataclasses
 import math
 import sys
 import textwrap
-from collections.abc import Callable, Iterator, Sequence
 from io import StringIO
-from typing import Any, NamedTuple
+from typing import Any, NamedTuple, TYPE_CHECKING
 
 from typing_extensions import Self
+
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Iterator, Sequence
 
 
 class LineContext(NamedTuple):
