@@ -114,6 +114,32 @@ def expand_symint_meta(a, size, implicit=False):
     return a.new_empty(size)
 
 
+class TestSymbolicShapesModuleSplit(TestCase):
+    def test_symbolic_shapes_reexports_split_modules(self):
+        from torch.fx.experimental import (
+            _symbolic_shapes_constraints,
+            _symbolic_shapes_shape_env,
+            _symbolic_shapes_utils,
+            symbolic_shapes,
+        )
+
+        self.assertIs(
+            symbolic_shapes.canonicalize_bool_expr,
+            _symbolic_shapes_utils.canonicalize_bool_expr,
+        )
+        self.assertIs(symbolic_shapes.free_symbols, _symbolic_shapes_utils.free_symbols)
+        self.assertIs(symbolic_shapes._lru_cache, _symbolic_shapes_utils._lru_cache)
+        self.assertIs(
+            symbolic_shapes.EqualityConstraint,
+            _symbolic_shapes_constraints.EqualityConstraint,
+        )
+        self.assertIs(
+            symbolic_shapes.DimConstraints,
+            _symbolic_shapes_constraints.DimConstraints,
+        )
+        self.assertIs(symbolic_shapes.ShapeEnv, _symbolic_shapes_shape_env.ShapeEnv)
+
+
 def create_contiguous(shape):
     strides = [1]
     for dim in reversed(shape[:-1]):
