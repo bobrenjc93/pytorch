@@ -1170,7 +1170,7 @@ def _maybe_constant_propagate(
     all_constant: bool,
     spec: Any,
     out: Any,
-) -> object | None:
+) -> _NestedTensors | None:
     # In some circumstances, we will be tracing in a situation where a tensor
     # is *statically* known to be a constant (currently, this only happens if
     # you run torch.tensor; deterministic factory functions like torch.arange
@@ -1209,8 +1209,8 @@ def _maybe_constant_propagate(
         and out.numel() <= CONSTANT_NUMEL_LIMIT
     ):
         with unset_fake_temporarily():
-            if not isinstance(args[0], (Proxy, Tensor)):
-                raise AssertionError(f"Expected Proxy or Tensor, got {type(args[0])}")
+            if not isinstance(args[0], Tensor):
+                raise AssertionError(f"Expected Tensor, got {type(args[0])}")
             return args[0].clone()
 
     if (
@@ -1228,7 +1228,7 @@ def _maybe_constant_propagate(
             const_args, const_kwargs = pytree.tree_unflatten(
                 const_flat_args_kwargs, spec
             )
-            return func(*const_args, **const_kwargs)
+            return typing.cast(_NestedTensors, func(*const_args, **const_kwargs))
 
     return None
 
