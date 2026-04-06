@@ -26,6 +26,9 @@
 - .github/ci_commit_pins/**
 - c10/core/Sym*
 - torch/fx/experimental/symbolic_shapes.py
+- torch/fx/experimental/_symbolic_shapes_constraints.py
+- torch/fx/experimental/_symbolic_shapes_shape_env.py
+- torch/fx/experimental/_symbolic_shapes_utils.py
 - torch/fx/experimental/recording.py
 - torch/fx/experimental/sym_node.py
 - torch/fx/experimental/validator.py

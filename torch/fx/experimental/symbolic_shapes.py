@@ -1,18 +1,13 @@
+# flake8: noqa
+# ruff: noqa: F401
+"""Public compatibility wrapper for the symbolic shapes implementation split."""
+
 from __future__ import annotations
 
 import sympy
 from sympy import S
 
 from torch._prims_common import BoolLike, FloatLike, IntLike
-
-
-"""
-``torch.fx.experimental.symbolic_shapes`` provides interfaces for interacting with
-our symbolic shapes reasoning system that is used heavily in torch.compile.  Although
-this is not generally considered public API, when writing framework code in PyTorch
-as well as extensions to PyTorch (e.g., in custom operator implementations), you may
-need to make use of these APIs to setup dynamic shapes support appropriately.
-"""
 
 import abc
 import atexit
@@ -118,13 +113,10 @@ DimList = list
 
 log = logging.getLogger(__name__)
 
-
 from torch.fx.experimental._size_hinting import (
     _guarding_hint_or_throw_base,
     _optimization_hint_base,
 )
-
-
 
 from ._symbolic_shapes_constraints import *  # noqa: F403
 from ._symbolic_shapes_shape_env import *  # noqa: F403
@@ -178,4 +170,3 @@ __all__ = [
     "SymIntEqByExpr",
     "Specialization",
 ]
-

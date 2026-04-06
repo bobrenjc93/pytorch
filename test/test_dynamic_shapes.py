@@ -123,21 +123,43 @@ class TestSymbolicShapesModuleSplit(TestCase):
             symbolic_shapes,
         )
 
-        self.assertIs(
-            symbolic_shapes.canonicalize_bool_expr,
-            _symbolic_shapes_utils.canonicalize_bool_expr,
+        for module in (
+            _symbolic_shapes_constraints,
+            _symbolic_shapes_shape_env,
+            _symbolic_shapes_utils,
+        ):
+            for name in module.__all__:
+                self.assertTrue(hasattr(symbolic_shapes, name), name)
+                self.assertIs(getattr(symbolic_shapes, name), getattr(module, name))
+
+    def test_symbolic_shapes_split_runtime_compatibility(self):
+        from torch.fx.experimental import (
+            _symbolic_shapes_constraints,
+            _symbolic_shapes_shape_env,
+            _symbolic_shapes_utils,
         )
-        self.assertIs(symbolic_shapes.free_symbols, _symbolic_shapes_utils.free_symbols)
-        self.assertIs(symbolic_shapes._lru_cache, _symbolic_shapes_utils._lru_cache)
-        self.assertIs(
-            symbolic_shapes.EqualityConstraint,
-            _symbolic_shapes_constraints.EqualityConstraint,
+
+        shape_env = ShapeEnv()
+        symint = create_symint(shape_env, 5)
+
+        self.assertEqual(
+            _symbolic_shapes_utils.log.name,
+            "torch.fx.experimental.symbolic_shapes",
         )
-        self.assertIs(
-            symbolic_shapes.DimConstraints,
-            _symbolic_shapes_constraints.DimConstraints,
+        self.assertEqual(
+            _symbolic_shapes_constraints.log.name,
+            "torch.fx.experimental.symbolic_shapes",
         )
-        self.assertIs(symbolic_shapes.ShapeEnv, _symbolic_shapes_shape_env.ShapeEnv)
+        self.assertEqual(
+            _symbolic_shapes_shape_env.log.name,
+            "torch.fx.experimental.symbolic_shapes",
+        )
+        self.assertEqual(_symbolic_shapes_utils.free_symbols(symint), {symint.node.expr})
+
+        uninteresting = _symbolic_shapes_utils.uninteresting_files()
+        self.assertIn(_symbolic_shapes_utils.__file__, uninteresting)
+        self.assertIn(_symbolic_shapes_constraints.__file__, uninteresting)
+        self.assertIn(_symbolic_shapes_shape_env.__file__, uninteresting)
 
 
 def create_contiguous(shape):

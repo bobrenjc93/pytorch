@@ -1,18 +1,11 @@
+"""Utilities shared by the symbolic shapes compatibility wrapper and ShapeEnv."""
+
 from __future__ import annotations
 
 import sympy
 from sympy import S
 
 from torch._prims_common import BoolLike, FloatLike, IntLike
-
-
-"""
-``torch.fx.experimental.symbolic_shapes`` provides interfaces for interacting with
-our symbolic shapes reasoning system that is used heavily in torch.compile.  Although
-this is not generally considered public API, when writing framework code in PyTorch
-as well as extensions to PyTorch (e.g., in custom operator implementations), you may
-need to make use of these APIs to setup dynamic shapes support appropriately.
-"""
 
 import abc
 import atexit
@@ -116,18 +109,19 @@ if TYPE_CHECKING:
 InputList = list
 DimList = list
 
-log = logging.getLogger(__name__)
+log = logging.getLogger("torch.fx.experimental.symbolic_shapes")
 
 
 from torch.fx.experimental._size_hinting import (
     _guarding_hint_or_throw_base,
     _optimization_hint_base,
 )
-
+from ._symbolic_shapes_constraints import is_symbolic
 
 
 if TYPE_CHECKING:
     from ._symbolic_shapes_shape_env import ShapeEnv
+
 
 def guarding_hint_or_throw(
     a: torch.SymInt | torch.SymBool | int | bool | SymNode,
@@ -321,8 +315,12 @@ def uninteresting_files() -> set[str]:
     import torch._subclasses.meta_utils
     import torch.export._trace
 
+    split_module_files = {
+        __file__,
+        os.path.join(os.path.dirname(__file__), "_symbolic_shapes_constraints.py"),
+        os.path.join(os.path.dirname(__file__), "_symbolic_shapes_shape_env.py"),
+    }
     mods = [
-        sys.modules[__name__],
         torch.export._trace,
         torch.fx.experimental.recording,
         torch.fx.experimental.sym_node,
@@ -341,7 +339,7 @@ def uninteresting_files() -> set[str]:
     ]
     import torch._dynamo.guards
 
-    files = {inspect.getfile(m) for m in mods}
+    files = split_module_files | {inspect.getfile(m) for m in mods}
 
     # Add all Python files in torch._higher_order_ops directory
     higher_order_ops_dir = os.path.dirname(torch._higher_order_ops.__file__)
@@ -2044,9 +2042,6 @@ def _lru_cache(
     wrapper.cache_info = fn_cache.cache_info  # type: ignore[attr-defined]
     return wrapper  # type: ignore[return-value]
 
-
-@dataclass(frozen=True, slots=True)
-
 def _is_int(expr: object) -> TypeGuard[SymInt]:
     return isinstance(expr, SymInt) and expr.node.expr.is_number
 
@@ -2248,7 +2243,6 @@ __all__ = [
     "PendingUnbackedSymbolNotFound",
     "_ShapeEnvGuardError",
     "aten",
-    "__all__",
     "SHAPEENV_EVENT_KEY",
     "CURRENT_NODE_KEY",
     "log_lru_cache_stats",

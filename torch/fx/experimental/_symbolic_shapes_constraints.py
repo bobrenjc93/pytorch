@@ -1,18 +1,11 @@
+"""Constraint and symbolic context helpers for the symbolic shapes refactor."""
+
 from __future__ import annotations
 
 import sympy
 from sympy import S
 
 from torch._prims_common import BoolLike, FloatLike, IntLike
-
-
-"""
-``torch.fx.experimental.symbolic_shapes`` provides interfaces for interacting with
-our symbolic shapes reasoning system that is used heavily in torch.compile.  Although
-this is not generally considered public API, when writing framework code in PyTorch
-as well as extensions to PyTorch (e.g., in custom operator implementations), you may
-need to make use of these APIs to setup dynamic shapes support appropriately.
-"""
 
 import abc
 import atexit
@@ -116,7 +109,7 @@ if TYPE_CHECKING:
 InputList = list
 DimList = list
 
-log = logging.getLogger(__name__)
+log = logging.getLogger("torch.fx.experimental.symbolic_shapes")
 
 
 from torch.fx.experimental._size_hinting import (

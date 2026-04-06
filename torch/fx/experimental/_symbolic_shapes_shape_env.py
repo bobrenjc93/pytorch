@@ -1,19 +1,12 @@
 # ruff: noqa: F403, F405
+"""ShapeEnv implementation kept behind the symbolic_shapes compatibility wrapper."""
+
 from __future__ import annotations
 
 import sympy
 from sympy import S
 
 from torch._prims_common import BoolLike, FloatLike, IntLike
-
-
-"""
-``torch.fx.experimental.symbolic_shapes`` provides interfaces for interacting with
-our symbolic shapes reasoning system that is used heavily in torch.compile.  Although
-this is not generally considered public API, when writing framework code in PyTorch
-as well as extensions to PyTorch (e.g., in custom operator implementations), you may
-need to make use of these APIs to setup dynamic shapes support appropriately.
-"""
 
 import abc
 import atexit
@@ -109,7 +102,6 @@ if TYPE_CHECKING:
     import types
 
     from torch import Tensor
-    from torch._dynamo.source import TensorPropertySource
     from torch._subclasses.fake_tensor import FakeTensor
     from torch.types import BoolLikeType, FloatLikeType, IntLikeType
 
@@ -117,18 +109,15 @@ if TYPE_CHECKING:
 InputList = list
 DimList = list
 
-log = logging.getLogger(__name__)
+log = logging.getLogger("torch.fx.experimental.symbolic_shapes")
 
 
 from torch.fx.experimental._size_hinting import (
     _guarding_hint_or_throw_base,
     _optimization_hint_base,
 )
-
-
-
-from ._symbolic_shapes_constraints import *
-from ._symbolic_shapes_utils import *
+from ._symbolic_shapes_constraints import *  # noqa: F403
+from ._symbolic_shapes_utils import *  # noqa: F403
 
 IndicatorTypes = (IsNonOverlappingAndDenseIndicator,)
 
