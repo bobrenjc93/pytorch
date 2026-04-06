@@ -9,7 +9,6 @@ import os
 import re
 import sys
 import warnings
-from collections.abc import Callable
 from typing import Any, Optional, TYPE_CHECKING
 
 import sympy
@@ -22,7 +21,7 @@ from torch.utils._ordered_set import OrderedSet
 from torch.utils._sympy.functions import CeilDiv, FloorDiv, ModularIndexing
 from torch.utils._sympy.symbol import free_symbol_is_type, symbol_is_type, SymT
 
-from .. import config, cpp_builder, cpu_vec_isa, ir, metrics
+from .. import config, cpp_builder, cpu_vec_isa, metrics
 from ..loop_body import LoopBody
 from ..scheduler import BaseSchedulerNode, FusedSchedulerNode, Scheduler, SchedulerNode
 from ..utils import (
@@ -5073,8 +5072,12 @@ class LoopNest:
 
 
 if TYPE_CHECKING:
-    from . import cpp_outer_loop_fusion as _cpp_outer_loop_fusion
-    from . import cpp_scheduling as _cpp_scheduling
+    from collections.abc import Callable
+
+    from . import (
+        cpp_outer_loop_fusion as _cpp_outer_loop_fusion,
+        cpp_scheduling as _cpp_scheduling,
+    )
 
     OuterLoopFusedKernel = _cpp_outer_loop_fusion.OuterLoopFusedKernel
     CppScheduling = _cpp_scheduling.CppScheduling

@@ -5,9 +5,9 @@ import sys
 from collections.abc import Sequence
 from enum import Enum
 from typing import Any, cast
+from typing_extensions import override
 
 import sympy
-from typing_extensions import override
 
 import torch
 from torch._inductor import dependencies
@@ -25,11 +25,7 @@ from ..scheduler import (
     FusedSchedulerNode,
     SchedulerNode,
 )
-from ..utils import (
-    get_fused_kernel_name,
-    is_multi_outputs_template,
-    Placeholder,
-)
+from ..utils import get_fused_kernel_name, is_multi_outputs_template, Placeholder
 from ..virtualized import V
 from .common import BackendFeature, IndentedBuffer
 from .cpp import (
