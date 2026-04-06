@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from .ir_base import (
     Callable,
     ComputedBuffer,
@@ -8,7 +10,6 @@ from .ir_base import (
     Expr,
     FlexibleLayout,
     IRNode,
-    IndentedBuffer,
     InputBuffer,
     Layout,
     Operation,
@@ -31,6 +32,9 @@ from .ir_base import (
 )
 from .ir_compute import Pointwise, Reduction, Scan, Sort
 from .ir_views import ReinterpretView
+
+if TYPE_CHECKING:
+    from .utils import IndentedBuffer
 
 
 @dataclasses.dataclass

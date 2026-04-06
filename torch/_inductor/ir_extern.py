@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from .ir_base import (
     AbstractContextManager,
     Any,
-    Argument,
     BackendFeature,
     Buffer,
     CUTLASSTemplate,
@@ -18,7 +19,6 @@ from .ir_base import (
     FlexibleLayout,
     GPU_ALIGN_BYTES,
     GeneratorState,
-    GraphLowering,
     GraphModuleSerializer,
     IRNode,
     InputBuffer,
@@ -41,12 +41,10 @@ from .ir_base import (
     OperationBuffer,
     OrderedSet,
     OutputSpec,
-    PythonWrapperCodegen,
     Sequence,
     ShapeAsConstantBuffer,
     SymTypes,
     Symbol,
-    SympyBoolean,
     TorchBindObject,
     TypeIs,
     V,
@@ -115,6 +113,13 @@ from .ir_views import (
     is_unaligned,
 )
 from .ir_containers import MutableBox, StorageBox, TensorBox
+
+if TYPE_CHECKING:
+    from torch.fx.experimental.symbolic_shapes import SympyBoolean
+    from torch.fx.node import Argument
+
+    from .codegen.wrapper import PythonWrapperCodegen
+    from .graph import GraphLowering
 
 
 @dataclasses.dataclass(frozen=True)

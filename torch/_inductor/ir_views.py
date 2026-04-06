@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from .ir_base import (
     Any,
     Buffer,
@@ -14,7 +16,6 @@ from .ir_base import (
     GPU_ALIGN_BYTES,
     GuardOnDataDependentSymNode,
     IRNode,
-    IndentedBuffer,
     Integer,
     Layout,
     ModularIndexing,
@@ -45,6 +46,9 @@ from .ir_base import (
     torch,
 )
 from .ir_compute import Pointwise
+
+if TYPE_CHECKING:
+    from .utils import IndentedBuffer
 
 
 def is_storage_and_layout(x: IRNode) -> bool:
