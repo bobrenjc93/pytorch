@@ -8,10 +8,9 @@ import sympy
 
 import torch
 
+from .ir import BaseView, MutableBox
 from .lowering import (
-    BaseView,
     ELEMENTWISE_TYPE_PROMOTION_KIND,
-    MutableBox,
     Number,
     Pointwise,
     TensorBox,
@@ -39,12 +38,12 @@ from .lowering import (
     promote_constants,
     register_foreach_pointwise,
     register_lowering,
-    register_op_requires_libdevice_fp64,
     register_pointwise,
     to_device,
     to_dtype,
     trunc,
 )
+from .utils import register_op_requires_libdevice_fp64
 
 
 def pow_recursive(x, y, dtype):

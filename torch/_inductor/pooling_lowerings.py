@@ -13,10 +13,10 @@ import torch
 from torch.utils._sympy.functions import CeilDiv, FloorDiv
 
 from .elementwise_lowerings import div_prim
+from .ir import Reduction
 from .lowering import (
     ELEMENTWISE_TYPE_PROMOTION_KIND,
     Pointwise,
-    Reduction,
     TensorBox,
     V,
     aten,
@@ -31,11 +31,11 @@ from .lowering import (
     ir,
     ones_like,
     ops,
-    pad_listlike,
     prims,
     register_lowering,
     to_dtype,
 )
+from .utils import pad_listlike
 
 
 if TYPE_CHECKING:

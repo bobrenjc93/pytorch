@@ -7,20 +7,20 @@ from typing import TYPE_CHECKING
 import sympy
 
 import torch
+from torch._prims_common import get_computation_dtype
 from torch.utils._ordered_set import OrderedSet
 
 from .elementwise_lowerings import div, square, sub
+from .ir import Reduction
 from .lowering import (
     ExpandView,
     PermuteView,
-    Reduction,
     _validate_dim,
     aten,
     clone,
     config,
     empty_like,
     fallback_handler,
-    get_computation_dtype,
     ir,
     is_boolean_dtype,
     is_integer_dtype,

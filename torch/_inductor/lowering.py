@@ -6,16 +6,14 @@ import dataclasses
 import functools
 import itertools
 import logging
-import math
 import operator
 import os
 import sys
 import warnings
 from collections import defaultdict
 from collections.abc import Callable, Collection, Iterable, Sequence
-from typing import Any, cast, TYPE_CHECKING, TypeGuard, TypeVar
+from typing import Any, cast, TypeGuard, TypeVar
 from typing_extensions import ParamSpec
-from unittest.mock import patch
 
 import sympy
 
@@ -36,7 +34,6 @@ from torch._prims_common import (
     dtype_to_type,
     elementwise_dtypes,
     ELEMENTWISE_TYPE_PROMOTION_KIND,
-    get_computation_dtype,
     is_boolean_dtype,
     is_float_dtype,
     is_integer_dtype,
@@ -62,18 +59,15 @@ from . import config, inductor_prims, ir, test_operators  # NOQA: F401
 from .codegen.common import BackendFeature
 from .decomposition import decompositions, get_decompositions
 from .ir import (
-    BaseView,
     DtypeView,
     ExpandView,
     IndexingConstant,
     IRNode,
     is_triton,
-    MutableBox,
     OnlineSoftmaxReduction,
     ops_wrapper,
     PermuteView,
     Pointwise,
-    Reduction,
     SqueezeView,
     TensorBox,
     validate_ir,
@@ -87,17 +81,11 @@ from .utils import (
     is_pointwise_use,
     is_view,
     needs_fallback_due_to_atomic_add_limitations,
-    pad_listlike,
     register_op_dtype_propagation_rules,
-    register_op_requires_libdevice_fp64,
     sympy_product,
     use_scatter_fallback,
 )
 from .virtualized import ops, V
-
-
-if TYPE_CHECKING:
-    from .ops_handler import ReductionType
 
 
 _T = TypeVar("_T")
@@ -5666,8 +5654,8 @@ def prepare_softmax_online(x, dim):
             "Online softmax is disabled on the fly since Inductor decides to split the reduction."
         )
         amax = reduce_amax(x, dim, keepdims=True)
-        exp = lowerings[aten.exp](sub(x, amax))
-        xsum = sum_(exp, dim, keepdims=True)
+        exp_x = lowerings[aten.exp](sub(x, amax))
+        xsum = sum_(exp_x, dim, keepdims=True)
         return amax, xsum
 
 
