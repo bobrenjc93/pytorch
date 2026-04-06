@@ -24,9 +24,7 @@ from torch.utils._sympy.symbol import free_symbol_is_type, symbol_is_type, SymT
 
 from .. import config, cpp_builder, cpu_vec_isa, ir, metrics
 from ..loop_body import LoopBody
-from ..scheduler import (
-    SchedulerNode,
-)
+from ..scheduler import BaseSchedulerNode, FusedSchedulerNode, Scheduler, SchedulerNode
 from ..utils import (
     cache_on_self,
     get_bounds_index_expr,
