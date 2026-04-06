@@ -31,8 +31,12 @@ from ..utils import (
 )
 from ..virtualized import V
 from .common import BackendFeature, IndentedBuffer
-from .cpp import CppKernelProxy, KernelGroup, stride_at_vec_range
-from .cpp_outer_loop_fusion import OuterLoopFusedSchedulerNode
+from .cpp import (
+    CppKernelProxy,
+    KernelGroup,
+    OuterLoopFusedSchedulerNode,
+    stride_at_vec_range,
+)
 from .cpp_utils import LocalBufferContext, template_fusion_with_epilogues_supported
 
 
