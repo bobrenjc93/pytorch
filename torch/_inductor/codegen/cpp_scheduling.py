@@ -27,13 +27,13 @@ from ..scheduler import (
 from ..utils import (
     get_fused_kernel_name,
     is_multi_outputs_template,
-    template_fusion_with_epilogues_supported,
+    Placeholder,
 )
 from ..virtualized import V
-from .common import BackendFeature, IndentedBuffer, Placeholder
+from .common import BackendFeature, IndentedBuffer
 from .cpp import CppKernelProxy, KernelGroup, stride_at_vec_range
 from .cpp_outer_loop_fusion import OuterLoopFusedSchedulerNode
-from .cpp_utils import LocalBufferContext
+from .cpp_utils import LocalBufferContext, template_fusion_with_epilogues_supported
 
 
 _IS_WINDOWS = sys.platform == "win32"
