@@ -41,3 +41,24 @@ from .ir_compute import *  # noqa: F401,F403
 from .ir_views import *  # noqa: F401,F403
 from .ir_containers import *  # noqa: F401,F403
 from .ir_extern import *  # noqa: F401,F403
+
+# Preserve direct imports of the private compatibility helpers that existed
+# on the original monolithic torch._inductor.ir module. Star imports skip
+# underscore-prefixed names.
+_P = _ir_base._P
+_T = _ir_base._T
+_U = _ir_base._U
+_V = _ir_base._V
+_IntLike = _ir_base._IntLike
+_NumLike = _ir_base._NumLike
+_OpOverloads = _ir_base._OpOverloads
+_NodeOrNodes = _ir_base._NodeOrNodes
+_is_static = _ir_base._is_static
+_fixed_indexer = _ir_compute._fixed_indexer
+_make_out_variant_kernel_name = _ir_extern._make_out_variant_kernel_name
+_has_aliased_buffers = _ir_extern._has_aliased_buffers
+_split_by_sym_type = _ir_extern._split_by_sym_type
+_CollectiveKernel = _ir_extern._CollectiveKernel
+_AllReduce_Kernel = _ir_extern._AllReduce_Kernel
+_AllReduceKernel = _ir_extern._AllReduceKernel
+_WaitKernel = _ir_extern._WaitKernel

@@ -1,4 +1,5 @@
 # Owner(s): ["module: inductor"]
+import importlib
 import os
 import shlex
 import subprocess
@@ -18,6 +19,25 @@ from torch.testing._internal.inductor_utils import HAS_CPU
 
 _IS_MACOS = sys.platform.startswith("darwin")
 _IS_WINDOWS = sys.platform == "win32"
+_IR_PRIVATE_COMPAT_EXPORTS = [
+    "_P",
+    "_T",
+    "_U",
+    "_V",
+    "_IntLike",
+    "_NumLike",
+    "_OpOverloads",
+    "_NodeOrNodes",
+    "_is_static",
+    "_fixed_indexer",
+    "_make_out_variant_kernel_name",
+    "_has_aliased_buffers",
+    "_split_by_sym_type",
+    "_CollectiveKernel",
+    "_AllReduce_Kernel",
+    "_AllReduceKernel",
+    "_WaitKernel",
+]
 
 
 def safe_command_output(cmd, timeout=30):
@@ -64,6 +84,13 @@ class TestStandaloneInductor(TestCase):
     These test check that you can call TorchInductor directly without
     going through TorchDynamo.
     """
+
+    def test_inductor_ir_private_compat_exports(self):
+        ir = importlib.import_module("torch._inductor.ir")
+
+        for name in _IR_PRIVATE_COMPAT_EXPORTS:
+            with self.subTest(name=name):
+                self.assertTrue(hasattr(ir, name))
 
     def test_inductor_via_fx(self):
         mod = MyModule3().eval()
