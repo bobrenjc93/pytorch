@@ -136,5 +136,3 @@ def default_args_generator(seed_value):
             new_flat_arg.append(new_val)
         new_args = pytree.tree_unflatten(new_flat_arg, args_spec)
         yield new_args
-
-
