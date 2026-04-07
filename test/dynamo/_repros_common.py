@@ -4,47 +4,48 @@ with test_rewrite_assert_with_msg and test_rewrite_assert_without_msg)
 """
 
 # Owner(s): ["module: dynamo"]
+# This module intentionally re-exports shared imports for the split test shards.
 import collections
-import contextlib
-import copy
-import dataclasses
-import functools
-import gc
+import contextlib  # noqa: F401
+import copy  # noqa: F401
+import dataclasses  # noqa: F401
+import functools  # noqa: F401
+import gc  # noqa: F401
 import importlib
 import inspect
-import itertools
-import logging
-import os
-import random
-import sys
-import types
-import typing
+import itertools  # noqa: F401
+import logging  # noqa: F401
+import os  # noqa: F401
+import random  # noqa: F401
+import sys  # noqa: F401
+import types  # noqa: F401
+import typing  # noqa: F401
 import unittest
-import warnings
-import weakref
-from abc import ABC
-from collections import defaultdict, namedtuple
+import warnings  # noqa: F401
+import weakref  # noqa: F401
+from abc import ABC  # noqa: F401
+from collections import defaultdict, namedtuple  # noqa: F401
 from collections.abc import Iterator
 from copy import deepcopy
-from enum import Enum, IntEnum
+from enum import Enum, IntEnum  # noqa: F401
 from functools import wraps
-from typing import Any, Literal, TypedDict
-from unittest import mock
+from typing import Any, Literal, TypedDict  # noqa: F401
+from unittest import mock  # noqa: F401
 
-import numpy as np
+import numpy as np  # noqa: F401
 
 import torch
 import torch._dynamo.test_case
 import torch._dynamo.testing
 import torch._dynamo.utils
 import torch._functorch.config
-import torch.distributed as dist
+import torch.distributed as dist  # noqa: F401
 import torch.library
-import torch.utils._pytree as pytree
+import torch.utils._pytree as pytree  # noqa: F401
 from torch import nn
-from torch._dynamo.backends.debugging import ExplainWithBackend
-from torch._dynamo.debug_utils import same_two_models
-from torch._dynamo.testing import (
+from torch._dynamo.backends.debugging import ExplainWithBackend  # noqa: F401
+from torch._dynamo.debug_utils import same_two_models  # noqa: F401
+from torch._dynamo.testing import (  # noqa: F401
     CompileCounter,
     CompileCounterWithBackend,
     EagerAndRecordGraphs,
@@ -54,26 +55,26 @@ from torch._dynamo.testing import (
     skipIfNotPy312,
     skipIfPy312,
 )
-from torch._inductor.utils import fresh_cache
+from torch._inductor.utils import fresh_cache  # noqa: F401
 from torch.nn import functional as F
-from torch.nn.attention.flex_attention import (
+from torch.nn.attention.flex_attention import (  # noqa: F401
     AuxRequest,
     create_block_mask,
     flex_attention,
 )
-from torch.profiler import profile, ProfilerActivity
-from torch.testing._internal.common_cuda import (
+from torch.profiler import profile, ProfilerActivity  # noqa: F401
+from torch.testing._internal.common_cuda import (  # noqa: F401
     PLATFORM_SUPPORTS_FLASH_ATTENTION,
     PLATFORM_SUPPORTS_FP8,
     SM70OrLater,
     TEST_CUDA,
 )
-from torch.testing._internal.common_device_type import (
+from torch.testing._internal.common_device_type import (  # noqa: F401
     E4M3_MAX_POS,
     e4m3_type,
     instantiate_device_type_tests,
 )
-from torch.testing._internal.common_utils import (
+from torch.testing._internal.common_utils import (  # noqa: F401
     instantiate_parametrized_tests,
     parametrize,
     serialTest,
@@ -82,9 +83,12 @@ from torch.testing._internal.common_utils import (
     TEST_WITH_ROCM,
     xfailIfS390X,
 )
-from torch.testing._internal.logging_utils import LoggingTestCase, make_logging_test
-from torch.testing._internal.two_tensor import TwoTensor
-from torch.utils._python_dispatch import TorchDispatchMode
+from torch.testing._internal.logging_utils import (  # noqa: F401
+    LoggingTestCase,
+    make_logging_test,
+)
+from torch.testing._internal.two_tensor import TwoTensor  # noqa: F401
+from torch.utils._python_dispatch import TorchDispatchMode  # noqa: F401
 
 
 _orig_module_call = torch.nn.Module.__call__
