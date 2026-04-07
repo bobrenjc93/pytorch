@@ -70,7 +70,13 @@ def _(
 
 
 @zeros_and_scatter.register_vmap  # type: ignore[misc]
-def _(info, indims, shape, indices, value):  # type: ignore[no-untyped-def]
+def _(
+    info: Any,
+    indims: Any,
+    shape: list[int],
+    indices: list[Tensor],
+    value: Tensor,
+) -> tuple[Tensor, None]:
     """The batching rule is special in that it returns a tensor that is not batched"""
     indices_indims = indims[1]
     expanded_indices = []
@@ -106,7 +112,7 @@ class ModIndex(torch.autograd.Function):
         ctx.input_shape = x.shape
 
     @staticmethod
-    def backward(ctx, gradOut):  # type: ignore[no-untyped-def]
+    def backward(ctx: Any, gradOut: Tensor) -> tuple[Tensor, None]:
         indices = ctx.saved_tensors
         return (
             torch.ops.flex_lib.zeros_and_scatter(
@@ -119,7 +125,7 @@ class ModIndex(torch.autograd.Function):
 
     @classmethod
     @torch._export.wrappers.allow_in_pre_dispatch_graph
-    def apply(cls, *args, **kwargs):  # type: ignore[no-untyped-def]
+    def apply(cls, *args: Any, **kwargs: Any) -> Any:
         return super().apply(*args, **kwargs)
 
 

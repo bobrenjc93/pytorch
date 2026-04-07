@@ -11,6 +11,7 @@ import logging
 import operator
 from collections import defaultdict, deque
 from collections.abc import Generator, Iterable
+from typing import Any
 
 import torch
 import torch.fx
@@ -33,7 +34,9 @@ log = logging.getLogger(__name__)
 last_node_to_additional_deps: dict[Node, OrderedSet[Node]] | None = None
 
 
-def apply_graph_deduplication(output_graph) -> dict[str, torch.fx.GraphModule]:  # type: ignore[no-untyped-def]
+def apply_graph_deduplication(
+    output_graph: Any,
+) -> dict[str, torch.fx.GraphModule]:
     """
     This is the main entry point for applying the graph deduplication pass. \
 Deduplication occurs in two phases:

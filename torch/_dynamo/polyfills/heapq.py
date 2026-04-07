@@ -7,6 +7,7 @@ from __future__ import annotations
 import heapq
 import importlib
 import sys
+from collections.abc import Callable, Iterable, Iterator
 from typing import TYPE_CHECKING, TypeVar
 
 from ..decorators import substitute_in_graph
@@ -105,15 +106,27 @@ def heapreplace(heap: list[_T], item: _T) -> _T:
 
 
 @substitute_in_graph(heapq.merge)  # type: ignore[arg-type]
-def merge(*iterables, key=None, reverse=False):  # type: ignore[no-untyped-def]
+def merge(
+    *iterables: Iterable[_T],
+    key: Callable[[_T], object] | None = None,
+    reverse: bool = False,
+) -> Iterator[_T]:
     return py_heapq.merge(*iterables, key=key, reverse=reverse)
 
 
 @substitute_in_graph(heapq.nlargest)  # type: ignore[arg-type]
-def nlargest(n, iterable, key=None):  # type: ignore[no-untyped-def]
+def nlargest(
+    n: int,
+    iterable: Iterable[_T],
+    key: Callable[[_T], object] | None = None,
+) -> list[_T]:
     return py_heapq.nlargest(n, iterable, key=key)
 
 
 @substitute_in_graph(heapq.nsmallest)  # type: ignore[arg-type]
-def nsmallest(n, iterable, key=None):  # type: ignore[no-untyped-def]
+def nsmallest(
+    n: int,
+    iterable: Iterable[_T],
+    key: Callable[[_T], object] | None = None,
+) -> list[_T]:
     return py_heapq.nsmallest(n, iterable, key=key)

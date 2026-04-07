@@ -72,7 +72,13 @@ def run(fn: Callable[_P, _R] | None = None) -> Any:
     return RunOnlyContext()
 
 
-def disable(fn=None, recursive=True, *, reason=None, wrapping=True):  # type: ignore[no-untyped-def]
+def disable(
+    fn: Callable[_P, _R] | None = None,
+    recursive: bool = True,
+    *,
+    reason: str | None = None,
+    wrapping: bool = True,
+) -> Any:
     """
     Decorator to disable TorchDynamo
 
@@ -173,12 +179,14 @@ class set_stance(_DecoratorContextManager):
         return self.__class__(self.stance.stance, force_backend=self.stance.backend)
 
 
-def assume_constant_result(fn):  # type: ignore[no-untyped-def]
+def assume_constant_result(fn: F) -> F:
     fn._dynamo_marked_constant = True  # type: ignore[attr-defined]
     return fn
 
 
-def allow_in_graph(fn):  # type: ignore[no-untyped-def]
+def allow_in_graph(
+    fn: F | list[F] | tuple[F, ...],
+) -> F | list[F]:
     """
     Tells the compiler frontend (Dynamo) to skip symbolic introspection of the function
     and instead directly write it to the graph when encountered.
