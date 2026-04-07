@@ -1,9 +1,10 @@
 # Owner(s): ["module: dynamo"]
-# ruff: noqa: F403,F405
+# ruff: noqa: F403,F405,F841
 try:
     from ._test_misc_common import *
 except ImportError:
     from _test_misc_common import *
+
 
 class MiscTestsPart1:
     def test_get_cache_entry(self):
@@ -1804,4 +1805,3 @@ not ___dict_contains('cccccccc', G['sys'].modules)""",
 
         y = f(x)
         self.assertEqual(y.shape, x.shape)
-

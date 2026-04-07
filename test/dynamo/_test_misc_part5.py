@@ -1,9 +1,10 @@
 # Owner(s): ["module: dynamo"]
-# ruff: noqa: F403,F405
+# ruff: noqa: F403,F405,F841
 try:
     from ._test_misc_common import *
 except ImportError:
     from _test_misc_common import *
+
 
 class MiscTestsPart5:
     def test_class_has_instancecheck_method(self):
@@ -1971,4 +1972,3 @@ class MiscTestsPart5:
         torch._dynamo.mark_dynamic(x012, 2)
         torch.compile(my_dyn_fn, backend=counter)(x012)
         self.assertEqual(counter.frame_count, 3)
-

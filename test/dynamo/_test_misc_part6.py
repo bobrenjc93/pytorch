@@ -1,9 +1,10 @@
 # Owner(s): ["module: dynamo"]
-# ruff: noqa: F403,F405
+# ruff: noqa: F403,F405,F841
 try:
     from ._test_misc_common import *
 except ImportError:
     from _test_misc_common import *
+
 
 class MiscTestsPart6:
     def test_recompile_on_global_state_change(self):
@@ -2062,4 +2063,3 @@ def ___make_guard_fn():
 
             self.assertEqual(list(eager), list(compiled))
             self.assertEqual(len(counters["graph_break"]), 0)
-

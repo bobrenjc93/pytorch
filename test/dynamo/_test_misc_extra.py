@@ -1,9 +1,10 @@
 # Owner(s): ["module: dynamo"]
-# ruff: noqa: F403,F405
+# ruff: noqa: F403,F405,F841
 try:
     from ._test_misc_common import *
 except ImportError:
     from _test_misc_common import *
+
 
 class MiscTestsPyTree(torch._inductor.test_case.TestCase):
     @parametrize_pytree_module
@@ -894,5 +895,3 @@ class DynamoOpPromotionTests(torch._dynamo.test_case.TestCase):
                 x
             )  # second time compile runs, we should also move the module to cpu device
             self.assertEqual(str(mod.fc.weight.device), "cpu")
-
-

@@ -1,9 +1,10 @@
 # Owner(s): ["module: dynamo"]
-# ruff: noqa: F403,F405
+# ruff: noqa: F403,F405,F841
 try:
     from ._test_misc_common import *
 except ImportError:
     from _test_misc_common import *
+
 
 class MiscTestsPart7:
     def test_packaging_version_parse(self):
@@ -1943,4 +1944,3 @@ fn
             "expected size 2==5, stride 12==9 at dim=0; expected size 3==6, stride 4==9 at dim=1; expected size 4==7, stride 1==10 at dim=2",
         ):
             torch._C._dynamo.guards.assert_size_stride(x, (5, 6, 7), (9, 9, 10))
-

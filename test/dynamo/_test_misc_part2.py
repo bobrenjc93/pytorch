@@ -1,9 +1,13 @@
 # Owner(s): ["module: dynamo"]
-# ruff: noqa: F403,F405
+# ruff: noqa: F403,F405,F841
 try:
     from ._test_misc_common import *
 except ImportError:
     from _test_misc_common import *
+
+
+x = None
+
 
 class MiscTestsPart2:
     def test_check_raises_at_runtime_when_predicate_false_and_message_has_global(self):
@@ -2014,4 +2018,3 @@ class MiscTestsPart2:
             self.assertTrue(same(func(args).shape, opt_f(args_clone).shape))
             self.assertEqual(cnts.frame_count, 1)
             self.assertEqual(cnts.op_count, 1)  # mul_
-
