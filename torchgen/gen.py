@@ -13,9 +13,7 @@ from typing_extensions import assert_never
 
 import yaml
 
-import torchgen.api.dispatcher as dispatcher
 import torchgen.api.meta as meta
-import torchgen.api.native as native
 import torchgen.api.structured as structured
 import torchgen.dest as dest
 from torchgen.api import cpp
