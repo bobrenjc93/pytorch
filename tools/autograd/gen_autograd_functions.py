@@ -643,7 +643,9 @@ def build_saved_variable_codegen(info: DifferentiabilityInfo) -> SavedVariableCo
             codegen.release_variables.append(f"{name}_released_ = true;")
             ptr = "shared_from_this()" if is_output else "nullptr"
             codegen.unpacks.append(f"auto {name} = unpack_list({name}_, {ptr});")
-            codegen.asserts.append(f"TORCH_CHECK(!{name}_released_, ERR_BACKWARD_TWICE);")
+            codegen.asserts.append(
+                f"TORCH_CHECK(!{name}_released_, ERR_BACKWARD_TWICE);"
+            )
             codegen.getter_definitions.append(
                 GETTER_DEFINITION_VEC_SAVEDVAR.substitute(
                     op=info.op, name=name, body=GETTER_BODY_VEC_SAVEDVAR
@@ -666,7 +668,9 @@ def build_saved_variable_codegen(info: DifferentiabilityInfo) -> SavedVariableCo
             codegen.release_variables.append(f"{name}_.clear();")
             codegen.release_variables.append(f"{name}_released_ = true;")
             codegen.unpacks.append(f"auto {name} = unpack_opt_list({name}_);")
-            codegen.asserts.append(f"TORCH_CHECK(!{name}_released_, ERR_BACKWARD_TWICE);")
+            codegen.asserts.append(
+                f"TORCH_CHECK(!{name}_released_, ERR_BACKWARD_TWICE);"
+            )
             codegen.getter_definitions.append(
                 GETTER_DEFINITION_VEC_SAVEDVAR.substitute(
                     op=info.op, name=name, body=GETTER_BODY_VEC_SAVEDVAR
