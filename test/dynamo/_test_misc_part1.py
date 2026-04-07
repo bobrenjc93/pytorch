@@ -1,6 +1,5 @@
 # Owner(s): ["module: dynamo"]
 # ruff: noqa: F403,F405,F841,PLR0133
-# flake8: noqa
 try:
     from ._test_misc_common import *
 except ImportError:

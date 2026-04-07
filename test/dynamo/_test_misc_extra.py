@@ -1,6 +1,5 @@
 # Owner(s): ["module: dynamo"]
 # ruff: noqa: B020,F403,F405,F841,PLW0127
-# flake8: noqa
 try:
     from ._test_misc_common import *
 except ImportError:
@@ -719,8 +718,6 @@ class MiscTestsDevice(torch._inductor.test_case.TestCase):
 
         # Previously would crash with:
         #   RuntimeError: value cannot be converted to type at::Half without overflow
-
-
 
 class DynamoOpPromotionTests(torch._dynamo.test_case.TestCase):
     @unittest.skipIf(not TEST_CUDA, "This test requires a CUDA device")
