@@ -979,4 +979,3 @@ class IncByOne:
 class IncByTwo:
     def __init__(self, x):
         self.x = x + 2
-

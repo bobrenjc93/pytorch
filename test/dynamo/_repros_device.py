@@ -1131,4 +1131,3 @@ class ReproTestsDeviceMixin:
             (merged_out - ref_out).abs().max().item() < 1e-3,
             "flex_attention mask_mod __defaults__ not properly guarded",
         )
-

@@ -2552,4 +2552,3 @@ def forward(self, s77 : torch.SymInt, s27 : torch.SymInt, L_x_ : torch.Tensor):
         inps = gen_inps(3, 5)
         self.assertEqual(type(g(*inps)), type(opt_g(*inps)))
         self.assertEqual(tuple(g(*inps)), tuple(opt_g(*inps)))
-

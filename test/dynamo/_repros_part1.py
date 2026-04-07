@@ -2609,4 +2609,3 @@ class ReproTestsMixin1:
         inputs = [torch.randn(3, 4)]
         self.assertEqual(fn(*inputs).size(), torch.Size([1, 3, 4]))
         self.assertEqual(inputs[0].size(), torch.Size([1, 3, 4]))
-
