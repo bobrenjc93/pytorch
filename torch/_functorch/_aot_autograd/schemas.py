@@ -5,11 +5,10 @@ input/output types, metadata, config, function signatures etc.
 
 from __future__ import annotations
 
-import collections
 import functools
 from dataclasses import dataclass, field, replace
 from enum import Enum
-from typing import Any, NewType, Protocol, TYPE_CHECKING, TypeVar
+from typing import Any, NamedTuple, NewType, Protocol, TYPE_CHECKING, TypeVar
 from typing_extensions import ParamSpec
 
 import torch
@@ -1132,19 +1131,11 @@ class AOTConfig:
                 raise AssertionError("Can only have pre_dispatch IR for export.")
 
 
-# TODO: types here
-# plain_tensor_trace_fn, when it is joint, has tuple structure on the trace
-# info too!
-# TODO: this needs to be generic, parameterized on AOTDescriptor
-SubclassTracingInfo = collections.namedtuple(
-    "SubclassTracingInfo",
-    [
-        "plain_tensor_trace_fn",
-        "plain_tensor_args",
-        "plain_tensor_args_descs",
-        "maybe_subclass_meta",
-    ],
-)
+class SubclassTracingInfo(NamedTuple):
+    plain_tensor_trace_fn: TraceFn | JointTraceFn
+    plain_tensor_args: list[FxValue] | tuple[list[FxValue], list[FxValue]]
+    plain_tensor_args_descs: list[AOTInput] | tuple[list[AOTInput], list[AOTInput]]
+    maybe_subclass_meta: SubclassMeta | None
 
 
 @dataclass
