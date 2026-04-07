@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from abc import ABC, abstractmethod
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any, TypeAlias
@@ -33,20 +34,20 @@ __all__ = [
 
 
 Dimension: TypeAlias = int | torch.SymInt
-_ScalarValue: TypeAlias = (
-    bool
-    | int
-    | float
-    | complex
-    | str
-    | bytes
-    | torch.SymBool
-    | torch.SymFloat
-    | torch.SymInt
-    | torch.dtype
-    | torch.device
-    | torch.layout
-    | torch.memory_format
+_SCALAR_TYPES = (
+    bool,
+    int,
+    float,
+    complex,
+    str,
+    bytes,
+    torch.SymBool,
+    torch.SymFloat,
+    torch.SymInt,
+    torch.dtype,
+    torch.device,
+    torch.layout,
+    torch.memory_format,
 )
 
 
@@ -54,7 +55,7 @@ class ValidationError(ValueError):
     """Raised when a :class:`Graph` violates CFG invariants."""
 
 
-class Spec:
+class Spec(ABC):
     """
     A typed, normalized description of a value.
 
@@ -76,27 +77,11 @@ class Spec:
             return DictSpec(
                 tuple((str(key), Spec.from_value(elem)) for key, elem in value.items())
             )
-        if isinstance(
-            value,
-            (
-                bool,
-                int,
-                float,
-                complex,
-                str,
-                bytes,
-                torch.SymBool,
-                torch.SymFloat,
-                torch.SymInt,
-                torch.dtype,
-                torch.device,
-                torch.layout,
-                torch.memory_format,
-            ),
-        ):
+        if isinstance(value, _SCALAR_TYPES):
             return ScalarSpec(type(value))
         return ObjectSpec(type(value))
 
+    @abstractmethod
     def format(self) -> str:
         raise NotImplementedError
 
@@ -114,7 +99,11 @@ class TensorSpec(Spec):
 
     @classmethod
     def from_tensor(cls, tensor: torch.Tensor) -> "TensorSpec":
-        stride = None if tensor.is_sparse else tuple(tensor.stride())
+        stride = (
+            None
+            if tensor.is_sparse or tensor.is_nested
+            else tuple(tensor.stride())
+        )
         return cls(
             shape=tuple(tensor.shape),
             dtype=tensor.dtype,
@@ -201,11 +190,6 @@ class Literal:
 def literal(value: object, spec: Spec | None = None) -> Literal:
     return Literal(value=value, spec=spec)
 
-
-# Normalized operands are pytrees whose leaves are ``Value`` or ``Literal``.
-Argument: TypeAlias = Any
-
-
 @dataclass(frozen=True, slots=True)
 class Value:
     name: str
@@ -214,6 +198,18 @@ class Value:
 
     def __str__(self) -> str:
         return f"%{self.name}"
+
+
+# Normalized operands are pytrees whose leaves are ``Value`` or ``Literal``.
+Argument: TypeAlias = (
+    Value
+    | Literal
+    | None
+    | tuple["Argument", ...]
+    | list["Argument"]
+    | dict[str, "Argument"]
+    | slice
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -248,7 +244,11 @@ class Instruction:
     doc: str | None = None
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "inputs", tuple(_normalize_argument(arg) for arg in self.inputs))
+        object.__setattr__(
+            self,
+            "inputs",
+            tuple(_normalize_argument(arg) for arg in self.inputs),
+        )
         object.__setattr__(
             self,
             "attributes",
@@ -291,19 +291,20 @@ class Successor:
         return f"{self.block}({args})"
 
 
-class Terminator:
+class _Terminator(ABC):
     def successors(self) -> tuple[Successor, ...]:
         return ()
 
     def references(self) -> tuple[Argument, ...]:
         return ()
 
+    @abstractmethod
     def format(self) -> str:
         raise NotImplementedError
 
 
 @dataclass(frozen=True, slots=True)
-class Jump(Terminator):
+class Jump(_Terminator):
     target: Successor
 
     def successors(self) -> tuple[Successor, ...]:
@@ -317,7 +318,7 @@ class Jump(Terminator):
 
 
 @dataclass(frozen=True, slots=True)
-class Branch(Terminator):
+class Branch(_Terminator):
     condition: Argument
     true_branch: Successor
     false_branch: Successor
@@ -329,7 +330,11 @@ class Branch(Terminator):
         return (self.true_branch, self.false_branch)
 
     def references(self) -> tuple[Argument, ...]:
-        return (self.condition, *self.true_branch.arguments, *self.false_branch.arguments)
+        return (
+            self.condition,
+            *self.true_branch.arguments,
+            *self.false_branch.arguments,
+        )
 
     def format(self) -> str:
         return (
@@ -339,7 +344,7 @@ class Branch(Terminator):
 
 
 @dataclass(frozen=True, slots=True)
-class Return(Terminator):
+class Return(_Terminator):
     value: Argument
 
     def __post_init__(self) -> None:
@@ -357,7 +362,7 @@ class Block:
     name: str
     parameters: tuple[Value, ...] = ()
     instructions: tuple[Instruction, ...] = ()
-    terminator: Terminator = field(default_factory=lambda: Return(None))
+    terminator: _Terminator = field(default_factory=lambda: Return(None))
     doc: str | None = None
 
     def __post_init__(self) -> None:
@@ -421,7 +426,8 @@ class Graph:
             for instruction in block.instructions:
                 if not instruction.name:
                     raise ValidationError(
-                        f"block {block.name!r} contains an instruction with an empty name"
+                        f"block {block.name!r} contains an instruction "
+                        "with an empty name"
                     )
                 for argument in instruction.inputs:
                     _validate_argument(
@@ -459,13 +465,15 @@ class Graph:
             for successor in block.terminator.successors():
                 if successor.block not in block_map:
                     raise ValidationError(
-                        f"block {block.name!r} jumps to unknown block {successor.block!r}"
+                        f"block {block.name!r} jumps to unknown block "
+                        f"{successor.block!r}"
                     )
                 target = block_map[successor.block]
                 if len(successor.arguments) != len(target.parameters):
                     raise ValidationError(
-                        f"jump to block {successor.block!r} expects {len(target.parameters)} "
-                        f"arguments but received {len(successor.arguments)}"
+                        f"jump to block {successor.block!r} expects "
+                        f"{len(target.parameters)} arguments but received "
+                        f"{len(successor.arguments)}"
                     )
 
     def format(self) -> str:
@@ -514,13 +522,15 @@ def _format_argument(argument: Argument) -> str:
         return "None"
     if isinstance(argument, tuple):
         trailing_comma = "," if len(argument) == 1 else ""
-        return f"({', '.join(_format_argument(elem) for elem in argument)}{trailing_comma})"
+        rendered = ", ".join(_format_argument(elem) for elem in argument)
+        return f"({rendered}{trailing_comma})"
     if isinstance(argument, list):
         return f"[{', '.join(_format_argument(elem) for elem in argument)}]"
     if isinstance(argument, dict):
-        return "{" + ", ".join(
+        rendered_items = ", ".join(
             f"{key}: {_format_argument(value)}" for key, value in argument.items()
-        ) + "}"
+        )
+        return "{" + rendered_items + "}"
     if isinstance(argument, slice):
         return (
             "slice("
@@ -583,7 +593,9 @@ def _register_value(
     if not value.name:
         raise ValidationError(f"{where} defines a value with an empty name")
     if value.name in local_scope:
-        raise ValidationError(f"{where} redefines value {value.name!r} in the same block")
+        raise ValidationError(
+            f"{where} redefines value {value.name!r} in the same block"
+        )
     if value.name in global_scope:
         raise ValidationError(f"{where} collides with existing value {value.name!r}")
     local_scope[value.name] = value
@@ -601,10 +613,12 @@ def _validate_argument(
     for value in _iter_values(argument):
         if value.name not in local_scope:
             raise ValidationError(
-                f"{where} in block {block_name!r} references undefined value {value.name!r}"
+                f"{where} in block {block_name!r} references undefined value "
+                f"{value.name!r}"
             )
         if global_scope.get(value.name) != value:
             raise ValidationError(
-                f"{where} in block {block_name!r} references a non-canonical value object "
+                f"{where} in block {block_name!r} references a non-canonical "
+                f"value object "
                 f"for {value.name!r}"
             )
