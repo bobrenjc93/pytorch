@@ -771,9 +771,7 @@ class ComputeTensorMethod:
             raise AssertionError(f"Method variant must have self_arg: {f.func}")
 
         info = NativeFunctionCodegenInfo(f)
-        sig_group = info.method_cpp_signature_group()
-        if sig_group is None:
-            raise AssertionError(f"Method variant must have signatures: {f.func}")
+        sig_group = info.cpp_signature_group(method=True)
 
         if self.target is Target.DECLARATION:
             result = ""
@@ -990,9 +988,9 @@ class ComputeBackendSelect:
             return None
 
         info = NativeFunctionCodegenInfo(f)
-        name = native.name(f.func)
         # BackendSelect can go to Meta, so it must preserve symints
-        native_sig = NativeSignature(f.func, symint=True)
+        native_sig = info.native_signature(symint=True)
+        name = native_sig.name()
 
         native_tensor_args = [
             a
@@ -1356,10 +1354,10 @@ def compute_registration_declarations(
     f: NativeFunction, backend_indices: dict[DispatchKey, BackendIndex]
 ) -> str:
     info = NativeFunctionCodegenInfo(f)
-    name = info.dispatcher_name
-    returns_type = dispatcher.returns_type(f.func.returns).cpp_type()
-    args = dispatcher.arguments(f.func)
-    args_str = ", ".join(a.no_default().decl() for a in args)
+    dispatcher_sig = info.dispatcher_signature()
+    name = dispatcher_sig.name()
+    returns_type = dispatcher_sig.returns_type().cpp_type()
+    args_str = ", ".join(a.no_default().decl() for a in dispatcher_sig.arguments())
     comment_data: dict[str, object] = {
         "schema": info.schema,
         "operators_api": info.operators_api_name,

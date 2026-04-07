@@ -330,9 +330,12 @@ class NativeFunctionCodegenInfo:
     def dispatcher_signature(
         self, *, prefix: str = "", symint: bool = True
     ) -> DispatcherSignature:
-        return DispatcherSignature.from_schema(
-            self.func, prefix=prefix, symint=symint
-        )
+        return DispatcherSignature.from_schema(self.func, prefix=prefix, symint=symint)
+
+    def native_signature(
+        self, *, prefix: str = "", symint: bool = False
+    ) -> NativeSignature:
+        return NativeSignature(self.func, prefix=prefix, symint=symint)
 
     def cpp_signature_group(
         self, *, method: bool, fallback_binding: bool | None = None
@@ -346,9 +349,7 @@ class NativeFunctionCodegenInfo:
     def function_cpp_signature_group(
         self, *, fallback_binding: bool | None = None
     ) -> CppSignatureGroup:
-        return self.cpp_signature_group(
-            method=False, fallback_binding=fallback_binding
-        )
+        return self.cpp_signature_group(method=False, fallback_binding=fallback_binding)
 
     def method_cpp_signature_group(
         self, *, fallback_binding: bool | None = None
@@ -358,6 +359,8 @@ class NativeFunctionCodegenInfo:
         return self.cpp_signature_group(method=True, fallback_binding=fallback_binding)
 
     def generated_headers(self) -> dict[str, object]:
+        # format_yaml() has a dedicated OrderedDict representer, so keep using it
+        # here to make the emitted key order explicit and stable.
         aggregated_headers: OrderedDict[str, str] = OrderedDict(
             [
                 ("operators", "ATen/Operators.h"),
