@@ -103,11 +103,15 @@ _GLOBAL_CPU_TENSOR = torch.randn(3)
 HAS_MSGSPEC = importlib.util.find_spec("msgspec")
 if HAS_MSGSPEC:
     import msgspec
+else:
+    msgspec = None
 
 
 HAS_OMEGACONG = importlib.util.find_spec("omegaconf")
 if HAS_OMEGACONG:
     from omegaconf import OmegaConf
+else:
+    OmegaConf = None
 
 HAS_CUDA = torch.cuda.is_available()
 
@@ -975,5 +979,4 @@ class IncByOne:
 class IncByTwo:
     def __init__(self, x):
         self.x = x + 2
-
 

@@ -9,6 +9,7 @@ try:
     from ._repros_common import (
         instantiate_device_type_tests,
         instantiate_parametrized_tests,
+        LoggingTestCase,
         torch,
     )
     from ._repros_device import ReproTestsDeviceMixin
@@ -19,6 +20,7 @@ except ImportError:
     from _repros_common import (
         instantiate_device_type_tests,
         instantiate_parametrized_tests,
+        LoggingTestCase,
         torch,
     )
     from _repros_device import ReproTestsDeviceMixin
@@ -30,12 +32,15 @@ except ImportError:
 # Keep the public test classes in this module so existing imports, device-type
 # expansion, and dynamic-shapes wrappers continue to work unchanged.
 class ReproTests(
-    LRUCacheWarningTestsMixin,
     ReproTestsMixin1,
     ReproTestsMixin2,
     ReproTestsMixin3,
     torch._dynamo.test_case.TestCase,
 ):
+    pass
+
+
+class LRUCacheWarningTests(LRUCacheWarningTestsMixin, LoggingTestCase):
     pass
 
 
