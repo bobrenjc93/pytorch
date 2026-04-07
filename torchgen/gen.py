@@ -23,9 +23,9 @@ from torchgen.api.translate import translate
 from torchgen.api.types import (
     Binding,
     CppSignature,
-    CppSignatureGroup,
     DispatcherSignature,
     NamedCType,
+    NativeFunctionCodegenInfo,
     NativeSignature,
     SpecialArgName,
 )
@@ -488,8 +488,8 @@ def generate_static_dispatch_fallback_call(
     f: NativeFunction,
     backend_indices: list[BackendIndex],
 ) -> str:
-    cpp_sigs = CppSignatureGroup.from_native_function(
-        f, method=False, fallback_binding=False
+    cpp_sigs = NativeFunctionCodegenInfo(f).function_cpp_signature_group(
+        fallback_binding=False
     )
     if sig.symint and f.func.has_symint():
         cpp_sig = cpp_sigs.symint_signature
@@ -621,8 +621,9 @@ class ComputeOperators:
 
     @method_with_native_function
     def __call__(self, f: NativeFunction) -> str:
-        sig = DispatcherSignature.from_schema(f.func)
-        name = f.func.name.unambiguous_name()
+        info = NativeFunctionCodegenInfo(f)
+        sig = info.dispatcher_signature()
+        name = info.unambiguous_name
 
         if self.target is Target.DECLARATION:
             # Note [The ATen Operators API]
@@ -711,15 +712,14 @@ static C10_NOINLINE c10::TypedOperatorHandle<{name}::schema> create_{name}_typed
 class ComputeFunction:
     @method_with_native_function
     def __call__(self, f: NativeFunction) -> str | None:
-        sig_group = CppSignatureGroup.from_native_function(
-            f, method=False, fallback_binding=f.manual_cpp_binding
-        )
+        info = NativeFunctionCodegenInfo(f)
+        sig_group = info.function_cpp_signature_group()
         has_symint = f.func.has_symint()
 
         result = ""
         for sig in sig_group.signatures():
             # See Note [The ATen Operators API]
-            target_sig = DispatcherSignature.from_schema(f.func)
+            target_sig = info.dispatcher_signature()
             exprs = translate(sig.arguments(), target_sig.arguments())
             exprs_str = ", ".join([e.expr for e in exprs])
 
@@ -732,7 +732,7 @@ class ComputeFunction:
                 result += f"""
 // aten::{f.func}
 inline {sig.decl()} {{
-    return at::_ops::{f.func.name.unambiguous_name()}::call({exprs_str});
+    return {info.operators_api_name}::call({exprs_str});
 }}"""
 
             # The template function can be used from template situations
@@ -746,7 +746,7 @@ inline {sig.decl()} {{
 namespace symint {{
   template <typename T, typename = std::enable_if_t<std::is_same_v<T, {intlike_t}>>>
   {sig.decl(suppress_symint_suffix=True)} {{
-    return at::_ops::{f.func.name.unambiguous_name()}::call({exprs_str});
+    return {info.operators_api_name}::call({exprs_str});
   }}
 }}
 """
@@ -770,9 +770,10 @@ class ComputeTensorMethod:
         if f.func.arguments.self_arg is None:
             raise AssertionError(f"Method variant must have self_arg: {f.func}")
 
-        sig_group = CppSignatureGroup.from_native_function(
-            f, method=True, fallback_binding=f.manual_cpp_binding
-        )
+        info = NativeFunctionCodegenInfo(f)
+        sig_group = info.method_cpp_signature_group()
+        if sig_group is None:
+            raise AssertionError(f"Method variant must have signatures: {f.func}")
 
         if self.target is Target.DECLARATION:
             result = ""
@@ -786,14 +787,14 @@ class ComputeTensorMethod:
         result = ""
 
         for sig in sig_group.signatures():
-            target_sig = DispatcherSignature.from_schema(f.func)
+            target_sig = info.dispatcher_signature()
             exprs = translate(sig.arguments(), target_sig.arguments(), method=True)
             exprs_str = ", ".join([e.expr for e in exprs])
 
             result += f"""
 // aten::{f.func}
 inline {sig.defn(prefix="Tensor::")} const {{
-    return at::_ops::{f.func.name.unambiguous_name()}::call({exprs_str});
+    return {info.operators_api_name}::call({exprs_str});
 }}
 """
 
@@ -809,20 +810,19 @@ class ComputeRedispatchFunction:
     def __call__(self, f: NativeFunction) -> str | None:
         # We unconditionally generate function variants of the redispatch API.
         # This is mainly because we can namespace functions separately, but not methods,
-        sig_group = CppSignatureGroup.from_native_function(
-            f, method=False, fallback_binding=f.manual_cpp_binding
-        )
+        info = NativeFunctionCodegenInfo(f)
+        sig_group = info.function_cpp_signature_group()
 
         result = ""
         for sig in sig_group.signatures():
-            target_sig = DispatcherSignature.from_schema(f.func)
+            target_sig = info.dispatcher_signature()
             exprs = translate(sig.arguments(), target_sig.arguments())
             exprs_str = ", ".join(["dispatchKeySet"] + [a.expr for a in exprs])
 
             result += f"""
 // aten::{f.func}
 inline {sig.decl(is_redispatching_fn=True)} {{
-    return at::_ops::{f.func.name.unambiguous_name()}::redispatch({exprs_str});
+    return {info.operators_api_name}::redispatch({exprs_str});
 }}
 """
 
@@ -989,6 +989,7 @@ class ComputeBackendSelect:
         if not needs_backend_select(f, self.selector):
             return None
 
+        info = NativeFunctionCodegenInfo(f)
         name = native.name(f.func)
         # BackendSelect can go to Meta, so it must preserve symints
         native_sig = NativeSignature(f.func, symint=True)
@@ -999,7 +1000,7 @@ class ComputeBackendSelect:
             if isinstance(a.argument, Argument) and a.argument.type.is_tensor_like()
         ]
 
-        dispatcher_sig = DispatcherSignature.from_schema(f.func)
+        dispatcher_sig = info.dispatcher_signature()
 
         sig: NativeSignature | DispatcherSignature
         sig = dispatcher_sig
@@ -1034,7 +1035,7 @@ DispatchKeySet _dk = c10::impl::computeDispatchKeySet(_dk_set, _dk_mask);"""
 C10_ALWAYS_INLINE
 {sig.defn(name)} {{
   {compute_dk}
-  return at::_ops::{f.func.name.unambiguous_name()}::redispatch(
+  return {info.operators_api_name}::redispatch(
       _dk, {", ".join(a.expr for a in dispatcher_exprs)});
 }}
 """
@@ -1255,6 +1256,7 @@ def compute_argument_yaml(
 
 @with_native_function
 def compute_declaration_yaml(f: NativeFunction) -> object:
+    info = NativeFunctionCodegenInfo(f)
     returns, name_to_field_name = compute_returns_yaml(f)
 
     # These sets are used to conveniently test if an argument is a
@@ -1262,9 +1264,7 @@ def compute_declaration_yaml(f: NativeFunction) -> object:
     kwarg_only_set = {a.name for a in f.func.arguments.flat_kwarg_only}
     out_arg_set = {a.name for a in f.func.arguments.out}
 
-    sig_group = CppSignatureGroup.from_native_function(
-        f, method=False, fallback_binding=False
-    )
+    sig_group = info.function_cpp_signature_group(fallback_binding=False)
     cpp_args = sig_group.signature.arguments()
     arguments = [
         compute_cpp_argument_yaml(
@@ -1324,6 +1324,8 @@ def compute_declaration_yaml(f: NativeFunction) -> object:
                 f.category_override if f.category_override is not None else "",
             ),
             ("schema_string", f"aten::{f.func}"),
+            ("generated_headers", info.generated_headers()),
+            ("cpp_entry_points", info.generated_cpp_entry_points()),
             ("arguments", arguments),
             ("schema_order_cpp_signature", schema_order_cpp_signature),
             ("schema_order_arguments", schema_order_arguments),
@@ -1353,12 +1355,14 @@ def has_autogenerated_composite_kernel(f: NativeFunction) -> bool:
 def compute_registration_declarations(
     f: NativeFunction, backend_indices: dict[DispatchKey, BackendIndex]
 ) -> str:
-    name = dispatcher.name(f.func)
+    info = NativeFunctionCodegenInfo(f)
+    name = info.dispatcher_name
     returns_type = dispatcher.returns_type(f.func.returns).cpp_type()
     args = dispatcher.arguments(f.func)
     args_str = ", ".join(a.no_default().decl() for a in args)
-    comment_data: dict[str, str] = {
-        "schema": f"aten::{f.func}",
+    comment_data: dict[str, object] = {
+        "schema": info.schema,
+        "operators_api": info.operators_api_name,
         # TODO: What exactly is the semantics of the 'dispatch' field?
         "dispatch": str(
             {k for k, v in backend_indices.items() if v.has_kernel(f)}

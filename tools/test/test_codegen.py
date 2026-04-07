@@ -9,9 +9,14 @@ import yaml
 from tools.autograd import gen_autograd_functions, load_derivatives
 
 from torchgen import dest
-from torchgen.api.types import CppSignatureGroup, DispatcherSignature
+from torchgen.api.types import (
+    CppSignatureGroup,
+    DispatcherSignature,
+    NativeFunctionCodegenInfo,
+)
 from torchgen.context import native_function_manager
 from torchgen.gen import (
+    compute_declaration_yaml,
     get_native_function_declarations,
     get_native_function_schema_registrations,
     LineLoader,
@@ -389,6 +394,65 @@ TORCH_API bool kernel_1();
 } // namespace at
         """
         self.assertEqual("\n".join(declaration), target)
+
+
+class TestNativeFunctionCodegenInfo(unittest.TestCase):
+    def test_declarations_yaml_includes_cpp_entry_points(self) -> None:
+        native_function, _ = NativeFunction.from_yaml(
+            {
+                "func": "op.out(Tensor self, *, Tensor(a!) out) -> Tensor(a!)",
+                "dispatch": {"CPU": "op_out"},
+            },
+            loc=Location(__file__, 1),
+            valid_tags=set(),
+        )
+
+        declaration = compute_declaration_yaml(native_function)
+        self.assertEqual(
+            declaration["generated_headers"]["per_operator"]["functions"],
+            "ATen/ops/op.h",
+        )
+        self.assertEqual(
+            declaration["cpp_entry_points"]["dispatcher"]["name"],
+            "op_out",
+        )
+        self.assertEqual(
+            declaration["cpp_entry_points"]["operators_api"]["class"],
+            "at::_ops::op_out",
+        )
+        self.assertEqual(
+            [entry["name"] for entry in declaration["cpp_entry_points"]["functions"]],
+            ["op_out", "op_outf"],
+        )
+
+    def test_method_variants_report_tensor_method_mapping(self) -> None:
+        native_function, _ = NativeFunction.from_yaml(
+            {
+                "func": "op(Tensor self, Tensor other) -> Tensor",
+                "variants": "function, method",
+                "dispatch": {"CPU": "op"},
+            },
+            loc=Location(__file__, 1),
+            valid_tags=set(),
+        )
+
+        info = NativeFunctionCodegenInfo(native_function)
+        self.assertEqual(
+            info.generated_headers()["aggregated"]["methods"],
+            "ATen/core/TensorBody.h",
+        )
+        self.assertEqual(
+            info.generated_cpp_entry_points()["operators_api"]["call"],
+            "at::_ops::op::call",
+        )
+        self.assertEqual(
+            [entry["name"] for entry in info.generated_cpp_entry_points()["methods"]],
+            ["op"],
+        )
+        self.assertTrue(
+            "Tensor::op("
+            in info.generated_cpp_entry_points()["methods"][0]["signature"]
+        )
 
 
 # Test for native_function_generation
