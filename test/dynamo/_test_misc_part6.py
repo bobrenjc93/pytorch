@@ -1,4 +1,5 @@
 # Owner(s): ["module: dynamo"]
+# flake8: noqa: B006, B950, C405, C416, E731, F403, F405, F841
 # ruff: noqa: B006,C405,C416,E731,F403,F405,F841,SIM113,UP032
 try:
     from ._test_misc_common import *

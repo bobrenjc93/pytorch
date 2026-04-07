@@ -1,4 +1,5 @@
 # Owner(s): ["module: dynamo"]
+# flake8: noqa: F401, F541
 # ruff: noqa: F401,F541
 import abc
 import builtins
@@ -187,5 +188,6 @@ class UserDefineSetAttr:
             return self.__dict__[f"pfx_{key}"]
         else:
             return None
+
 
 __all__ = [name for name in globals() if not name.startswith("__")]
