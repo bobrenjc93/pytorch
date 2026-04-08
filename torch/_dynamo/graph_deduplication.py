@@ -11,7 +11,7 @@ import logging
 import operator
 from collections import defaultdict, deque
 from collections.abc import Generator, Iterable
-from typing import Any
+from typing import TYPE_CHECKING
 
 import torch
 import torch.fx
@@ -21,6 +21,9 @@ from torch.utils._ordered_set import OrderedSet
 
 from .graph_region_tracker import Node, Region
 from .graph_utils import _detect_cycles, _get_flat_args, _get_flat_args_unique
+
+if TYPE_CHECKING:
+    from .output_graph import OutputGraph
 
 
 # Represents an index into the region
@@ -35,7 +38,7 @@ last_node_to_additional_deps: dict[Node, OrderedSet[Node]] | None = None
 
 
 def apply_graph_deduplication(
-    output_graph: Any,
+    output_graph: "OutputGraph",
 ) -> dict[str, torch.fx.GraphModule]:
     """
     This is the main entry point for applying the graph deduplication pass. \

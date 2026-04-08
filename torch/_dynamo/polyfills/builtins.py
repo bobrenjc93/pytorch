@@ -5,17 +5,17 @@ Python polyfills for builtins
 from __future__ import annotations
 
 import builtins
+import collections.abc
 import functools
 import operator
 import typing
-from collections.abc import Callable
 from typing import Any, TYPE_CHECKING, TypeVar
 
 from ..decorators import substitute_in_graph
 
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
+    from collections.abc import Callable, Iterable, Iterator
 
 
 __all__ = [
@@ -68,7 +68,7 @@ class _CallableIterator(typing.Generic[_T]):
         self.fn = fn
         self.sentinel = sentinel
 
-    def __iter__(self) -> "_CallableIterator[_T]":
+    def __iter__(self) -> _CallableIterator[_T]:
         return self
 
     def __next__(self) -> _T:
@@ -122,7 +122,7 @@ def iter_(
         # callable object.
         fn = fn_or_iterable
 
-        if not isinstance(fn, Callable):  # type: ignore[arg-type]
+        if not isinstance(fn, collections.abc.Callable):  # type: ignore[arg-type]
             raise TypeError("iter(v, w): v must be a callable")
 
         return _CallableIterator(fn, sentinel)
