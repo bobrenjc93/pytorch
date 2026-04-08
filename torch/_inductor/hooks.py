@@ -1,7 +1,6 @@
-from typing import Any
 import contextlib
 from collections.abc import Callable
-from typing import TYPE_CHECKING
+from typing import Any, TYPE_CHECKING
 
 
 if TYPE_CHECKING:

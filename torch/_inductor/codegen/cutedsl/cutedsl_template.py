@@ -98,7 +98,9 @@ class CuteDSLTemplate(KernelTemplate):
                 source_code=code,
             )
 
-            def make_kernel_render(out_node: Any, hint_override: int | None = None) -> Any:
+            def make_kernel_render(
+                out_node: Any, hint_override: int | None = None
+            ) -> Any:
                 """
                 Factory function that creates a kernel renderer for the final output.
 

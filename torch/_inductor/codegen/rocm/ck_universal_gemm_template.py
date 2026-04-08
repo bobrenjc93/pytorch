@@ -1,10 +1,10 @@
 # mypy: disable-error-code="attr-defined, valid-type"
-from typing import Any
 import copy
 import logging
 import math
 import random
 from collections import namedtuple
+from typing import Any
 
 import sympy
 
@@ -534,7 +534,9 @@ class CKGemmTemplate(CKTemplate):
         return True
 
     # small helper to figure out the prefetch stages on AMD
-    def _prefetch_stages(self, op: Any, a_dtype_size: Any, b_dtype_size: Any, warp_size: int = 64) -> Any:
+    def _prefetch_stages(
+        self, op: Any, a_dtype_size: Any, b_dtype_size: Any, warp_size: int = 64
+    ) -> Any:
         version_str = op.block_gemm_pipeline_version.split("::")[-1]
         try:
             version = int(version_str[1:])  # Assuming the format is always 'vX'
@@ -967,9 +969,9 @@ class CKGemmTemplate(CKTemplate):
         choices: Any,
         layout: Any,
         input_nodes: Any,
-        alpha: Any=1,
-        beta: Any=0,
-        input_reorder: Any=None,
+        alpha: Any = 1,
+        beta: Any = 0,
+        input_reorder: Any = None,
     ) -> None:
         """
         Add Composable Kernel Universal GEMM instance choices to the auto-tuning list.

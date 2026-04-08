@@ -1,4 +1,5 @@
-from typing import Any
+# mypy: allow-untyped-defs
+
 import logging
 from typing import TYPE_CHECKING
 
@@ -124,7 +125,7 @@ mm_plus_mm_template = TritonTemplate(
 )
 
 
-def tuned_mm_plus_mm(mat1: Any, mat2: Any, mat3: Any, mat4: Any, *, layout: Any=None) -> Any:
+def tuned_mm_plus_mm(mat1, mat2, mat3, mat4, *, layout=None):
     """
     Computes mm(mat1, mat2) + mm(mat3, mat4)
     """

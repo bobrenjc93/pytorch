@@ -1,3 +1,4 @@
+# mypy: allow-untyped-defs
 import functools
 import itertools
 import logging
@@ -95,7 +96,7 @@ class SizeVarAllocator:
     calculations for tensor operations.
     """
 
-    def __init__(self, shape_env: Any=None) -> None:
+    def __init__(self, shape_env=None) -> None:
         super().__init__()
         # Note: this can lead to bugs. Reasoning APIs depends on existing information in
         # in the shape_env. For example! var_to_ranges can't be empty!
@@ -122,7 +123,7 @@ class SizeVarAllocator:
         self.simplify_with_ranges = self.make_simplify_with_ranges_cache()
         self._simplify_loops = self.make_simplify_loops_cache()
 
-    def simplify(self, expr: Expr) -> Any:
+    def simplify(self, expr: Expr):
         return sympy.expand(expr).xreplace(self.replacements)
 
     def make_simplify_with_ranges_cache(self) -> Callable[[Expr, VarRanges], Expr]:
@@ -149,14 +150,14 @@ class SizeVarAllocator:
 
         return simplify_with_ranges
 
-    def make_simplify_loops_cache(self) -> Any:
+    def make_simplify_loops_cache(self):
         """
         self._simplify_with_ranges() can be expensive, cache its results
         """
         cache: dict[tuple[Any, ...], Any] = {}
         replacement_count = len(self.replacements)
 
-        def simplify_loops(index_vars: Any, sizes: Any, index_formulas: Any) -> Any:
+        def simplify_loops(index_vars, sizes, index_formulas):
             nonlocal replacement_count
             if replacement_count != len(self.replacements):
                 # new replacements invalidates cached results
@@ -204,7 +205,7 @@ class SizeVarAllocator:
             axioms.append(var < upper_bound)
         axioms = tuple(axioms) + self.shape_env.get_axioms()
 
-        def statically_known(expr: Any) -> Any:
+        def statically_known(expr):
             evaluated = self.shape_env._maybe_evaluate_static(
                 expr,
                 # pyrefly: ignore [bad-argument-type]
@@ -213,7 +214,7 @@ class SizeVarAllocator:
             )
             return bool(evaluated)
 
-        def remove_zero_terms(base: Any, divisor: Any) -> Any:
+        def remove_zero_terms(base, divisor):
             """Symbols smaller than the divisor are zero"""
             if not statically_known(base >= 0):
                 return base
@@ -231,10 +232,10 @@ class SizeVarAllocator:
                                 base = m[rest]
             return base
 
-        def visit_indexing_div(base: Any, divisor: Any) -> Any:
+        def visit_indexing_div(base, divisor):
             return FloorDiv(remove_zero_terms(base, divisor), divisor)
 
-        def visit_modular_indexing(base: Any, divisor: Any, modulus: Any) -> Any:
+        def visit_modular_indexing(base, divisor, modulus):
             base = remove_zero_terms(base, divisor)
 
             can_remove_mod = statically_known(base >= 0) and statically_known(
@@ -269,8 +270,8 @@ class SizeVarAllocator:
         return expr
 
     def _simplify_loops_impl(
-        self, index_vars: list[sympy.Symbol], sizes: Any, index_formulas: Any
-    ) -> Any:
+        self, index_vars: list[sympy.Symbol], sizes, index_formulas
+    ):
         """
         Try to remove as many axis from loop iterations as possible, by:
             1) removing size==1 dimensions
@@ -298,7 +299,7 @@ class SizeVarAllocator:
                 # remove dim
                 sizes[i] = None
 
-        def can_merge_dims(a: Any, b: Any) -> Any:
+        def can_merge_dims(a, b):
             for k in range(len(strides)):
                 if self.simplify(strides[k][a] * sizes[a]) == self.simplify(
                     strides[k][b]
@@ -330,7 +331,7 @@ class SizeVarAllocator:
                     sizes[i] = sizes[i] * sizes[j]
                     sizes[j] = None
 
-        def reindex(index: Any) -> Any:
+        def reindex(index):
             it = list(reversed(index))
             new_index = []
             for size in sizes:
@@ -341,7 +342,7 @@ class SizeVarAllocator:
             assert not it
             return new_index
 
-        def prune(index: Any) -> Any:
+        def prune(index):
             assert len(index) == len(sizes)
             return [i for i, s in zip(index, sizes) if s is not None]
 
@@ -526,7 +527,7 @@ class SizeVarAllocator:
 
     # Similar to the functions guard_or_false/guard_or_true in symbolic_shapes.py
     # but operates on sympy expressions instead of symnodes. see Note [guard_or_].
-    def guard_or_false(self, left: Any) -> Any:
+    def guard_or_false(self, left):
         import torch.fx.experimental._config as exp_config
 
         if exp_config.backed_size_oblivious:
@@ -536,7 +537,7 @@ class SizeVarAllocator:
             return False
         return self.evaluate_expr(left, fallback_value=False)
 
-    def guard_or_true(self, left: Any) -> Any:
+    def guard_or_true(self, left):
         import torch.fx.experimental._config as exp_config
 
         if exp_config.backed_size_oblivious:
@@ -840,7 +841,7 @@ class SizeVarAllocator:
     ) -> tuple[int, ...]:
         return tuple(self.guarding_hint_or_throw(x) for x in exprs)
 
-    def _lru_cache(self, fn: Any, maxsize: Any=None) -> Any:
+    def _lru_cache(self, fn, maxsize=None):
         """
         Wrapper around functools.lru_cache that clears when replacements
         has been invalidated.
@@ -849,7 +850,7 @@ class SizeVarAllocator:
         prior_len = len(self.replacements)
 
         @functools.wraps(fn)
-        def wrapper(*args: Any, **kwargs: Any) -> Any:
+        def wrapper(*args, **kwargs):
             nonlocal prior_len
             if prior_len != len(self.replacements):
                 prior_len = len(self.replacements)
@@ -858,7 +859,7 @@ class SizeVarAllocator:
 
         return wrapper
 
-    def make_stride_vars_cache(self) -> Any:
+    def make_stride_vars_cache(self):
         cache = self._lru_cache(self._stride_vars)
 
         def stride_vars(
@@ -971,7 +972,7 @@ class SizeVarAllocator:
         3. a is a multiple of b.
         """
 
-        def _check_args(x: Any, div: Any, mod: Any, is_first: Any) -> Any:
+        def _check_args(x, div, mod, is_first):
             if not isinstance(div, sympy.Integer) or not isinstance(mod, sympy.Integer):
                 return False
             if div != 1:
@@ -1159,24 +1160,24 @@ class SimplifyIndexing(V.WrapperHandler):  # type: ignore[name-defined]
     simplify ModularIndexing/FloorDiv.
     """
 
-    def __init__(self, inner: Any, var_ranges: VarRanges) -> None:
+    def __init__(self, inner, var_ranges: VarRanges) -> None:
         super().__init__(inner)
         self.name = "SimplifyIndexing"
         self._simplify: Callable[[Expr], Expr] = (
             lambda index: V.graph.sizevars.simplify_with_ranges(index, var_ranges)
         )
 
-    def load(self, name: str, index: sympy.Expr) -> Any:
+    def load(self, name: str, index: sympy.Expr):
         return self._inner.load(name, self._simplify(index))
 
-    def store(self, name: Any, index: Any, value: Any, mode: Any=None) -> Any:
+    def store(self, name, index, value, mode=None):
         return self._inner.store(name, self._simplify(index), value, mode=mode)
 
-    def store_reduction(self, name: Any, index: Any, value: Any) -> Any:
+    def store_reduction(self, name, index, value):
         return self._inner.store_reduction(name, self._simplify(index), value)
 
-    def index_expr(self, index: Any, dtype: Any) -> Any:
+    def index_expr(self, index, dtype):
         return self._inner.index_expr(self._simplify(index), dtype)
 
-    def check_bounds(self, index: Any, size: Any, lower: Any, upper: Any) -> Any:
+    def check_bounds(self, index, size, lower, upper):
         return self._inner.check_bounds(self._simplify(index), size, lower, upper)

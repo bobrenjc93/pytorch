@@ -43,7 +43,9 @@ def _compute_mm_arithmetic_intensity(M: int, N: int, K: int) -> float:
     return M * N * K / (M * K + N * K + M * N)
 
 
-def _filter_nodes_by_target(nodes: list[torch.fx.Node], target: Any) -> list[torch.fx.Node]:
+def _filter_nodes_by_target(
+    nodes: list[torch.fx.Node], target: Any
+) -> list[torch.fx.Node]:
     return [x for x in nodes if x.target == target]
 
 

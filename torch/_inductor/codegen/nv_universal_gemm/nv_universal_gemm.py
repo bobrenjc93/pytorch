@@ -143,7 +143,9 @@ class NVUniversalGemmBenchmarkRequest(GPUDeviceBenchmarkMixin, BenchmarkRequest)
 
         return run_kernel
 
-    def _create_gemm_arguments(self, cutlass_api: Any, input_tensors: Any, out: Any) -> Any:
+    def _create_gemm_arguments(
+        self, cutlass_api: Any, input_tensors: Any, out: Any
+    ) -> Any:
         """Create the appropriate GemmArguments based on variant."""
         if self.variant == GemmVariant.GROUPED_GEMM:
             a, b, offsets = input_tensors

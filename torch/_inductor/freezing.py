@@ -1,3 +1,4 @@
+# mypy: allow-untyped-defs
 from __future__ import annotations
 
 import itertools
@@ -141,15 +142,15 @@ def _freeze(
 
 class ErasedTensor(torch.Tensor):
     @staticmethod
-    def __new__(cls, elem: Any, name: Any, owning_mod: Any) -> Any:
+    def __new__(cls, elem, name, owning_mod):
         return super().__new__(cls, elem.to(device="meta"))
 
-    def __init__(self, elem: Any, name: str | None, mod: Any) -> None:
+    def __init__(self, elem, name: str | None, mod) -> None:
         self.erased_name = name
         self.owning_mod_ref = weakref.ref(mod)
 
     @classmethod
-    def __torch_dispatch__(cls, func: Any, types: Any, args: Any=(), kwargs: Any=None) -> None:  # type: ignore[override]
+    def __torch_dispatch__(cls, func, types, args=(), kwargs=None):  # type: ignore[override]
         erased_tensors = [
             e
             # pyrefly: ignore [bad-unpacking]
@@ -166,7 +167,7 @@ class ErasedTensor(torch.Tensor):
         )
 
 
-def invalidate_eager_modules() -> None:
+def invalidate_eager_modules():
     with torch.utils._python_dispatch._disable_current_modes():
         for (
             mod
@@ -189,7 +190,7 @@ def invalidate_eager_modules() -> None:
                 setattr(mod, attr_name, e_t)
 
 
-def discard_traced_gm_params(mod: torch.fx.GraphModule) -> None:
+def discard_traced_gm_params(mod: torch.fx.GraphModule):
     with torch.utils._python_dispatch._disable_current_modes():
         for attr_name, tensor in list(
             itertools.chain(
@@ -206,7 +207,7 @@ def discard_traced_gm_params(mod: torch.fx.GraphModule) -> None:
             setattr(mod, attr_name, e_t)
 
 
-def enforce_output_layout(gm: torch.fx.GraphModule) -> None:
+def enforce_output_layout(gm: torch.fx.GraphModule):
     """
     Make sure the output node's layout does not change due to compiler optimizations
     by adding aten.as_strided nodes with the expected strides.
@@ -239,7 +240,7 @@ def enforce_output_layout(gm: torch.fx.GraphModule) -> None:
     gm.recompile()
 
 
-def enforce_as_strided_input_layout(gm: torch.fx.GraphModule) -> None:
+def enforce_as_strided_input_layout(gm: torch.fx.GraphModule):
     """
     Make sure the as_strided node's input's layout does not change due to compiler
     optimizations, because the as_strided strides info depends on input tensor stride info.
@@ -264,7 +265,7 @@ def enforce_as_strided_input_layout(gm: torch.fx.GraphModule) -> None:
     gm.recompile()
 
 
-def convert_conv_weights_to_channels_last(gm: torch.fx.GraphModule) -> None:
+def convert_conv_weights_to_channels_last(gm: torch.fx.GraphModule):
     """
     Convert 4d convolution weight tensor to channels last format.
 

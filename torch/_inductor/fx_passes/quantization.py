@@ -83,7 +83,7 @@ def _get_pattern_output_dtype(match: Match) -> Any:
 
 
 def _may_generate_pattern_with_dtype_convert(
-    pattern: Any, dtype: Any=Arg(), with_dtype_convert: Any=True, users: Any=1
+    pattern: Any, dtype: Any = Arg(), with_dtype_convert: Any = True, users: Any = 1
 ) -> Any:
     if with_dtype_convert:
         return CallFunction(
@@ -96,7 +96,9 @@ def _may_generate_pattern_with_dtype_convert(
         return pattern
 
 
-def _may_generate_pattern_with_reshape(pattern: Any, reshape_size: Any=Arg(), with_reshape: Any=True) -> Any:
+def _may_generate_pattern_with_reshape(
+    pattern: Any, reshape_size: Any = Arg(), with_reshape: Any = True
+) -> Any:
     if with_reshape:
         return CallFunction(
             torch.ops.aten.reshape.default,
@@ -124,7 +126,9 @@ def _generate_linear_t_pattern(
     return t_pattern
 
 
-def _unary_fusion_pattern(unary_fusion: Any, call_fn: Any, users: Any, is_bf16: Any) -> Any:
+def _unary_fusion_pattern(
+    unary_fusion: Any, call_fn: Any, users: Any, is_bf16: Any
+) -> Any:
     # only insert to_dtype if is_bf16 is True
     computation_call = _may_generate_pattern_with_dtype_convert(
         call_fn, dtype=KeywordArg("to_float"), with_dtype_convert=is_bf16, users=users
@@ -132,7 +136,9 @@ def _unary_fusion_pattern(unary_fusion: Any, call_fn: Any, users: Any, is_bf16: 
     return unary_fusion(computation_call)
 
 
-def get_dequantize_per_tensor_activation_pattern(is_tensor_overload: Any=False) -> Any:
+def get_dequantize_per_tensor_activation_pattern(
+    is_tensor_overload: Any = False,
+) -> Any:
     dequantize_per_tensor_activation_pattern = CallFunction(
         quantized_decomposed.dequantize_per_tensor.tensor
         if is_tensor_overload
@@ -178,7 +184,7 @@ dequantize_per_channel_to_bf16_clone_weight_pattern = CallFunction(
 )
 
 
-def get_qconv_pt2e_pattern(x_scale_zp_are_tensors: Any=False, users: Any=1) -> Any:
+def get_qconv_pt2e_pattern(x_scale_zp_are_tensors: Any = False, users: Any = 1) -> Any:
     qconv_op = (
         torch.ops.onednn.qconv_pointwise.tensor
         if x_scale_zp_are_tensors
@@ -207,7 +213,9 @@ def get_qconv_pt2e_pattern(x_scale_zp_are_tensors: Any=False, users: Any=1) -> A
     )
 
 
-def get_qconv2d_binary_pt2e_pattern(x_scale_zp_are_tensors: Any=False, users: Any=1) -> Any:
+def get_qconv2d_binary_pt2e_pattern(
+    x_scale_zp_are_tensors: Any = False, users: Any = 1
+) -> Any:
     qconv_op = (
         torch.ops.onednn.qconv2d_pointwise.binary_tensor
         if x_scale_zp_are_tensors
@@ -241,7 +249,7 @@ def get_qconv2d_binary_pt2e_pattern(x_scale_zp_are_tensors: Any=False, users: An
     )
 
 
-def get_qlinear_pt2e_pattern(x_scale_zp_are_tensors: Any, users: Any=1) -> Any:
+def get_qlinear_pt2e_pattern(x_scale_zp_are_tensors: Any, users: Any = 1) -> Any:
     qlinear_op = (
         torch.ops.onednn.qlinear_pointwise.tensor
         if x_scale_zp_are_tensors
@@ -266,7 +274,7 @@ def get_qlinear_pt2e_pattern(x_scale_zp_are_tensors: Any, users: Any=1) -> Any:
     )
 
 
-def get_qlinear_binary_pt2e_pattern(x_scale_zp_are_tensors: Any, users: Any=1) -> Any:
+def get_qlinear_binary_pt2e_pattern(x_scale_zp_are_tensors: Any, users: Any = 1) -> Any:
     qlinear_op = (
         torch.ops.onednn.qlinear_pointwise.binary_tensor
         if x_scale_zp_are_tensors
@@ -311,8 +319,8 @@ def generate_pattern_with_binary(
     binary_post_op: Any,
     computation_call: Any,
     extra_input_pattern: Any,
-    dtype_convert: Any=False,
-    swap_inputs: Any=False,
+    dtype_convert: Any = False,
+    swap_inputs: Any = False,
 ) -> Any:
     binary_pattern = (
         CallFunction(
@@ -343,7 +351,9 @@ def generate_pattern_with_unary(computation_call: Any, unary_post_op: Any) -> An
     return computation_call
 
 
-def generate_pattern_with_output_quant(computation_call: Any, with_dtype_convert: Any=False) -> Any:
+def generate_pattern_with_output_quant(
+    computation_call: Any, with_dtype_convert: Any = False
+) -> Any:
     quantized_op_output_pattern_pt2e = CallFunction(
         quantized_decomposed.quantize_per_tensor.default,
         _may_generate_pattern_with_dtype_convert(
@@ -360,7 +370,9 @@ def generate_pattern_with_output_quant(computation_call: Any, with_dtype_convert
     return quantized_op_output_pattern_pt2e
 
 
-def _check_node_kwarg_arg_value(check_node: Any, kwarg_name: Any, args_index: Any, expected_value: Any) -> Any:
+def _check_node_kwarg_arg_value(
+    check_node: Any, kwarg_name: Any, args_index: Any, expected_value: Any
+) -> Any:
     if kwarg_name in check_node.kwargs:
         actual_value = check_node.kwargs[kwarg_name]
         return actual_value == expected_value
@@ -386,7 +398,7 @@ def _is_valid_quantized_conv_optimization_pattern() -> Any:
     return fn
 
 
-def _is_valid_qconv_post_op_fusion_pattern(has_binary_post_op: Any=False) -> Any:
+def _is_valid_qconv_post_op_fusion_pattern(has_binary_post_op: Any = False) -> Any:
     return (
         _is_valid_qconv_binary_optimization_pattern()
         if has_binary_post_op
@@ -498,7 +510,7 @@ def _is_valid_quantized_linear_optimization_pattern() -> Any:
     return fn
 
 
-def _is_valid_qlinear_post_op_fusion_pattern(has_binary_post_op: Any=False) -> Any:
+def _is_valid_qlinear_post_op_fusion_pattern(has_binary_post_op: Any = False) -> Any:
     return (
         _is_valid_qlinear_binary_optimization_pattern()
         if has_binary_post_op
@@ -673,7 +685,7 @@ def _is_valid_qlinear_binary_optimization_pattern() -> Any:
 
 
 def _is_valid_quantized_op_binary_optimization_pattern(
-    qop: Any, extra_input_from_dequant: Any=True
+    qop: Any, extra_input_from_dequant: Any = True
 ) -> Any:
     # Check if it's a valid Binary Pattern for qconv2d and qlinear:
     # * qop_pointwise should only has one users
@@ -1239,7 +1251,9 @@ def _register_concat_linear_int8_woq_lowering(
     return woq_int8
 
 
-def _register_woq_lowering(pattern: Any, computation_woq: Any, computation_reshape: Any) -> Any:
+def _register_woq_lowering(
+    pattern: Any, computation_woq: Any, computation_reshape: Any
+) -> Any:
     @register_lowering_pattern(
         pattern,
         extra_check=_is_valid_woq_optimization_pattern(),
@@ -1400,7 +1414,7 @@ def _register_woq_lowerings() -> None:
     _register_woq_mm_int8_pattern4()
 
 
-def _is_valid_dequant_promotion_pattern(dtype: Any=torch.float32) -> Any:
+def _is_valid_dequant_promotion_pattern(dtype: Any = torch.float32) -> Any:
     def _inner(match: Any) -> Any:
         assert dtype in [torch.float32, torch.bfloat16]
         dequant_pattern_end_node = match.output_node()
@@ -1446,7 +1460,9 @@ def _is_valid_dequant_promotion_pattern(dtype: Any=torch.float32) -> Any:
     return _inner
 
 
-def _register_dequant_promotion_pass(pattern: Any, pass_number: Any, dtype: Any=torch.float32) -> Any:
+def _register_dequant_promotion_pass(
+    pattern: Any, pass_number: Any, dtype: Any = torch.float32
+) -> Any:
     @register_freezing_graph_pattern(
         pattern,
         extra_check=_is_valid_dequant_promotion_pattern(dtype),
@@ -1585,7 +1601,10 @@ def _is_valid_dequant_conv_pattern(dtype: Any, with_dtype_convert: Any) -> Any:
 
 
 def _register_qconv_weight_prepack_pass(
-    pattern: Any, pass_number: Any, dtype: Any=torch.float32, with_dtype_convert: Any=False
+    pattern: Any,
+    pass_number: Any,
+    dtype: Any = torch.float32,
+    with_dtype_convert: Any = False,
 ) -> None:
     @register_freezing_graph_pattern(
         pattern,
@@ -1730,7 +1749,9 @@ def _register_qconv_weight_prepack_pass(
 
 
 def _generate_dequant_convolution_node_pattern(
-    _dequant_per_channel_pattern: Any, dtype: Any=torch.float32, with_dtype_convert: Any=False
+    _dequant_per_channel_pattern: Any,
+    dtype: Any = torch.float32,
+    with_dtype_convert: Any = False,
 ) -> Any:
     assert dtype in [torch.float32, torch.bfloat16]
     dequant_convolution_node_pattern = CallFunction(
@@ -1753,7 +1774,7 @@ def _generate_dequant_convolution_node_pattern(
 
 
 def _generate_qconv_weight_prepack_patterns(
-    dtype: Any=torch.float32, with_dtype_convert: Any=False
+    dtype: Any = torch.float32, with_dtype_convert: Any = False
 ) -> Any:
     assert dtype in [torch.float32, torch.bfloat16]
     return (
@@ -1778,7 +1799,9 @@ def _generate_qconv_weight_prepack_patterns(
     )
 
 
-def _get_linear_node(match: Any, input_dim_exceeds_two: Any, input_contiguous: Any) -> Any:
+def _get_linear_node(
+    match: Any, input_dim_exceeds_two: Any, input_contiguous: Any
+) -> Any:
     output_reshape_node = None
     if input_dim_exceeds_two:
         if input_contiguous:
@@ -1842,7 +1865,10 @@ def _get_linear_dq_node(
 
 
 def _is_valid_dequant_linear_pattern(
-    dtype: Any, input_dim_exceeds_two: Any, input_contiguous: Any, with_dtype_convert: Any
+    dtype: Any,
+    input_dim_exceeds_two: Any,
+    input_contiguous: Any,
+    with_dtype_convert: Any,
 ) -> Any:
     def _inner(match: Any) -> Any:
         # Check dequant pattern has only 1 user.
@@ -1922,10 +1948,10 @@ def _is_valid_dequant_linear_pattern(
 def _register_qlinear_weight_prepack_pass(
     pattern: Any,
     pass_number: Any,
-    dtype: Any=torch.float32,
-    input_dim_exceeds_two: Any=False,
-    input_contiguous: Any=True,
-    with_dtype_convert: Any=False,
+    dtype: Any = torch.float32,
+    input_dim_exceeds_two: Any = False,
+    input_contiguous: Any = True,
+    with_dtype_convert: Any = False,
 ) -> None:
     @register_freezing_graph_pattern(
         pattern,
@@ -2091,10 +2117,10 @@ def _register_qlinear_weight_prepack_pass(
 
 def _generate_dequant_linear_node_pattern(
     _dequant_per_channel_pattern: Any,
-    dtype: Any=torch.float32,
-    input_dim_exceeds_two: Any=False,
-    is_tensor_overload: Any=False,
-    with_dtype_convert: Any=False,
+    dtype: Any = torch.float32,
+    input_dim_exceeds_two: Any = False,
+    is_tensor_overload: Any = False,
+    with_dtype_convert: Any = False,
 ) -> Any:
     assert dtype in [torch.float32, torch.bfloat16]
     t_pattern = _generate_linear_t_pattern(_dequant_per_channel_pattern, dtype)
@@ -2138,10 +2164,10 @@ def _generate_dequant_linear_node_pattern(
 
 def _generate_dequant_bmm_node_pattern(
     _dequant_per_channel_pattern: Any,
-    dtype: Any=torch.float32,
-    with_bias: Any=False,
-    is_tensor_overload: Any=False,
-    with_dtype_convert: Any=False,
+    dtype: Any = torch.float32,
+    with_bias: Any = False,
+    is_tensor_overload: Any = False,
+    with_dtype_convert: Any = False,
 ) -> Any:
     # When activation of linear dim exceed 2 and not contiguous
     t_pattern = _generate_linear_t_pattern(_dequant_per_channel_pattern, dtype)
@@ -2165,7 +2191,9 @@ def _generate_dequant_bmm_node_pattern(
         ),
     )
 
-    def _generate_pattern_with_output_add(_dequant_bmm_pattern: Any, _with_bias: Any) -> Any:
+    def _generate_pattern_with_output_add(
+        _dequant_bmm_pattern: Any, _with_bias: Any
+    ) -> Any:
         if _with_bias:
             return CallFunction(
                 aten.add.Tensor,
@@ -2179,12 +2207,12 @@ def _generate_dequant_bmm_node_pattern(
 
 
 def _generate_qlinear_weight_prepack_patterns(
-    dtype: Any=torch.float32,
-    input_dim_exceeds_two: Any=False,
-    input_contiguous: Any=True,
-    with_bias: Any=False,
-    is_tensor_overload: Any=False,
-    with_dtype_convert: Any=False,
+    dtype: Any = torch.float32,
+    input_dim_exceeds_two: Any = False,
+    input_contiguous: Any = True,
+    with_bias: Any = False,
+    is_tensor_overload: Any = False,
+    with_dtype_convert: Any = False,
 ) -> Any:
     if input_dim_exceeds_two and not input_contiguous:
         return _generate_dequant_bmm_node_pattern(
@@ -2206,9 +2234,9 @@ def _generate_qlinear_weight_prepack_patterns(
 
 def _generate_linear_dynamic_fp16_pattern(
     _dequant_weight_pattern: Any,
-    input_dim_exceeds_two: Any=False,
-    input_contiguous: Any=True,
-    relu_fused: Any=False,
+    input_dim_exceeds_two: Any = False,
+    input_contiguous: Any = True,
+    relu_fused: Any = False,
 ) -> Any:
     dtype = torch.float32
     t_pattern = _generate_linear_t_pattern(_dequant_weight_pattern, dtype)
@@ -2436,9 +2464,9 @@ def _register_qlinear_weight_prepack() -> None:
 def _register_linear_dynamic_fp16_weight_prepack_pass(
     pattern: Any,
     pass_number: Any,
-    input_dim_exceeds_two: Any=False,
-    input_contiguous: Any=True,
-    relu_fused: Any=False,
+    input_dim_exceeds_two: Any = False,
+    input_contiguous: Any = True,
+    relu_fused: Any = False,
 ) -> Any:
     def _extra_check_fn(match: Match) -> Any:
         return match.kwargs["dtype_fp16"] == torch.float16
@@ -2448,7 +2476,9 @@ def _register_linear_dynamic_fp16_weight_prepack_pass(
         extra_check=_extra_check_fn,
         pass_number=pass_number,
     )
-    def linear_dynamic_fp16_weight_prepack(match: Match, *args: Any, **kwargs: Any) -> None:
+    def linear_dynamic_fp16_weight_prepack(
+        match: Match, *args: Any, **kwargs: Any
+    ) -> None:
         """
         Match the pattern:
         fp32 activation
@@ -2888,10 +2918,10 @@ class PostOpAttr:
     def __init__(
         self,
         binary_op_name: str = "none",
-        alpha: Any=None,
+        alpha: Any = None,
         unary_op_name: str = "none",
-        scalars_attr: Any=None,
-        algorithm_attr: Any=None,
+        scalars_attr: Any = None,
+        algorithm_attr: Any = None,
     ) -> None:
         self.binary_op_name = binary_op_name
         self.alpha = alpha if alpha else 1.0
@@ -3760,7 +3790,9 @@ def concat_linear_woq_int4(gm: torch.fx.GraphModule) -> Any:
         return split(concat_res, split_size_list)
     """
 
-    def concat_wgt(packed_wgts: Any, scale_zps: Any, group_size: Any, act_dtype: Any) -> Any:
+    def concat_wgt(
+        packed_wgts: Any, scale_zps: Any, group_size: Any, act_dtype: Any
+    ) -> Any:
         # Concat the wgts and scale_zps, and repack the wgt
         unpacked_wgts = []
         for packed_wgt in packed_wgts:

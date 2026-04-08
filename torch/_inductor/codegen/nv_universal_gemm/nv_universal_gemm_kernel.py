@@ -44,7 +44,7 @@ class NVUniversalGemmKernelWrapper:
         self.kernel_fn = kernel_fn
         self.kernel_path = kernel_path
 
-    def run(self, *args: Any, stream: Any=None, **kwargs: Any) -> Any:
+    def run(self, *args: Any, stream: Any = None, **kwargs: Any) -> Any:
         """Execute the NVIDIA Universal GEMM kernel."""
         return self.kernel_fn(*args, stream=stream, **kwargs)
 
@@ -232,7 +232,7 @@ class NVUniversalGemmKernel(Kernel):
             return ExternKernel.convert_to_reinterpret_view(node)
         return None
 
-    def call_kernel(self, name: str, node: Any=None) -> None:
+    def call_kernel(self, name: str, node: Any = None) -> None:
         """
         Generate the kernel call in the wrapper code.
 

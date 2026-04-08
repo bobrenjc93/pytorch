@@ -1,5 +1,5 @@
-from typing import Any
 import functools
+from typing import Any
 
 import torch
 from torch._dynamo.utils import counters

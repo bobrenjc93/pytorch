@@ -44,12 +44,14 @@ kernel_code_log = torch._logging.getArtifactLogger(__name__, "kernel_code")
 class CuteDSLKernelWrapper:
     """Wrapper to provide .run() interface for CuteDSL kernels"""
 
-    def __init__(self, kernel_fn: Callable[..., Any], kernel_path: str | None = None) -> None:
+    def __init__(
+        self, kernel_fn: Callable[..., Any], kernel_path: str | None = None
+    ) -> None:
         self.kernel_fn = kernel_fn
         self.kernel_path = kernel_path
         kernel_code_log.info("CuteDSL kernel path: %s", kernel_path)
 
-    def run(self, *args: Any, stream: Any=None, **kwargs: Any) -> Any:
+    def run(self, *args: Any, stream: Any = None, **kwargs: Any) -> Any:
         """
         Execute the CuteDSL kernel.
 
@@ -353,7 +355,7 @@ class CuteDSLTemplateKernel(Kernel):
         self.render_hooks[placeholder] = hook
         return placeholder
 
-    def call_kernel(self, name: str, node: Any=None) -> None:
+    def call_kernel(self, name: str, node: Any = None) -> None:
         """Call the kernel function. Simplified version of TritonTemplateKernel.call_kernel.
 
         For inputs that are ReinterpretViews (e.g., Q/K/V slices from fused QKV),
@@ -562,7 +564,9 @@ class ModificationWrapperCuteDSL(V.WrapperHandler):  # type: ignore[name-defined
         )
         return str(result)
 
-    def indirect_indexing(self, index_var: str, size: Any, check: Any, wrap_neg: Any=True) -> Any:
+    def indirect_indexing(
+        self, index_var: str, size: Any, check: Any, wrap_neg: Any = True
+    ) -> Any:
         """Convert index variable to symbolic form."""
         return sympy_index_symbol(str(index_var))
 

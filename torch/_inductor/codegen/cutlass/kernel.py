@@ -419,7 +419,7 @@ class CUTLASSTemplateKernel(CUTLASSKernel):
             return "void"
         return DTYPE_TO_CPP.get(node.get_layout().dtype)
 
-    def cutlass_dtype(self, node: IRNode, default_dtype: Any="void") -> str | None:
+    def cutlass_dtype(self, node: IRNode, default_dtype: Any = "void") -> str | None:
         # Helper method, called into from CUTLASSGemmTemplate
         if node is None:
             return default_dtype
@@ -427,7 +427,7 @@ class CUTLASSTemplateKernel(CUTLASSKernel):
 
         return CUTLASSTemplate._DTYPE_TO_CUTLASS[node.get_layout().dtype]
 
-    def max_valid_index(self, node: IRNode, default: Any=-1) -> Any:
+    def max_valid_index(self, node: IRNode, default: Any = -1) -> Any:
         # Helper method, called into from CUTLASSGemmTemplate
         if node is None:
             return default

@@ -478,7 +478,9 @@ class CKTileGemmTemplate(CKTileTemplate):
         """
         M, N, K = self.get_gemm_problem_size()
 
-        def max_alignment(contiguous_elements_per_tile: Any, elements_per_thread: Any, ck_dtype: Any) -> Any:
+        def max_alignment(
+            contiguous_elements_per_tile: Any, elements_per_thread: Any, ck_dtype: Any
+        ) -> Any:
             for vector_load_bytes in (16, 8, 4, 2, 1):
                 alignment = vector_load_bytes // self.ck_dtype_to_size[ck_dtype]
                 if (

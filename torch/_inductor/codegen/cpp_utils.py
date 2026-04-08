@@ -196,7 +196,7 @@ class CppCSEVariable(CSEVariable):
 
 
 class CppPrinter(_CppPrinter):
-    def doprint(self, expr: Any, *, simplify: bool = True, p: Any=True) -> Any:
+    def doprint(self, expr: Any, *, simplify: bool = True, p: Any = True) -> Any:
         # TODO: why are people passing strings to the printer here :think:
         if simplify and isinstance(expr, sympy.Expr) and hasattr(V.graph, "sizevars"):
             expr = V.graph.sizevars.simplify(expr)
@@ -299,7 +299,7 @@ class LocalizeBufferHandler(V.WrapperHandler):  # type: ignore[name-defined]
     def load(self, name: str, index: sympy.Expr) -> Any:
         return self._inner.load(*self.localize(name, index))
 
-    def store(self, name: Any, index: Any, value: Any, mode: Any=None) -> Any:
+    def store(self, name: Any, index: Any, value: Any, mode: Any = None) -> Any:
         local_buffer_name, local_buffer_index = self.localize(name, index)
         res = self._inner.store(local_buffer_name, local_buffer_index, value, mode)
         if (
@@ -461,7 +461,7 @@ class LocalBufferContext:
 def unify_mask_base_type(
     buffer: IndentedBuffer,
     vars: tuple[CSEVariable, ...],
-    dtype: Any=torch.float,
+    dtype: Any = torch.float,
 ) -> Any:
     """
     Given list of cse variables,
@@ -488,7 +488,9 @@ def may_unify_binary_op_mask_type(a: Any, b: Any) -> Any:
     return a, b
 
 
-def codegen_rand(offset: Any, code: Any, rand_function: Any, dst_dtype: Any=torch.float32) -> Any:
+def codegen_rand(
+    offset: Any, code: Any, rand_function: Any, dst_dtype: Any = torch.float32
+) -> Any:
     assert is_integer_dtype(offset.dtype)
     code.writeline("[&]()")
     with code.indent():

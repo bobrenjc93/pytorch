@@ -54,8 +54,8 @@ def compile(
 
 def aoti_compile_and_package(
     exported_program: ExportedProgram,
-    _deprecated_unused_args: Any=None,
-    _deprecated_unused_kwargs: Any=None,
+    _deprecated_unused_args: Any = None,
+    _deprecated_unused_kwargs: Any = None,
     *,
     package_path: FileLike | None = None,
     inductor_configs: dict[str, Any] | None = None,

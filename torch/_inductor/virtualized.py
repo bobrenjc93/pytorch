@@ -1,3 +1,4 @@
+# mypy: allow-untyped-defs
 """
 This file provides a number of "global" variables/handlers that are actually
 thread local and dynamically scoped, with Inductor patching them to various
@@ -121,7 +122,7 @@ class Virtualized(Generic[T]):
     store other things, like booleans.
     """
 
-    def __init__(self, vname: str, default: Callable[[], T] | type[NullHandler]) -> None:
+    def __init__(self, vname: str, default: Callable[[], T] | type[NullHandler]):
         self._vname = vname
         self._key: str = f"__torchinductor_{vname}"
         self._default = default
@@ -131,7 +132,7 @@ class Virtualized(Generic[T]):
         setattr(threadlocal, self._key, value)
 
         @contextmanager
-        def ctx() -> Any:
+        def ctx():
             try:
                 yield
             finally:
@@ -166,13 +167,13 @@ class NullKernelHandler(NullHandler):
     attribute name.
     """
 
-    def __init__(self) -> None:
+    def __init__(self):
         super().__init__()
         self.removed_buffers = OrderedSet[Any]()
         self.inplaced_to_remove = OrderedSet[Any]()
         self.index_dtype = "tl.int64"
 
-    def get_index_dtype_as_torch_dtype(self) -> Any:
+    def get_index_dtype_as_torch_dtype(self):
         import torch
 
         if self.index_dtype == "tl.int64":
@@ -219,7 +220,7 @@ _active_user_lowering_ops: Virtualized[OrderedSet[Any]] = Virtualized(
 )
 
 
-def _choices_default() -> Any:
+def _choices_default():
     """
     Lazy init the global choices handler
 
@@ -255,73 +256,73 @@ class OpsValue:
 
     value: Any
 
-    def __init__(self, value: Any) -> None:
+    def __init__(self, value):
         self.value = value
 
-    def __str__(self) -> Any:
+    def __str__(self):
         return str(self.value)
 
-    def __repr__(self) -> Any:
+    def __repr__(self):
         return f"OpsValue({self.value!r})"
 
-    def __add__(self, other: Any) -> Any:
+    def __add__(self, other):
         return ops.add(self, other)
 
-    def __mul__(self, other: Any) -> Any:
+    def __mul__(self, other):
         return ops.mul(self, other)
 
-    def __sub__(self, other: Any) -> Any:
+    def __sub__(self, other):
         return ops.sub(self, other)
 
-    def __neg__(self) -> Any:
+    def __neg__(self):
         return ops.neg(self)
 
-    def __truediv__(self, other: Any) -> Any:
+    def __truediv__(self, other):
         return ops.truediv(self, other)
 
-    def __floordiv__(self, other: Any) -> Any:
+    def __floordiv__(self, other):
         return ops.floordiv(self, other)
 
-    def __mod__(self, other: Any) -> Any:
+    def __mod__(self, other):
         return ops.mod(self, other)
 
-    def __pow__(self, other: Any) -> Any:
+    def __pow__(self, other):
         return ops.pow(self, other)
 
-    def __lt__(self, other: Any) -> Any:
+    def __lt__(self, other):
         return ops.lt(self, other)
 
-    def __le__(self, other: Any) -> Any:
+    def __le__(self, other):
         return ops.le(self, other)
 
-    def __eq__(self, other: Any) -> Any:
+    def __eq__(self, other):
         return ops.eq(self, other)
 
-    def __ne__(self, other: Any) -> Any:
+    def __ne__(self, other):
         return ops.ne(self, other)
 
-    def __gt__(self, other: Any) -> Any:
+    def __gt__(self, other):
         return ops.gt(self, other)
 
-    def __ge__(self, other: Any) -> Any:
+    def __ge__(self, other):
         return ops.ge(self, other)
 
-    def __and__(self, other: Any) -> Any:
+    def __and__(self, other):
         return ops.bitwise_and(self, other)
 
-    def __or__(self, other: Any) -> Any:
+    def __or__(self, other):
         return ops.bitwise_or(self, other)
 
-    def __xor__(self, other: Any) -> Any:
+    def __xor__(self, other):
         return ops.bitwise_xor(self, other)
 
-    def __invert__(self) -> Any:
+    def __invert__(self):
         return ops.bitwise_not(self)
 
-    def __rshfit__(self, n: Any) -> Any:
+    def __rshfit__(self, n):
         return ops.bitwise_right_shift(self, n)
 
-    def __lshift__(self, n: Any) -> Any:
+    def __lshift__(self, n):
         return ops.bitwise_left_shift(self, n)
 
 
@@ -336,7 +337,7 @@ class OpsWrapper(DefaultHandler):
         return OpsWrapper._wrap(getattr(_ops, name)(*new_args, **new_kwargs))
 
     @staticmethod
-    def _unwrap(x: Any) -> Any:
+    def _unwrap(x):
         if isinstance(x, (list, tuple)):
             return tuple(OpsWrapper._unwrap(v) for v in x)
         if isinstance(x, OpsValue):
@@ -344,14 +345,14 @@ class OpsWrapper(DefaultHandler):
         return x
 
     @staticmethod
-    def _wrap(x: Any) -> Any:
+    def _wrap(x):
         if isinstance(x, (list, tuple)):
             return tuple(OpsValue(v) for v in x)
         return OpsValue(x)
 
     @staticmethod
     # pyrefly: ignore [bad-override]
-    def indirect_indexing(index: Any, size: Any, check: Any=True, wrap_neg: Any=True) -> Any:
+    def indirect_indexing(index, size, check=True, wrap_neg=True):
         # Returns a sympy value, not IR value
         index = OpsWrapper._unwrap(index)
         return _ops.indirect_indexing(index, size, check, wrap_neg)
@@ -420,38 +421,38 @@ class _V:
         return _extern_kernel_nodes._get_handler()
 
     @property
-    def real_inputs(self) -> Any:
+    def real_inputs(self):
         """non-fake example inputs"""
         return _real_inputs._get_handler()
 
     @property
-    def fake_mode(self) -> Any:
+    def fake_mode(self):
         """The graph currently being generated"""
         return _fake_mode._get_handler()
 
     @property
-    def kernel(self) -> Any:
+    def kernel(self):
         """The kernel currently being generated"""
         return _kernel._get_handler()
 
     @property
-    def debug(self) -> Any:
+    def debug(self):
         return _debug._get_handler()
 
     @property
-    def interpreter(self) -> Any:
+    def interpreter(self):
         return _interpreter._get_handler()
 
     @property
-    def aot_compilation(self) -> Any:
+    def aot_compilation(self):
         return _aot_compilation._get_handler() is True
 
     @property
-    def current_node(self) -> Any:
+    def current_node(self):
         return _current_node._get_handler()
 
     @property
-    def local_buffer_context(self) -> Any:
+    def local_buffer_context(self):
         return _local_buffer_context._get_handler()
 
     @property
@@ -459,7 +460,7 @@ class _V:
         return _choices._get_handler()
 
     @property
-    def distributed_autotune_state(self) -> Any:
+    def distributed_autotune_state(self):
         return _distributed_autotune_state._get_handler()
 
     @property

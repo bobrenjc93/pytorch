@@ -1,8 +1,7 @@
-from typing import Any
 import hashlib
 import logging
 from collections.abc import Sequence
-from typing import cast
+from typing import Any, cast
 
 from torch._inductor.utils import Placeholder
 from torch.utils._ordered_set import OrderedSet

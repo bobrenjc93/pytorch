@@ -434,7 +434,9 @@ def expand_bias(B: _T | None, X: _T) -> _T | None:
     return B
 
 
-def prune_tensors(input_nodes: list[ir.IRNode], new_input_nodes: list[ir.IRNode]) -> Any:
+def prune_tensors(
+    input_nodes: list[ir.IRNode], new_input_nodes: list[ir.IRNode]
+) -> Any:
     """
     Prune unused tensors from `V.graph` since the GEMM Template use new packed weight.
     """
@@ -532,7 +534,7 @@ def gen_2d_view_of_epilogue_buf(
         Y_2d = Y
     else:
 
-        def get_reindexer(epilogue_node: Any, default_reindexer: Any=None) -> Any:
+        def get_reindexer(epilogue_node: Any, default_reindexer: Any = None) -> Any:
             # From template_buffer to epilogue_node_ordered (ordered by stride decreasingly, in dense format), for example:
             #   template_buffer:
             #       size (324, 512), stride (512, 1)
@@ -600,12 +602,12 @@ class CppGemmTemplate(CppTemplate):
         layout: ir.Layout,
         num_threads: int,
         register_blocking: GemmBlocking,
-        beta: Any=1,
-        alpha: Any=1,
-        has_bias: Any=False,
+        beta: Any = 1,
+        alpha: Any = 1,
+        has_bias: Any = False,
         epilogue_creator: Callable[[ir.Buffer], ir.Pointwise] | None = None,
         should_block_weights: bool = True,
-        name: Any="packed_gemm",
+        name: Any = "packed_gemm",
     ) -> None:
         assert layout.dtype in [
             torch.float,
@@ -660,7 +662,14 @@ class CppGemmTemplate(CppTemplate):
                     factors.append(i)
             return factors
 
-        def get_blocking(m_factor: Any, n_factor: Any, k_factor: Any, m_blocks: Any, n_blocks: Any, k_blocks: Any) -> Any:
+        def get_blocking(
+            m_factor: Any,
+            n_factor: Any,
+            k_factor: Any,
+            m_blocks: Any,
+            n_blocks: Any,
+            k_blocks: Any,
+        ) -> Any:
             thread_block_k = math.ceil(k_blocks / k_factor)
             thread_block_n = math.ceil(n_blocks / n_factor)
             thread_block_m = math.ceil(m_blocks / m_factor)
@@ -927,11 +936,11 @@ class CppGemmTemplate(CppTemplate):
         choices: Any,
         layout: Any,
         input_nodes: Any,
-        beta: Any=1,
-        alpha: Any=1,
-        has_bias: Any=False,
-        trans_w: Any=False,
-        input_indices: Any=None,
+        beta: Any = 1,
+        alpha: Any = 1,
+        has_bias: Any = False,
+        trans_w: Any = False,
+        input_indices: Any = None,
         epilogue_creator: Callable[[ir.Buffer], ir.Pointwise] | None = None,
         act_mapping: dict[int, ir.IRNode] | None = None,
     ) -> Any:
@@ -1203,7 +1212,9 @@ class CppGemmTemplate(CppTemplate):
             BCompensate = None
             x_w_scale = None
 
-            def _get_compensation_node(W: Any, use_int8_fast_compensation_path: Any) -> Any:
+            def _get_compensation_node(
+                W: Any, use_int8_fast_compensation_path: Any
+            ) -> Any:
                 BCompensate = V.graph.add_tensor_constant(
                     V.graph.constants[W.get_name() + "_BMatrixCompens"],
                     W.get_name() + "_BMatrixCompens",
@@ -1436,7 +1447,9 @@ class CppGemmTemplate(CppTemplate):
         # When the GEMM output buffer is localized but it has users other than the epilogue nodes,
         # we need to copy the value in the GEMM output local buffer to a global buffer.
         def need_copy_from_local_to_global_buffer_epilogue(
-            use_local_acc: Any, template_buffer_has_other_users: Any, epilogue_creators: Any
+            use_local_acc: Any,
+            template_buffer_has_other_users: Any,
+            epilogue_creators: Any,
         ) -> Any:
             # The GEMM output buffer is a global buffer, thus copy is not needed.
             if not use_local_acc:
@@ -1464,7 +1477,9 @@ class CppGemmTemplate(CppTemplate):
             use_local_acc, template_buffer_has_other_users, epilogue_creators
         ):
 
-            def copy_from_local_to_global_buffer_epilogue(input_buffer: ir.Buffer) -> Any:
+            def copy_from_local_to_global_buffer_epilogue(
+                input_buffer: ir.Buffer,
+            ) -> Any:
                 dtype = self.layout.dtype
                 input_loader = input_buffer.make_loader()
 

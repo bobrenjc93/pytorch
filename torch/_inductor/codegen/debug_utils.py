@@ -1,11 +1,10 @@
 from __future__ import annotations
-from typing import Any
 
 import functools
 import logging
 import os
 from enum import Enum
-from typing import TYPE_CHECKING
+from typing import Any, TYPE_CHECKING
 
 import torch
 from torch import dtype as torch_dtype
@@ -64,9 +63,9 @@ class DebugPrinterManager:
         writeline: Callable[..., None] | None = None,
         args_to_print_or_save: list[str] | None = None,
         kernel_name: str = "",
-        kernel: Any=None,
+        kernel: Any = None,
         arg_signatures: list[type] | None = None,
-        kernel_type: Any=None,
+        kernel_type: Any = None,
     ) -> None:
         self.debug_printer_level = IntermediateValueDebuggingLevel(debug_printer_level)
         self.use_array_ref = use_array_ref
@@ -87,7 +86,9 @@ class DebugPrinterManager:
             arg_signatures=self.arg_signatures,
         )
 
-    def __exit__(self, args_to_print_or_save: Any, kernel_name: Any, arg_signatures: Any) -> None:
+    def __exit__(
+        self, args_to_print_or_save: Any, kernel_name: Any, arg_signatures: Any
+    ) -> None:
         self._perform_debug_print_or_save_helper(
             args_to_print_or_save,
             kernel_name,
@@ -146,7 +147,7 @@ class DebugPrinterManager:
         kernel_name: str,
         arg_signatures: list[type] | None,
         kernel: Any,
-        kernel_type: Any=None,
+        kernel_type: Any = None,
     ) -> None:
         # Note: MultiKernel debug printing is not supported for now
         if isinstance(kernel, MultiKernel):
@@ -195,7 +196,7 @@ class DebugPrinterManager:
         self,
         args_to_save: Any,
         kernel_name: Any,
-        before_launch: Any=True,
+        before_launch: Any = True,
         arg_signatures: list[type] | None = None,
     ) -> None:
         for i, arg in enumerate(args_to_save):
@@ -232,7 +233,7 @@ class DebugPrinterManager:
         self,
         args_to_print: Any,
         kernel_name: Any,
-        before_launch: Any=True,
+        before_launch: Any = True,
         arg_signatures: list[type] | None = None,
     ) -> None:
         launch_prefix = "before_launch" if before_launch else "after_launch"

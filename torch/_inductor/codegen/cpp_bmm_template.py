@@ -84,12 +84,12 @@ class CppBmmTemplate(CppGemmTemplate):
         layout: ir.Layout,
         num_threads: int,
         register_blocking: GemmBlocking,
-        beta: Any=1,
-        alpha: Any=1,
-        has_bias: Any=False,
+        beta: Any = 1,
+        alpha: Any = 1,
+        has_bias: Any = False,
         epilogue_creator: Callable[[ir.Buffer], ir.Pointwise] | None = None,
         should_block_weights: bool = False,
-        name: Any="bmm",
+        name: Any = "bmm",
     ) -> None:
         """
         In order to simplify the implementation and increase code reuse, the BMM template implements

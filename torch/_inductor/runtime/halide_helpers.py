@@ -1,4 +1,4 @@
-from typing import Any
+# mypy: allow-untyped-defs
 import math
 
 
@@ -21,7 +21,7 @@ else:
     PHILOX_ROUND_B_U32 = None
 
 
-def _pair_uniform_to_normal(u1: Any, u2: Any) -> Any:
+def _pair_uniform_to_normal(u1, u2):
     """Box-Muller transform"""
     u1 = hl.max(hl.f32(1.0e-7), u1)
     th = hl.f32(math.tau) * u2
@@ -29,7 +29,7 @@ def _pair_uniform_to_normal(u1: Any, u2: Any) -> Any:
     return r * hl.cos(th), r * hl.sin(th)
 
 
-def _uint_to_uniform_float(x: Any) -> Any:
+def _uint_to_uniform_float(x):
     """
     Numerically stable function to convert a random uint into a random float uniformly sampled in [0, 1).
     """
@@ -45,8 +45,8 @@ def _uint_to_uniform_float(x: Any) -> Any:
     return x * scale
 
 
-def philox_impl(c0: Any, c1: Any, c2: Any, c3: Any, k0: Any, k1: Any, n_rounds: Any) -> Any:
-    def umulhi(a: Any, b: Any) -> Any:
+def philox_impl(c0, c1, c2, c3, k0, k1, n_rounds):
+    def umulhi(a, b):
         a = hl.cast(hl.UInt(64), a)
         b = hl.cast(hl.UInt(64), b)
         return hl.cast(hl.UInt(32), ((a * b) >> 32) & hl.u64(0xFFFFFFFF))
@@ -65,7 +65,7 @@ def philox_impl(c0: Any, c1: Any, c2: Any, c3: Any, k0: Any, k1: Any, n_rounds: 
     return c0, c1, c2, c3
 
 
-def halide_philox(seed: Any, c0: Any, c1: Any, c2: Any, c3: Any, n_rounds: Any) -> Any:
+def halide_philox(seed, c0, c1, c2, c3, n_rounds):
     seed = hl.cast(hl.UInt(64), seed)
 
     assert c0.type().bits() == 32
@@ -76,13 +76,13 @@ def halide_philox(seed: Any, c0: Any, c1: Any, c2: Any, c3: Any, n_rounds: Any) 
     return philox_impl(c0, c1, c2, c3, seed_lo, seed_hi, n_rounds)
 
 
-def randint4x(seed: Any, offset: Any, n_rounds: Any) -> Any:
+def randint4x(seed, offset, n_rounds):
     offset = hl.cast(hl.UInt(32), offset)
     _0 = hl.u32(0)
     return halide_philox(seed, offset, _0, _0, _0, n_rounds)
 
 
-def rand4x(seed: Any, offset: Any, n_rounds: Any=PHILOX_N_ROUNDS_DEFAULT) -> Any:
+def rand4x(seed, offset, n_rounds=PHILOX_N_ROUNDS_DEFAULT):
     i1, i2, i3, i4 = randint4x(seed, offset, n_rounds)
     u1 = _uint_to_uniform_float(i1)
     u2 = _uint_to_uniform_float(i2)
@@ -91,17 +91,17 @@ def rand4x(seed: Any, offset: Any, n_rounds: Any=PHILOX_N_ROUNDS_DEFAULT) -> Any
     return u1, u2, u3, u4
 
 
-def randint(seed: Any, offset: Any, n_rounds: Any=PHILOX_N_ROUNDS_DEFAULT) -> Any:
+def randint(seed, offset, n_rounds=PHILOX_N_ROUNDS_DEFAULT):
     ret, _, _, _ = randint4x(seed, offset, n_rounds)
     return ret
 
 
-def rand(seed: Any, offset: Any, n_rounds: Any=PHILOX_N_ROUNDS_DEFAULT) -> Any:
+def rand(seed, offset, n_rounds=PHILOX_N_ROUNDS_DEFAULT):
     source = randint(seed, offset, n_rounds)
     return _uint_to_uniform_float(source)
 
 
-def rand_eager_kernel(seed: Any, offset_blocks: Any, tid: Any, VEC: Any, n_rounds: Any=PHILOX_N_ROUNDS_DEFAULT) -> Any:
+def rand_eager_kernel(seed, offset_blocks, tid, VEC, n_rounds=PHILOX_N_ROUNDS_DEFAULT):
     inv = hl.cast(hl.Float(32), 1.0 / 4294967296.0)  # 2^-32
     half = hl.cast(hl.Float(32), 0.5) * inv
 
@@ -135,7 +135,7 @@ def rand_eager_kernel(seed: Any, offset_blocks: Any, tid: Any, VEC: Any, n_round
     return hl.cast(hl.Float(32), 1.0) - (hl.cast(hl.Float(32), rand_int) * inv + half)
 
 
-def randn(seed: Any, offset: Any) -> Any:
+def randn(seed, offset):
     i1, i2, _, _ = randint4x(seed, offset, PHILOX_N_ROUNDS_DEFAULT)
     u1 = _uint_to_uniform_float(i1)
     u2 = _uint_to_uniform_float(i2)
@@ -143,7 +143,7 @@ def randn(seed: Any, offset: Any) -> Any:
     return n1
 
 
-def randint64(seed: Any, offset: Any, low: Any, high: Any) -> Any:
+def randint64(seed, offset, low, high):
     r0, r1, _r2, _r3 = randint4x(seed, offset, PHILOX_N_ROUNDS_DEFAULT)
     r0 = hl.cast(hl.UInt(64), r0)
     r1 = hl.cast(hl.UInt(64), r1)

@@ -300,7 +300,7 @@ class AsyncCompile:
         _compile_end()
 
     @classmethod
-    def wait_pool_ready(cls, timeout: Any=120) -> None:
+    def wait_pool_ready(cls, timeout: Any = 120) -> None:
         cls.use_process_pool()
         if cls._ready_future is not None:
             cls._ready_future.result(timeout=timeout)
@@ -341,7 +341,9 @@ class AsyncCompile:
         if isinstance(pool, SubprocPool):
             pool.wakeup()
 
-    def triton(self, kernel_name: str, source_code: str, device_str: str = "cuda") -> Any:
+    def triton(
+        self, kernel_name: str, source_code: str, device_str: str = "cuda"
+    ) -> Any:
         """
         Async_compile.triton is more complicated than the other backends because
         we're trying to optimize compile time as much as possible for this hot callsite.
@@ -535,7 +537,13 @@ class AsyncCompile:
             )
             return LambdaFuture(get_result)
 
-    def cutlass(self, cache_cls: Any, source_code: Any, dst_file_ext: Any, aot_compile: Any=False) -> Any:
+    def cutlass(
+        self,
+        cache_cls: Any,
+        source_code: Any,
+        dst_file_ext: Any,
+        aot_compile: Any = False,
+    ) -> Any:
         def task() -> Any:
             if aot_compile:
                 # We rely on JITInductor to compile the CUDA code,
@@ -546,11 +554,13 @@ class AsyncCompile:
 
         return self.submit(task)
 
-    def cuda(self, source_code: Any, dst_file_ext: Any, aot_compile: Any=False) -> Any:
+    def cuda(
+        self, source_code: Any, dst_file_ext: Any, aot_compile: Any = False
+    ) -> Any:
         kernel_code_log.info("CUDA Kernel:\n%s", source_code)
         return self.cutlass(CUDACodeCache, source_code, dst_file_ext, aot_compile)
 
-    def xpu(self, source_code: Any, dst_file_ext: Any, aot_compile: Any=False) -> Any:
+    def xpu(self, source_code: Any, dst_file_ext: Any, aot_compile: Any = False) -> Any:
         kernel_code_log.info("XPU Kernel:\n%s", source_code)
         return self.cutlass(XPUCodeCache, source_code, dst_file_ext, aot_compile)
 
@@ -558,7 +568,7 @@ class AsyncCompile:
         self,
         source_code: Any,
         dst_file_ext: Any,
-        aot_compile: Any=False,
+        aot_compile: Any = False,
     ) -> Any:
         kernel_code_log.info("ROCm Kernel:\n%s", source_code)
 

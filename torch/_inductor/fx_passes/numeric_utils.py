@@ -1,4 +1,4 @@
-from typing import Any
+# mypy: allow-untyped-defs
 import gc
 import logging
 import os
@@ -42,7 +42,7 @@ def clean_memory() -> None:
 
 # We compare the numerical results before and after pre/post grad fx passes
 # transformation to make sure the numerical results are the same.
-def compare_dict_tensors(dict_base: Any, dict_control: Any, precision: Any) -> Any:
+def compare_dict_tensors(dict_base, dict_control, precision):
     if len(OrderedSet(dict_base.keys())) != len(OrderedSet(dict_control.keys())):
         logger.warning("Mismatch keys found before and after pre/post grad fx passes.")
         logger.debug("keys before pre/post grad fx passes %s", dict_base.keys())
@@ -74,7 +74,7 @@ def compare_dict_tensors(dict_base: Any, dict_control: Any, precision: Any) -> A
     return is_allclose
 
 
-def compare_tuple_tensors(tuple_base: Any, tuple_control: Any, precision: Any) -> Any:
+def compare_tuple_tensors(tuple_base, tuple_control, precision):
     if len(tuple_base) != len(tuple_control):
         logger.warning(
             "Mismatch fw output length. before transformation: %s, after transformation: %s",
@@ -104,7 +104,7 @@ def compare_tuple_tensors(tuple_base: Any, tuple_control: Any, precision: Any) -
     return is_allclose
 
 
-def compare_parameters(model_base: Any, model_control: Any, precision: Any) -> Any:
+def compare_parameters(model_base, model_control, precision):
     return compare_dict_tensors(
         dict(model_base.named_parameters()),
         dict(model_control.named_parameters()),
@@ -112,7 +112,7 @@ def compare_parameters(model_base: Any, model_control: Any, precision: Any) -> A
     )
 
 
-def compare_forward_output(pred_base: Any, pred_control: Any, precision: Any) -> Any:
+def compare_forward_output(pred_base, pred_control, precision):
     return compare_tuple_tensors(
         pred_base,
         pred_control,
@@ -120,7 +120,7 @@ def compare_forward_output(pred_base: Any, pred_control: Any, precision: Any) ->
     )
 
 
-def compare_gradients(model_base: Any, model_control: Any, precision: Any) -> Any:
+def compare_gradients(model_base, model_control, precision):
     grad_base = {key: param.grad for key, param in model_base.named_parameters()}
     grad_pt2 = {key: param.grad for key, param in model_control.named_parameters()}
     return compare_dict_tensors(
@@ -131,8 +131,8 @@ def compare_gradients(model_base: Any, model_control: Any, precision: Any) -> An
 
 
 def run_model(
-    model_base: Any, model_control: Any, model_input: Any, num_iterations: Any=10, precision: Any=1e-4
-) -> None:
+    model_base, model_control, model_input, num_iterations=10, precision=1e-4
+):
     clean_memory()
     for i in range(num_iterations):
         logger.info("start %s iteration", i)
@@ -188,12 +188,12 @@ def run_model(
 
 
 def numeric_check_if_enabled(
-    gm_before_fx_passes: Any,
-    gm_after_fx_passes: Any,
-    example_inputs: Any,
-    num_iterations: Any,
-    precision: Any,
-) -> None:
+    gm_before_fx_passes,
+    gm_after_fx_passes,
+    example_inputs,
+    num_iterations,
+    precision,
+):
     # need to topo-sort graphmodule before we run the model,
     # otherwise it may fail as refer before def
     # fail silently in order not to block the model run

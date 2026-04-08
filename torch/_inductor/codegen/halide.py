@@ -268,7 +268,7 @@ class HalideOverrides(OpOverrides):
         x: Any,
         dtype: torch.dtype,
         src_dtype: torch.dtype | None = None,
-        use_compute_types: Any=True,
+        use_compute_types: Any = True,
     ) -> Any:
         if dtype == torch.bool:
             return f"({x} != 0)"
@@ -466,7 +466,9 @@ class HalideOverrides(OpOverrides):
         return f"halide_helpers.randn({seed}, {offset})"
 
     @staticmethod
-    def rand_eager(seed: Any, base_offset: Any, threads_per_round: Any, tid: Any, vec: Any) -> Any:
+    def rand_eager(
+        seed: Any, base_offset: Any, threads_per_round: Any, tid: Any, vec: Any
+    ) -> Any:
         return f"halide_helpers.rand_eager_kernel({seed}, {base_offset}, {threads_per_round}, {tid}, {vec})"
 
     @staticmethod
@@ -598,7 +600,9 @@ class HalideOverrides(OpOverrides):
         return var
 
     @classmethod
-    def indirect_indexing(cls, index_var: Any, size: Any, check: Any=True, wrap_neg: Any=True) -> Any:
+    def indirect_indexing(
+        cls, index_var: Any, size: Any, check: Any = True, wrap_neg: Any = True
+    ) -> Any:
         # TODO(jansel): Halide only supports 32-bit indexing, we should error on overflow
         index_var = ops.to_dtype(index_var, torch.int32)
         index_var = ops.halide_clamp(index_var, size, check)
@@ -710,7 +714,7 @@ class DimensionInfo:
         self.size = size
         self.stride = stride
 
-    def index_str(self, replacements: Any=None, zero_vars: Any=False) -> Any:
+    def index_str(self, replacements: Any = None, zero_vars: Any = False) -> Any:
         assert self.expr is not None
         expr = self.expr
         if zero_vars and expr == 0:
@@ -787,7 +791,9 @@ class HalideKernel(SIMDKernel):
         return halide_type(dtype)
 
     # pyrefly: ignore [bad-override]
-    def create_cse_var(self, name: Any, bounds: Any=None, dtype: Any=None, shape: Any=None) -> Any:
+    def create_cse_var(
+        self, name: Any, bounds: Any = None, dtype: Any = None, shape: Any = None
+    ) -> Any:
         self.body.writeline(f"{name} = hl.Func({name!r})")
         # pyrefly: ignore [bad-argument-type]
         return HalideCSEVariable(name, bounds, dtype, shape)
@@ -1014,7 +1020,9 @@ class HalideKernel(SIMDKernel):
             return self.lookup_cse_var(sym.name).indirect_indexing_size
         return self.halide_vars[sym]
 
-    def indexing_to_dimensions(self, var: str, index: sympy.Expr, is_store: bool) -> Any:
+    def indexing_to_dimensions(
+        self, var: str, index: sympy.Expr, is_store: bool
+    ) -> Any:
         """Convert address-based indexing into dimensions using self.halide_vars"""
         symbols = []
         for sym in sorted(index.free_symbols, key=lambda x: x.name):  # type: ignore[attr-defined]
@@ -1189,7 +1197,9 @@ class HalideKernel(SIMDKernel):
         assert len(ordered) == len(used_dims)
         return ordered
 
-    def make_index_str(self, dims: Any, replacements: Any=None, zero_vars: Any=False) -> Any:
+    def make_index_str(
+        self, dims: Any, replacements: Any = None, zero_vars: Any = False
+    ) -> Any:
         index_str = ", ".join(d.index_str(replacements, zero_vars) for d in dims)
         if len(dims) == 0:
             index_str = "()"
@@ -1461,7 +1471,7 @@ class HalideKernel(SIMDKernel):
         line: Any,
         used_dims: Any,
         *,
-        bounds: Any=ValueRanges.unknown(),
+        bounds: Any = ValueRanges.unknown(),
         shape: BlockShapeType = None,
     ) -> HalideCSEVariable:
         var = self.cse.generate(self.body, line, bounds=bounds, shape=shape)
@@ -1469,7 +1479,9 @@ class HalideKernel(SIMDKernel):
         var.used_dims = used_dims
         return var
 
-    def newfunc(self, used_dims: Any, *, shape: BlockShapeType = None) -> HalideCSEVariable:
+    def newfunc(
+        self, used_dims: Any, *, shape: BlockShapeType = None
+    ) -> HalideCSEVariable:
         var = self.cse.newvar(shape=shape)
         assert isinstance(var, HalideCSEVariable)
         var.used_dims = used_dims
@@ -1602,7 +1614,7 @@ class HalideKernel(SIMDKernel):
             cuda_device=cuda_device,
         )
 
-    def codegen_kernel(self, name: Any=None) -> Any:
+    def codegen_kernel(self, name: Any = None) -> Any:
         """Called at the end to generate a final kernel string"""
         if self.args.inplace_buffers:
             raise Unsupported("inplace_buffers")
@@ -1735,7 +1747,9 @@ class HalideKernel(SIMDKernel):
             n = max(2, n)
         return n
 
-    def call_kernel(self, name: str, node: Any=None, deallocate_ws: bool = True) -> None:
+    def call_kernel(
+        self, name: str, node: Any = None, deallocate_ws: bool = True
+    ) -> None:
         """Codegen a call to this kernel"""
         wrapper = V.graph.wrapper_code
         call_args = [f"{n}" for n, arg in self.halide_argdefs() if arg.alias_of is None]

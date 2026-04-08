@@ -1,7 +1,6 @@
-from typing import Any
 import logging
 from collections.abc import Sequence
-from typing import cast, TypeGuard
+from typing import Any, cast, TypeGuard
 
 from ... import config
 from ...codecache import code_hash, get_path

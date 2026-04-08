@@ -1,7 +1,7 @@
-from typing import Any
 import contextlib
 import logging
 import re
+from typing import Any
 from unittest.mock import patch
 
 import sympy
@@ -773,7 +773,9 @@ class CppFlexAttentionTemplate(CppTemplate):
         )
         return kernel_args
 
-    def generate_other_buffer(self, buf_list: Any, start_offset: Any, len_attr: Any, kernel_args: Any) -> Any:
+    def generate_other_buffer(
+        self, buf_list: Any, start_offset: Any, len_attr: Any, kernel_args: Any
+    ) -> Any:
         kernel_input_name_to_buffer_name = {
             key: value if isinstance(value, sympy.Symbol) else value.get_name()
             for key, value in self.kernel_input_name_to_buffer.items()
@@ -807,7 +809,9 @@ class CppFlexAttentionTemplate(CppTemplate):
             f"auto {ptr} = {name};" for ptr, (name, _) in self.other_ptr_data.items()
         )
 
-    def modification(self, subgraph_buffer: Any, output_name: Any, output_idx: Any) -> Any:
+    def modification(
+        self, subgraph_buffer: Any, output_name: Any, output_idx: Any
+    ) -> Any:
         assert isinstance(subgraph_buffer, ir.ComputedBuffer)
         subgraph_buffer_data = subgraph_buffer.data
         from ..loop_body import LoopBody
@@ -956,7 +960,9 @@ class CppFlexAttentionTemplate(CppTemplate):
         template.maybe_append_choice(choices)
         return template
 
-    def apply_score_mod(self, score: Any, b: Any, h: Any, q_idx: Any, kv_idx: Any) -> Any:
+    def apply_score_mod(
+        self, score: Any, b: Any, h: Any, q_idx: Any, kv_idx: Any
+    ) -> Any:
         return self.score_mod.graph_module(score, b, h, q_idx, kv_idx).item()
 
     def render(  # type: ignore[override,return]
@@ -1036,7 +1042,9 @@ class CppFlexAttentionTemplate(CppTemplate):
             dict(kernel_name=kernel_name)
         )
 
-    def codegen_allocate_buffer(self, buffer_name: str, buffer_dtype: Any, buffer_size: Any) -> Any:
+    def codegen_allocate_buffer(
+        self, buffer_name: str, buffer_dtype: Any, buffer_size: Any
+    ) -> Any:
         return self._template_from_string(ALLOCATE_BUFFER).render(
             dict(
                 buffer_name=buffer_name,
