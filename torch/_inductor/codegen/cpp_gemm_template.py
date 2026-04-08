@@ -895,7 +895,7 @@ class CppGemmTemplate(CppTemplate):
 
         return GemmBlocking(*get_cache_blocking(register_blocking, thread_blocking))
 
-    def log_blockings(self) -> Any:
+    def log_blockings(self) -> None:
         log.debug(f"Register blocking: {self.register_blocking}")  # noqa: G004
         if self.is_dynamic_M:
             # thread and cache blockings are determined at runtime for dynamic shapes
