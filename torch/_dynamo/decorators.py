@@ -72,13 +72,17 @@ def run(fn: Callable[_P, _R] | None = None) -> Any:
     return RunOnlyContext()
 
 
-def disable(
-    fn: Callable[_P, _R] | None = None,
-    recursive: bool = True,
-    *,
-    reason: str | None = None,
-    wrapping: bool = True,
-) -> Any:
+if TYPE_CHECKING:
+    def disable(
+        fn: Callable[_P, _R] | None = None,
+        recursive: bool = True,
+        *,
+        reason: str | None = None,
+        wrapping: bool = True,
+    ) -> Any: ...
+
+
+def disable(fn=None, recursive=True, *, reason=None, wrapping=True):  # type: ignore[no-untyped-def]
     """
     Decorator to disable TorchDynamo
 
@@ -179,22 +183,24 @@ class set_stance(_DecoratorContextManager):
         return self.__class__(self.stance.stance, force_backend=self.stance.backend)
 
 
-def assume_constant_result(fn: F) -> F:
+if TYPE_CHECKING:
+    def assume_constant_result(fn: F) -> F: ...
+
+
+def assume_constant_result(fn):  # type: ignore[no-untyped-def]
     fn._dynamo_marked_constant = True  # type: ignore[attr-defined]
     return fn
 
 
-@overload
-def allow_in_graph(fn: F) -> F: ...
+if TYPE_CHECKING:
+    @overload
+    def allow_in_graph(fn: F) -> F: ...
+
+    @overload
+    def allow_in_graph(fn: list[F] | tuple[F, ...]) -> list[F]: ...
 
 
-@overload
-def allow_in_graph(fn: list[F] | tuple[F, ...]) -> list[F]: ...
-
-
-def allow_in_graph(
-    fn: F | list[F] | tuple[F, ...],
-) -> F | list[F]:
+def allow_in_graph(fn):  # type: ignore[no-untyped-def]
     """
     Tells the compiler frontend (Dynamo) to skip symbolic introspection of the function
     and instead directly write it to the graph when encountered.
