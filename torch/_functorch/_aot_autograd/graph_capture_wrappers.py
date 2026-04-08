@@ -77,8 +77,8 @@ from .schemas import (
     FlatSubclassTracingInfo,
     FxValue,
     InputAliasInfo,
-    JointTraceFn,
     JointSubclassTracingInfo,
+    JointTraceFn,
     MutationType,
     OutputType,
     PreppedForAutogradTraceFn,
@@ -1351,7 +1351,7 @@ def aot_dispatch_subclass(
     args: list[FxValue],
     args_descs: list[AOTInput],
     *,
-    is_joint_structure: bool,
+    is_joint_structure: Literal[False],
     meta: ViewAndMutationMeta,
     fw_only: Callable[..., Any] | None,
 ) -> FlatSubclassTracingInfo: ...
@@ -1401,7 +1401,9 @@ def aot_dispatch_subclass(
 
     # TODO: add subclass guards (later PR).
     if fw_only is None:
-        raise AssertionError("fw_only must not be None when subclass dispatch is required")
+        raise AssertionError(
+            "fw_only must not be None when subclass dispatch is required"
+        )
 
     # What's going on here? We need to compute subclass metadata about the outputs of the joint (grad_inputs).
     # Annoying: we don't know the grad input metas until we're in the middle of tracing the joint,
