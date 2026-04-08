@@ -3178,6 +3178,10 @@ For now, dynamo will explicitly graph break when it encounters user code with th
                 ],
             )
 
+        from .tensor import TensorVariable
+
+        assert isinstance(data, TensorVariable)
+
         # this results in cleaner graphs, but only works for inputs
         if data.source:
             return cls._nn_param_via_prefix_insert(tx, data, requires_grad)
