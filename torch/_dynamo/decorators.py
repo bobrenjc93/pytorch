@@ -184,6 +184,14 @@ def assume_constant_result(fn: F) -> F:
     return fn
 
 
+@overload
+def allow_in_graph(fn: F) -> F: ...
+
+
+@overload
+def allow_in_graph(fn: list[F] | tuple[F, ...]) -> list[F]: ...
+
+
 def allow_in_graph(
     fn: F | list[F] | tuple[F, ...],
 ) -> F | list[F]:

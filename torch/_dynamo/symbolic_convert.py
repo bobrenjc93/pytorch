@@ -1440,7 +1440,7 @@ class InstructionTranslatorBase(
     if sys.version_info >= (3, 11):
 
         def update_block_stack(
-            self: "InstructionTranslatorBase", inst: Instruction
+            self: InstructionTranslatorBase, inst: Instruction
         ) -> None:
             # 3.11+ no longer uses a block stack, but we still keep track of one
             # so that we know which contexts are currently active.
@@ -1488,7 +1488,7 @@ class InstructionTranslatorBase(
     else:
 
         def update_block_stack(
-            self: "InstructionTranslatorBase", inst: Instruction
+            self: InstructionTranslatorBase, inst: Instruction
         ) -> None:
             pass
 
@@ -3992,7 +3992,7 @@ class InstructionTranslatorBase(
 
     if sys.version_info >= (3, 11):
 
-        def BINARY_OP(self: "InstructionTranslatorBase", inst: Instruction) -> None:
+        def BINARY_OP(self: InstructionTranslatorBase, inst: Instruction) -> None:
             assert inst.arg is not None
             return _binary_op_lookup[inst.arg](self, inst)
 

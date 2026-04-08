@@ -93,7 +93,12 @@ def extract_graph_and_tracker(
 
 def extract_graph(
     fn: Callable[..., Any], *args: Any, **kwargs: Any
-) -> tuple[Any, list[torch.fx.GraphModule], list[torch.fx.GraphModule], list[torch.fx.GraphModule]]:
+) -> tuple[
+    Any,
+    list[torch.fx.GraphModule],
+    list[torch.fx.GraphModule],
+    list[torch.fx.GraphModule],
+]:
     backend = AotEagerAndRecordGraphs()
     result = torch.compile(backend=backend)(fn)(*args, **kwargs)
     return result, backend.graphs, backend.fw_graphs, backend.bw_graphs

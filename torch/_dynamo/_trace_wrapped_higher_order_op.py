@@ -112,13 +112,15 @@ class ModIndex(torch.autograd.Function):
         ctx.input_shape = x.shape
 
     @staticmethod
-    def backward(ctx: Any, gradOut: Tensor) -> tuple[Tensor, None]:
+    def backward(ctx: Any, *grad_outputs: Any) -> tuple[Tensor, None]:
+        (grad_out,) = grad_outputs
+        assert isinstance(grad_out, Tensor)
         indices = ctx.saved_tensors
         return (
             torch.ops.flex_lib.zeros_and_scatter(
                 ctx.input_shape,
                 indices,
-                gradOut,
+                grad_out,
             ),
             None,
         )

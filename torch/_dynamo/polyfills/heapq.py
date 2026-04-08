@@ -7,13 +7,13 @@ from __future__ import annotations
 import heapq
 import importlib
 import sys
-from collections.abc import Callable, Iterable, Iterator
 from typing import TYPE_CHECKING, TypeVar
 
 from ..decorators import substitute_in_graph
 
 
 if TYPE_CHECKING:
+    from collections.abc import Callable, Iterable, Iterator
     from types import ModuleType
 
 

@@ -2073,7 +2073,7 @@ def add_hop_context(cls: type[HOP_VT_Alias]) -> type[HOP_VT_Alias]:
 
     @functools.wraps(original_call_function)
     def wrapped_call_function(
-        self: VariableTracker, *args: Any, **kwargs: Any
+        self: HOP_VT_Alias, *args: Any, **kwargs: Any
     ) -> VariableTracker:
         try:
             return original_call_function(self, *args, **kwargs)

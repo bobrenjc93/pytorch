@@ -1014,9 +1014,7 @@ class ConstDictVariable(VariableTracker):
         """
         return False
 
-    def var_getattr(
-        self, tx: "InstructionTranslator", name: str
-    ) -> VariableTracker:
+    def var_getattr(self, tx: "InstructionTranslator", name: str) -> VariableTracker:
         if name == "__class__":
             return VariableTracker.build(tx, self.python_type())
         return super().var_getattr(tx, name)

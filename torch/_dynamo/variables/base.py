@@ -1033,9 +1033,7 @@ class VariableTracker(metaclass=VariableTrackerMeta):
             return
 
         @functools.wraps(original_method)
-        def guarded_method(
-            self: "VariableTracker", *args: Any, **kwargs: Any
-        ) -> Any:
+        def guarded_method(self: "VariableTracker", *args: Any, **kwargs: Any) -> Any:
             active = _vt_active_calls.get()
             if active is None:
                 active = set()
