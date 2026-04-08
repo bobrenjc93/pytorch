@@ -197,7 +197,7 @@ class HalidePrinter(PythonPrinter):  # noqa: docstring_linter
         # pyrefly: ignore [missing-attribute]
         return f"hl.atan({self._print(expr.args[0])})"
 
-    def _print_OpaqueUnaryFn_log2(self, expr: Any) -> None:
+    def _print_OpaqueUnaryFn_log2(self, expr: Any) -> Any:
         raise NotImplementedError("log2")
 
     def _print_FloorDiv(self, expr: Any) -> Any:
@@ -521,7 +521,7 @@ class HalideOverrides(OpOverrides):
         return f"hl.log({x})"  # hl.fast_log fails accuracy
 
     @staticmethod
-    def log2(x: Any) -> None:
+    def log2(x: Any) -> Any:
         raise NotImplementedError("log2")
 
     @staticmethod
