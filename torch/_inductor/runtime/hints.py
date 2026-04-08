@@ -1,5 +1,5 @@
-# mypy: allow-untyped-defs
 from __future__ import annotations
+from typing import Any
 
 import collections
 import functools
@@ -45,10 +45,10 @@ if has_triton_package():
         from triton.backends.compiler import AttrsDescriptor
 
         def AttrsDescriptorWrapper(
-            divisible_by_16=None,
-            equal_to_1=None,
-            pointer_range_32=None,
-        ):
+            divisible_by_16: Any=None,
+            equal_to_1: Any=None,
+            pointer_range_32: Any=None,
+        ) -> Any:
             # Prepare the arguments for AttrsDescriptor
             kwargs = {
                 "tt.divisibility": divisible_by_16,
@@ -68,10 +68,10 @@ if has_triton_package():
         from triton.compiler.compiler import AttrsDescriptor
 
         def AttrsDescriptorWrapper(
-            divisible_by_16=None,
-            equal_to_1=None,
-            pointer_range_32=None,
-        ):
+            divisible_by_16: Any=None,
+            equal_to_1: Any=None,
+            pointer_range_32: Any=None,
+        ) -> Any:
             # Prepare the arguments for AttrsDescriptor
             kwargs = {
                 "divisible_by_16": divisible_by_16,
@@ -88,10 +88,10 @@ if has_triton_package():
         # used, but the contents are different.
 
         def AttrsDescriptorWrapper(
-            divisible_by_16=None,
-            equal_to_1=None,
-            pointer_range_32=None,
-        ):
+            divisible_by_16: Any=None,
+            equal_to_1: Any=None,
+            pointer_range_32: Any=None,
+        ) -> Any:
             # pyrefly: ignore [not-iterable]
             # Build attr dict merging divisibility and pointer_range per arg index,
             # since a single arg can carry both attributes.
@@ -152,7 +152,7 @@ class DeviceProperties(typing.NamedTuple):
 
     @classmethod
     @functools.cache
-    def create(cls, device) -> DeviceProperties:
+    def create(cls, device: Any) -> DeviceProperties:
         import torch
         from torch._dynamo.device_interface import get_interface_for_device
 

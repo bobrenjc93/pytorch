@@ -1,7 +1,7 @@
-# mypy: allow-untyped-defs
 """
 NVIDIA Universal GEMM scheduling for PyTorch Inductor.
 """
+from typing import Any
 
 import hashlib
 import logging
@@ -42,7 +42,7 @@ class NVUniversalGemmScheduling(BaseScheduling):
     """
 
     @classmethod
-    def get_backend_features(cls, device) -> OrderedSet[BackendFeature]:
+    def get_backend_features(cls, device: Any) -> OrderedSet[BackendFeature]:
         return OrderedSet()
 
     @staticmethod
@@ -70,7 +70,7 @@ class NVUniversalGemmScheduling(BaseScheduling):
         # NVIDIA Universal GEMM templates don't support horizontal fusion yet
         return False
 
-    def define_kernel(self, src_code: str, node_schedule) -> str:
+    def define_kernel(self, src_code: str, node_schedule: Any) -> str:
         """
         Define a NVIDIA Universal GEMM kernel by writing source code and generating wrapper.
 
@@ -119,7 +119,7 @@ class NVUniversalGemmScheduling(BaseScheduling):
         template_node: BaseSchedulerNode,
         epilogue_nodes: Sequence[BaseSchedulerNode],
         prologue_nodes: Sequence[BaseSchedulerNode],
-    ):
+    ) -> None:
         """
         Codegen a NVIDIA Universal GEMM template. Currently doesn't support fusion.
         """

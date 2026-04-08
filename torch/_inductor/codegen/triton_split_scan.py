@@ -1,4 +1,4 @@
-# mypy: allow-untyped-defs
+from typing import Any
 import functools
 
 import sympy
@@ -36,9 +36,9 @@ class TritonSplitScanKernel(TritonKernel):
     def __init__(
         self,
         tiling: dict[str, sympy.Expr],
-        pid_cache=None,
-        fixed_config=None,
-        **kwargs,
+        pid_cache: Any=None,
+        fixed_config: Any=None,
+        **kwargs: Any,
     ) -> None:
         assert pid_cache is None, "not supported"
         assert fixed_config is None, "not supported"
@@ -54,7 +54,7 @@ class TritonSplitScanKernel(TritonKernel):
     def should_use_cooperative_reduction(self) -> bool:
         return False
 
-    def initialize_range_tree(self, pid_cache):
+    def initialize_range_tree(self, pid_cache: Any) -> None:
         prefixes = ["y", "x", "r0_"]
         assert len(self.numels) <= len(prefixes), (
             "z dimension not supported for split scan"
@@ -81,10 +81,10 @@ class TritonSplitScanKernel(TritonKernel):
                 )
             )
 
-    def reduction(self, dtype, src_dtype, reduction_type, value):
+    def reduction(self, dtype: Any, src_dtype: Any, reduction_type: Any, value: Any) -> None:
         raise NotImplementedError("NYI TritonSplitDimKernel reductions")
 
-    def scan(self, dtypes, combine_fn, values):
+    def scan(self, dtypes: Any, combine_fn: Any, values: Any) -> Any:
         """
         Perform an associative scan on 'values'.
         """
@@ -216,7 +216,7 @@ class TritonSplitScanKernel(TritonKernel):
             ),
         )
 
-    def _get_heuristic(self):
+    def _get_heuristic(self) -> Any:
         return "split_scan"
 
     def _get_grid_type(self) -> type[SplitScanGrid]:

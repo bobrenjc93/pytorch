@@ -1,4 +1,4 @@
-# mypy: allow-untyped-defs
+from typing import Any
 import hashlib
 import logging
 from collections.abc import Sequence
@@ -33,7 +33,7 @@ class CuteDSLScheduling(BaseScheduling):
     """
 
     @classmethod
-    def get_backend_features(cls, device) -> OrderedSet[BackendFeature]:
+    def get_backend_features(cls, device: Any) -> OrderedSet[BackendFeature]:
         return OrderedSet()
 
     @staticmethod
@@ -56,7 +56,7 @@ class CuteDSLScheduling(BaseScheduling):
         """
         return False
 
-    def define_kernel(self, src_code_str: str, node_schedule) -> str:
+    def define_kernel(self, src_code_str: str, node_schedule: Any) -> str:
         """Produce the kernel string
         Args:
             src_code_str: The finalized kernel code string
@@ -108,7 +108,7 @@ class CuteDSLScheduling(BaseScheduling):
         template_node: BaseSchedulerNode,
         epilogue_nodes: Sequence[BaseSchedulerNode],
         prologue_nodes: Sequence[BaseSchedulerNode],
-    ):
+    ) -> None:
         """
         Codegen a CuteDSL template. Currently doesn't support fusion.
         """
