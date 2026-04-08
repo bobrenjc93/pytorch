@@ -5,7 +5,7 @@ import itertools
 import time
 from contextlib import nullcontext
 from functools import wraps
-from typing import Any, Literal, TYPE_CHECKING
+from typing import Any, cast, Literal, TYPE_CHECKING
 from typing_extensions import ParamSpec, TypeVar
 from unittest.mock import patch
 
@@ -893,7 +893,7 @@ def autograd_cache_key(
     graph: torch.fx.GraphModule,
     example_inputs: Sequence[InputType],
     ignore_shape_env: bool,
-    decompositions: dict[OpOverload, Callable[..., Any]] | None,
+    decompositions: dict[Any, Callable[..., Any]] | None,
     compiler_config_extra: CompilerConfigExtra | None,
     keep_inference_input_mutations: bool = False,
     disable_functionalization: bool = False,
@@ -908,7 +908,7 @@ def autograd_cache_key(
     ) = prepare_aot_config(
         graph,
         example_inputs,
-        decompositions,
+        cast("dict[OpOverload, Callable[..., Any]] | None", decompositions),
         keep_inference_input_mutations,
         ignore_shape_env,
         force_non_lazy_backward_lowering=config.force_non_lazy_backward_lowering,

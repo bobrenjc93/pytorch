@@ -75,6 +75,7 @@ from .logging_utils import describe_input, format_guard_bug_msg, track_graph_com
 from .schemas import (
     AOTConfig,
     CompilerWrapper,
+    FlatSubclassTracingInfo,
     FxValue,
     InductorWrapper,
     InputAliasInfo,
@@ -981,7 +982,8 @@ class AOTDispatchSubclassWrapper(CompilerWrapper):
         *,
         fw_metadata: ViewAndMutationMeta,
     ) -> tuple[TraceFn, list[FxValue], list[AOTInput], ViewAndMutationMeta]:
-        (new_flat_fn, new_flat_args, new_flat_args_descs, subclass_meta) = (
+        subclass_tracing_info = typing.cast(
+            FlatSubclassTracingInfo,
             aot_dispatch_subclass(
                 flat_fn,
                 flat_args,
@@ -989,7 +991,10 @@ class AOTDispatchSubclassWrapper(CompilerWrapper):
                 is_joint_structure=self.trace_joint,
                 meta=fw_metadata,
                 fw_only=self.fw_only,  # type: ignore[arg-type]
-            )
+            ),
+        )
+        (new_flat_fn, new_flat_args, new_flat_args_descs, subclass_meta) = (
+            subclass_tracing_info
         )
         self.maybe_subclass_meta = subclass_meta
         return new_flat_fn, new_flat_args, new_flat_args_descs, fw_metadata

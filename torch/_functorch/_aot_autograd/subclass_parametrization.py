@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import dataclasses
 import itertools
-from typing import Any, TYPE_CHECKING
+from typing import Any, cast, TYPE_CHECKING, TypeAlias
 
 import torch
 from torch._library.opaque_object import is_opaque_reference_type
@@ -16,7 +16,7 @@ if TYPE_CHECKING:
     from collections.abc import Iterable
 
 
-TensorOrOpaque = torch.Tensor | OpaqueBase
+TensorOrOpaque: TypeAlias = torch.Tensor | OpaqueBase
 
 
 # This is technically very similar to SubclassCreatingMeta
@@ -35,7 +35,7 @@ class SubclassCreationMeta:
 
 
 class UnwrapTensorSubclass(torch.nn.Module):
-    subclass_meta: SubclassCreationMeta | None
+    subclass_meta: SubclassCreationMeta | None = None
 
     def forward(self, *tensors: TensorOrOpaque) -> torch.Tensor:
         todo: list[TensorOrOpaque] = list(tensors)
@@ -66,9 +66,7 @@ class UnwrapTensorSubclass(torch.nn.Module):
             return rebuilt, offset
 
         out, _ = _unwrap_tensor_subclasses(self.subclass_meta, todo, 0)
-        if not isinstance(out, torch.Tensor):
-            raise AssertionError(f"expected Tensor, got {type(out)}")
-        return out
+        return cast(torch.Tensor, out)
 
     def right_inverse(self, tensor: torch.Tensor) -> list[TensorOrOpaque]:
         if type(tensor) is torch.Tensor:
