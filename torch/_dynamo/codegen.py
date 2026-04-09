@@ -154,8 +154,6 @@ class PyCodegen:
             self.clear_tos()
 
     def _emit_source(self, value: Source) -> None:
-        # Source-based reconstruction is the fast path for values that still
-        # have a live Python object behind them.
         source = self.overridden_sources.get(value, value)
         if self.top_of_stack is value:
             self._output.append(create_dup_top())
@@ -204,17 +202,9 @@ class PyCodegen:
             return False
         if value.is_realized() and isinstance(value, LocalGeneratorObjectVariable):
             return False
-        return isinstance(value.mutation_type, ValueMutationExisting) or (
-            self.value_from_source
-        )
-
-    def _get_graph_output_entry(self, value: VariableTracker) -> GraphOutputEntry:
-        graph_outputs_key = id(value.as_proxy())
-        if graph_outputs_key not in self.graph_outputs:
-            self.graph_outputs[graph_outputs_key] = GraphOutputEntry(
-                len(self.graph_outputs), value
-            )
-        return self.graph_outputs[graph_outputs_key]
+        if isinstance(value.mutation_type, ValueMutationExisting):
+            return True
+        return self.value_from_source
 
     def _emit_graph_output_item(self, value: VariableTracker) -> None:
         graph_output_index = self.add_graph_output(value)
@@ -230,9 +220,7 @@ class PyCodegen:
         self, value: TensorWithTFOverrideVariable
     ) -> None:
         graph_output_index = self.add_graph_output(value)
-        self.add_push_null(
-            lambda: self.load_import_from(utils.__name__, "to_subclass")
-        )
+        self.add_push_null(lambda: self.load_import_from(utils.__name__, "to_subclass"))
         self.load_graph_output(graph_output_index)
         self._output.append(
             self.create_load_global(
@@ -253,8 +241,8 @@ class PyCodegen:
         | NumpyNdarrayVariable
         | TorchScriptObjectVariable,
     ) -> None:
-        graph_output_index = self.add_graph_output(value)
         if isinstance(value, NumpyNdarrayVariable):
+            graph_output_index = self.add_graph_output(value)
             self.add_push_null(
                 lambda: self.load_import_from(utils.__name__, "to_numpy_helper")
             )
@@ -263,6 +251,7 @@ class PyCodegen:
         elif isinstance(value, UnspecializedPythonVariable) and value.need_unwrap:
             self._emit_graph_output_item(value)
         else:
+            graph_output_index = self.add_graph_output(value)
             self.load_graph_output(graph_output_index)
 
     def _emit_nn_module(self, value: NNModuleVariable) -> None:
@@ -426,7 +415,12 @@ class PyCodegen:
         self.top_of_stack = value
 
     def add_graph_output(self, value: VariableTracker) -> int:
-        return self._get_graph_output_entry(value).index
+        graph_outputs_key = id(value.as_proxy())
+        if graph_outputs_key not in self.graph_outputs:
+            self.graph_outputs[graph_outputs_key] = GraphOutputEntry(
+                len(self.graph_outputs), value
+            )
+        return self.graph_outputs[graph_outputs_key].index
 
     def load_graph_output(self, index: int) -> None:
         output = self._output
@@ -659,9 +653,7 @@ class PyCodegen:
             nested_sources.append(source.index)
         return nested_sources
 
-    def _mark_reused_grapharg_sources(
-        self, graphargs: list["GraphArg"]
-    ) -> None:
+    def _mark_reused_grapharg_sources(self, graphargs: list["GraphArg"]) -> None:
         # Sources reused across graph inputs become temp locals so later codegen
         # can load them directly instead of replaying a long source chain.
         seen_sources: OrderedSet[Source] = OrderedSet()
