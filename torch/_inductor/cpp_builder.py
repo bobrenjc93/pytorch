@@ -532,7 +532,6 @@ def _is_msvc_cl(cpp_compiler: str) -> bool:
         return False
 
 
-
 @functools.cache
 def _is_intel_compiler(cpp_compiler: str) -> bool:
     def _check_minimal_version(compiler_version: TorchVersion) -> None:
@@ -573,7 +572,6 @@ def _is_intel_compiler(cpp_compiler: str) -> bool:
     except subprocess.SubprocessError:
         # --version args not support.
         return False
-
 
 
 @functools.cache
@@ -1514,7 +1512,6 @@ def get_caching_allocator_macro() -> list[str]:
 def get_cpp_torch_options(
     cpp_compiler: str,
     vec_isa: VecISA,
-    include_pytorch: bool,
     aot_mode: bool,
     use_relative_path: bool,
     use_mmap_weights: bool,
@@ -1619,7 +1616,6 @@ class CppTorchOptions(CppOptions):
     def __init__(
         self,
         vec_isa: VecISA = invalid_vec_isa,
-        include_pytorch: bool = False,
         warning_all: bool = True,
         aot_mode: bool = False,
         compile_only: bool = False,
@@ -1657,7 +1653,6 @@ class CppTorchOptions(CppOptions):
         ) = get_cpp_torch_options(
             cpp_compiler=self._compiler,
             vec_isa=vec_isa,
-            include_pytorch=include_pytorch,
             aot_mode=aot_mode,
             use_relative_path=use_relative_path,
             use_mmap_weights=use_mmap_weights,
@@ -1831,7 +1826,6 @@ class CppTorchDeviceOptions(CppTorchOptions):
     def __init__(
         self,
         vec_isa: VecISA = invalid_vec_isa,
-        include_pytorch: bool = False,
         device_type: str = "cuda",
         aot_mode: bool = False,
         compile_only: bool = False,
@@ -1847,7 +1841,6 @@ class CppTorchDeviceOptions(CppTorchOptions):
     ) -> None:
         super().__init__(
             vec_isa=vec_isa,
-            include_pytorch=include_pytorch,
             aot_mode=aot_mode,
             compile_only=compile_only,
             use_relative_path=use_relative_path,

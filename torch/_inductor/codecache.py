@@ -3261,7 +3261,6 @@ class CppPythonBindingsCodeCache(CppCodeCache):
 
     cpp_compile_command_flags = {
         # kernels have no dependency on libtorch
-        "include_pytorch": False,
         "shared": True,
     }
     entry_function = "kernel"
@@ -3447,7 +3446,6 @@ class CppWrapperCodeCache(CppPythonBindingsCodeCache):
         CppWrapperCodeCache.cache.clear()
 
     cpp_compile_command_flags = {
-        "include_pytorch": True,
         "shared": True,
     }
     entry_function = "inductor_entry_cpp"
