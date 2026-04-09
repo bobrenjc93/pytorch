@@ -291,7 +291,6 @@ class SideEffects:
         if self.is_reconstructing_generator():
             # This is missing the case where one mutates a tensor. See
             # test_generator.py::test_reconstruct_generator_tensor_mutation
-            self.maybe_log_tracked_side_effects_on_error()
             unimplemented(
                 gb_type="Generator reconstruction with mutations",
                 context=f"mutating object: {item}",
@@ -305,7 +304,6 @@ class SideEffects:
             )
         assert item.mutation_type is not None
         if not is_side_effect_safe(item.mutation_type):
-            self.maybe_log_tracked_side_effects_on_error()
             unimplemented(
                 gb_type="HOP: Unsafe side effect",
                 context=f"Attempted to mutate {item}",
@@ -1044,25 +1042,6 @@ class SideEffects:
                 side_effect_messages
             ),
         )
-
-    def log_tracked_side_effects(self) -> None:
-        if config.side_effect_replay_policy == "silent":
-            return
-
-        self._emit_side_effect_messages(
-            [self._format_side_effect_message(var) for var in self._get_modified_vars()]
-        )
-
-    def maybe_log_tracked_side_effects_on_error(self) -> None:
-        output_graph = self.output_graph_weakref()
-        if output_graph is None:
-            return
-
-        if (
-            output_graph.current_tx.one_graph
-            or output_graph.current_tx.error_on_graph_break
-        ):
-            self.log_tracked_side_effects()
 
     def codegen_update_mutated(
         self, cg: PyCodegen, log_side_effects: bool = False
