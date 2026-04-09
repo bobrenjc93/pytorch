@@ -455,9 +455,6 @@ class LoopBody:
         self.submodules[name] = block
         return name
 
-    def add_callable_submodule(self, fn, prefix):
-        return self.add_submodule(fn, prefix)
-
     def add_indirect(self, size):
         var = sympy_index_symbol_with_prefix(SymT.INDIRECT, len(self.indirect_vars))
         assert var not in self.indirect_var_ranges
@@ -529,7 +526,7 @@ class LoopBody:
             check=check,
             wrap_neg=wrap_neg,
         )
-        return var, self.add_callable_submodule(shim, f"set_{var}")
+        return var, self.add_submodule(shim, f"set_{var}")
 
     def _scan_shim(self, combine_fn):
         def shim(dtypes, values):
@@ -539,7 +536,7 @@ class LoopBody:
 
     def add_scan_submodule(self, combine_fn):
         shim = self._make_cloneable_shim(LoopBody._scan_shim, combine_fn=combine_fn)
-        return self.add_callable_submodule(shim, "scan")
+        return self.add_submodule(shim, "scan")
 
     def _masked_subblock_shim(self, name):
         def shim(mask, other):
