@@ -531,8 +531,6 @@ def _is_msvc_cl(cpp_compiler: str) -> bool:
     except FileNotFoundError:
         return False
 
-    # pyrefly: ignore [unreachable]
-    return False
 
 
 @functools.cache
@@ -576,8 +574,6 @@ def _is_intel_compiler(cpp_compiler: str) -> bool:
         # --version args not support.
         return False
 
-    # pyrefly: ignore [unreachable]
-    return False
 
 
 @functools.cache
@@ -872,7 +868,7 @@ def _get_os_related_cpp_cflags(cpp_compiler: str) -> list[str]:
     return cflags
 
 
-def _get_os_related_cpp_definitions(cpp_compiler: str) -> list[str]:
+def _get_os_related_cpp_definitions() -> list[str]:
     os_definitions: list[str] = []
     if _IS_WINDOWS:
         # On Windows, we need disable min/max macro to avoid C2589 error, as PyTorch CMake:
@@ -1039,7 +1035,7 @@ def get_cpp_options(
         + _get_os_related_cpp_cflags(cpp_compiler)
     )
 
-    definitions += _get_os_related_cpp_definitions(cpp_compiler)
+    definitions += _get_os_related_cpp_definitions()
 
     if not _IS_WINDOWS and config.aot_inductor.enable_lto and _is_clang(cpp_compiler):
         ldflags.append("fuse-ld=lld")
@@ -1213,9 +1209,7 @@ def _get_build_args_of_chosen_isa(vec_isa: VecISA) -> tuple[list[str], list[str]
     return macros, build_flags
 
 
-def _get_torch_related_args(
-    include_pytorch: bool, aot_mode: bool
-) -> tuple[list[str], list[str], list[str]]:
+def _get_torch_related_args(aot_mode: bool) -> tuple[list[str], list[str], list[str]]:
     from torch.utils.cpp_extension import include_paths, TORCH_LIB_PATH
 
     libraries = []
@@ -1559,7 +1553,7 @@ def get_cpp_torch_options(
         torch_include_dirs,
         torch_libraries_dirs,
         torch_libraries,
-    ) = _get_torch_related_args(include_pytorch=include_pytorch, aot_mode=aot_mode)
+    ) = _get_torch_related_args(aot_mode=aot_mode)
 
     python_include_dirs, python_libraries_dirs = _get_python_related_args()
 

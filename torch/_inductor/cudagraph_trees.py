@@ -429,7 +429,7 @@ def cudagraphify_impl(
             log.info("Recording cudagraph tree for symint key %s", int_key)
 
         if not has_warn:
-            has_warn = maybe_warning_due_to_dynamic_shape(fn_cache, int_key)
+            has_warn = maybe_warning_due_to_dynamic_shape(fn_cache)
 
         # first get indices we need to check to align, then update our static inputs,
         # and finally copy

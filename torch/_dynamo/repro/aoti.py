@@ -101,7 +101,6 @@ def dump_to_minify(
                     config_patches=options,
                     save_dir=subdir,
                     command="run",
-                    module_in_comment=True,
                 )
             log.warning("Writing repro file to %s", file_name)
             if use_buck:
@@ -143,7 +142,6 @@ def save_graph_repro_ep(
     command: str = "run",
     accuracy: str | bool | None = None,
     check_str: str | None = None,
-    module_in_comment: bool = False,
     strict: bool = False,
 ) -> None:
     # Save graph for reproducing the error.
@@ -213,7 +211,6 @@ def dump_compiler_graph_state(
             config_patches=config_patches,
             save_dir=subdir,
             accuracy=accuracy,
-            module_in_comment=True,
             strict=strict,
         )
     curdir = os.getcwd()
@@ -383,9 +380,6 @@ def export_for_aoti_minifier(
             if re.search(pattern, str(e)) is not None:
                 return None
         raise AOTIMinifierError(e) from e
-    # we should never reach here
-    # pyrefly: ignore [unreachable]
-    return None
 
 
 def repro_minify(
