@@ -292,8 +292,26 @@ class ImplDetailTest(MockSchedulerTest):
             [p0],
             [p1],
         )
-        self.assertEqual(set(body.submodules), set(copied.submodules))
-        self.assertEqual(set(body.subblocks), set(copied.subblocks))
+        q0 = sympy_index_symbol("q0")
+        q1 = sympy_index_symbol("q1")
+        copied_twice = LoopBody(
+            copied,
+            ([q0], [q1]),
+            {q0: 8, q1: 4},
+            [q0],
+            [q1],
+        )
+
+        for cloned in (copied, copied_twice):
+            self.assertEqual(set(body.submodules), set(cloned.submodules))
+            self.assertEqual(set(body.subblocks), set(cloned.subblocks))
+            self.assertGreater(len(list(cloned.root_block.graph.nodes)), 0)
+            self.assertTrue(
+                all(
+                    name == "get_index" or hasattr(submodule, "clone")
+                    for name, submodule in cloned.submodules.items()
+                )
+            )
 
 
 @inductor_config.patch(

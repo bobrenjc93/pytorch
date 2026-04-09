@@ -456,9 +456,7 @@ class LoopBody:
         return name
 
     def add_callable_submodule(self, fn, prefix):
-        name = self.add_submodule(fn, prefix)
-        self.submodules[name] = fn
-        return name
+        return self.add_submodule(fn, prefix)
 
     def add_indirect(self, size):
         var = sympy_index_symbol_with_prefix(SymT.INDIRECT, len(self.indirect_vars))
@@ -507,7 +505,11 @@ class LoopBody:
 
     def _make_cloneable_shim(self, shim_factory, **kwargs):
         shim = shim_factory(self, **kwargs)
-        shim.clone = functools.partial(shim_factory, **kwargs)  # type: ignore[attr-defined]
+        shim.clone = functools.partial(  # type: ignore[attr-defined]
+            LoopBody._make_cloneable_shim,
+            shim_factory=shim_factory,
+            **kwargs,
+        )
         return shim
 
     def _indirect_index_shim(self, var, size, check, wrap_neg):
