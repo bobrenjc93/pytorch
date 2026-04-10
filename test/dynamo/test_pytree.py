@@ -1,10 +1,34 @@
 # Owner(s): ["module: dynamo"]
-# flake8: noqa: B001,B006,B020,B021,B950,C405,C416,E711,E721,E722,E731,F401,F403,F405,F541,F821,F823
-# ruff: noqa: F403,F405,F841
-try:
-    from .dynamo_test_common import *
-except ImportError:
-    from dynamo_test_common import *
+import collections
+
+import torch
+import torch._inductor.test_case
+import torch.utils._pytree as python_pytree
+from torch._dynamo.testing import CompileCounter
+from torch.testing._internal.common_utils import (
+    instantiate_parametrized_tests,
+    parametrize,
+    subtest,
+)
+
+
+pytree_modules = {
+    "python": python_pytree,
+}
+if python_pytree._cxx_pytree_dynamo_traceable:
+    import torch.utils._cxx_pytree as cxx_pytree
+
+    pytree_modules["cxx"] = cxx_pytree
+    pytree_modules["native_optree"] = cxx_pytree.optree
+else:
+    cxx_pytree = None
+
+parametrize_pytree_module = parametrize(
+    "pytree",
+    [subtest(module, name=name) for name, module in pytree_modules.items()],
+)
+
+MyTuple = collections.namedtuple("MyTuple", ["a", "b", "ab"])
 
 
 class MiscTestsPyTree(torch._inductor.test_case.TestCase):
@@ -121,7 +145,6 @@ class MiscTestsPyTree(torch._inductor.test_case.TestCase):
         from torch.utils.checkpoint import checkpoint
 
         def fn(xs):
-            nested_xs = [[xs]]
             flat_xs, spec = pytree.tree_flatten(xs)
             return flat_xs[0].clone()
 
@@ -326,6 +349,107 @@ class MiscTestsPyTree(torch._inductor.test_case.TestCase):
 
         inp = torch.ones(3)
         self.assertEqual(fn(inp, Foo()), inp + 1)
+
+    def test_pytree_get_node_type_not_traced(self):
+        # Test that torch.utils._pytree._get_node_type is not traced into
+        # and doesn't cause excessive trace time overhead
+        from torch.utils._pytree import _get_node_type
+
+        cnt = CompileCounter()
+
+        @torch.compile(backend=cnt, fullgraph=True)
+        def fn(x, y):
+            node_type = _get_node_type([x, y])
+            assert node_type is list  # noqa: S101
+            data = {"a": x, "b": y}
+            flat, _ = python_pytree.tree_flatten(data)
+            return flat[0] + flat[1]
+
+        x = torch.randn(3, 4)
+        y = torch.randn(3, 4)
+        result = fn(x, y)
+        expected = x + y
+
+        self.assertTrue(torch.allclose(result, expected))
+        self.assertEqual(cnt.frame_count, 1)
+
+    def test_pytree_get_node_type_with_namedtuple(self):
+        # Test that torch.utils._pytree._get_node_type handles namedtuples correctly
+        # without being traced into, even when is_namedtuple_class is True
+        from torch.utils._pytree import _get_node_type
+
+        Point = collections.namedtuple("Point", ["x", "y"])
+        cnt = CompileCounter()
+
+        @torch.compile(backend=cnt, fullgraph=True)
+        def fn(a, b):
+            point = Point(a, b)
+            node_type = _get_node_type(point)
+            assert node_type is collections.namedtuple  # noqa: S101
+            flat, _ = python_pytree.tree_flatten(point)
+            return flat[0] + flat[1]
+
+        x = torch.randn(3, 4)
+        y = torch.randn(3, 4)
+        result = fn(x, y)
+        expected = x + y
+
+        self.assertTrue(torch.allclose(result, expected))
+        self.assertEqual(cnt.frame_count, 1)
+
+    def test_pytree_tree_is_leaf_not_traced(self):
+        # Test that torch.utils._pytree.tree_is_leaf is not traced into
+        # when is_leaf parameter is None (the common case)
+        from torch.utils._pytree import tree_is_leaf
+
+        cnt = CompileCounter()
+
+        @torch.compile(backend=cnt, fullgraph=True)
+        def fn(x, y):
+            is_leaf_tensor = tree_is_leaf(x)
+            assert is_leaf_tensor is True  # noqa: S101
+
+            is_leaf_list = tree_is_leaf([x, y])
+            assert is_leaf_list is False  # noqa: S101
+
+            is_leaf_dict = tree_is_leaf({"a": x, "b": y})
+            assert is_leaf_dict is False  # noqa: S101
+
+            return x + y
+
+        x = torch.randn(3, 4)
+        y = torch.randn(3, 4)
+        result = fn(x, y)
+        expected = x + y
+
+        self.assertTrue(torch.allclose(result, expected))
+        self.assertEqual(cnt.frame_count, 1)
+
+    def test_pytree_tree_is_leaf_with_namedtuple(self):
+        # Test that torch.utils._pytree.tree_is_leaf handles namedtuples correctly
+        from torch.utils._pytree import tree_is_leaf
+
+        Point = collections.namedtuple("Point", ["x", "y"])
+        cnt = CompileCounter()
+
+        @torch.compile(backend=cnt, fullgraph=True)
+        def fn(a, b):
+            point = Point(a, b)
+            is_leaf_namedtuple = tree_is_leaf(point)
+            assert is_leaf_namedtuple is False  # noqa: S101
+
+            is_leaf_tensor = tree_is_leaf(a)
+            assert is_leaf_tensor is True  # noqa: S101
+
+            return a + b
+
+        x = torch.randn(3, 4)
+        y = torch.randn(3, 4)
+        result = fn(x, y)
+        expected = x + y
+
+        self.assertTrue(torch.allclose(result, expected))
+        self.assertEqual(cnt.frame_count, 1)
 
 
 instantiate_parametrized_tests(MiscTestsPyTree)

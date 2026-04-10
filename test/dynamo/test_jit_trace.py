@@ -1,10 +1,6 @@
 # Owner(s): ["module: dynamo"]
-# flake8: noqa: B001,B006,B020,B021,B950,C405,C416,E711,E721,E722,E731,F401,F403,F405,F541,F821,F823
-# ruff: noqa: F403,F405,F841
-try:
-    from .dynamo_test_common import *
-except ImportError:
-    from dynamo_test_common import *
+import torch
+from torch.testing._internal.jit_utils import JitTestCase
 
 
 class TestTracer(JitTestCase):
@@ -34,6 +30,14 @@ class TestTracer(JitTestCase):
         fn()
         opt_fn = torch.compile(fn, backend="eager")
         opt_fn()
+
+    def test_jit_trace_errors(self):
+        @torch.compile(backend="eager", dynamic=True)
+        def f(x):
+            return x + 1
+
+        with self.assertRaises(RuntimeError):
+            torch.jit.trace(f, torch.randn(3))
 
 
 if __name__ == "__main__":
