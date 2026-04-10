@@ -192,7 +192,7 @@ def _detach_and_copy_item_memo(t: torch.Tensor) -> torch.Tensor:
 
 
 @dataclasses.dataclass
-class _GraphCaptureTracingState:
+class _GraphCaptureTracingResult:
     fn_to_trace: Callable[..., Any]
     flat_args: Any
     flat_args_descs: Any
@@ -220,7 +220,7 @@ def _prepare_graph_capture_tracing(
     aot_config: AOTConfig,
     trace_joint: bool,
     joint_fn_handle: Any | None = None,
-) -> _GraphCaptureTracingState:
+) -> _GraphCaptureTracingResult:
     if aot_config.disable_functionalization:
         updated_flat_args, updated_flat_args_descs = flat_args, flat_args_descs
     else:
@@ -259,7 +259,7 @@ def _prepare_graph_capture_tracing(
             )
         )
 
-    return _GraphCaptureTracingState(
+    return _GraphCaptureTracingResult(
         fn_to_trace=fn_to_trace,
         flat_args=updated_flat_args,
         flat_args_descs=updated_flat_args_descs,
@@ -279,15 +279,6 @@ def _create_graph_and_save_traced_inputs(
         _create_graph(fn_to_trace, flat_args, flat_args_descs, aot_config=aot_config),
         saved_flat_args,
     )
-
-
-def _assert_export_graph_support(
-    aot_config: AOTConfig, maybe_subclass_meta: SubclassMeta | None
-) -> None:
-    if aot_config.is_export and maybe_subclass_meta is not None:
-        raise AssertionError(
-            "aot_export_module does not support tensor subclass inputs for now."
-        )
 
 
 def aot_dispatch_base_graph(
@@ -458,7 +449,10 @@ def aot_dispatch_base_graph(
         )
 
     # TODO: should factor this into a separate function for export that always only returns just the graph.
-    _assert_export_graph_support(aot_config, maybe_subclass_meta)
+    if aot_config.is_export and maybe_subclass_meta is not None:
+        raise AssertionError(
+            "aot_export_module does not support tensor subclass inputs for now."
+        )
     return (
         fw_module,
         saved_updated_flat_args_subclasses_desugared,
@@ -579,7 +573,10 @@ def aot_dispatch_autograd_graph(
     # TODO: in AOTAutograd, we create metadata like _indices_of_inps_to_detach to detect
     # when we need to manually detach() some inputs in the forward.
     # Higher order ops might eventually need to do the same.
-    _assert_export_graph_support(aot_config, maybe_subclass_meta)
+    if aot_config.is_export and maybe_subclass_meta is not None:
+        raise AssertionError(
+            "aot_export_module does not support tensor subclass inputs for now."
+        )
     return (
         fx_g,
         saved_updated_joint_inputs,
