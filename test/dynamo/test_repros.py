@@ -57,13 +57,11 @@ from torch._dynamo.testing import (
 from torch._inductor.utils import fresh_cache
 from torch.nn import functional as F
 from torch.nn.attention.flex_attention import (
-    AuxRequest,
     create_block_mask,
     flex_attention,
 )
 from torch.profiler import profile, ProfilerActivity
 from torch.testing._internal.common_cuda import (
-    PLATFORM_SUPPORTS_FLASH_ATTENTION,
     PLATFORM_SUPPORTS_FP8,
     SM70OrLater,
     TEST_CUDA,
@@ -79,7 +77,6 @@ from torch.testing._internal.common_utils import (
     serialTest,
     skipIfHpu,
     skipIfWindows,
-    TEST_WITH_ROCM,
     xfailIfS390X,
 )
 from torch.testing._internal.logging_utils import LoggingTestCase, make_logging_test

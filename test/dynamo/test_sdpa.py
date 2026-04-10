@@ -8,14 +8,9 @@ from torch._dynamo.testing import CompileCounter
 from torch.backends.cuda import SDPAParams
 from torch.nn import functional as F
 from torch.nn.attention import _cur_sdpa_kernel_backends, sdpa_kernel, SDPBackend
-from torch.nn.attention.flex_attention import (
-    AuxRequest,
-    create_block_mask,
-    flex_attention,
-)
-from torch.testing._internal.common_cuda import PLATFORM_SUPPORTS_FLASH_ATTENTION
+from torch.nn.attention.flex_attention import create_block_mask, flex_attention
 from torch.testing._internal.common_device_type import instantiate_device_type_tests
-from torch.testing._internal.common_utils import skipIfHpu, TEST_WITH_ROCM
+from torch.testing._internal.common_utils import skipIfHpu
 
 
 requires_cuda = unittest.skipUnless(torch.cuda.is_available(), "requires cuda")
@@ -294,14 +289,14 @@ class TestSDPADevice(torch._dynamo.test_case.TestCase):
     def test_flash_attn_backward_mixed_strides(self, device):
         def gen_inputs(device):
             return (
-                torch.randn(2, 513, 16, 64, dtype=torch.float16, device=device).transpose(
-                    1, 2
-                ),
+                torch.randn(
+                    2, 513, 16, 64, dtype=torch.float16, device=device
+                ).transpose(1, 2),
                 torch.randn(2, 16, 513, 64, dtype=torch.float16, device=device),
                 torch.randn(2, 16, 513, 64, dtype=torch.float16, device=device),
-                torch.randn(2, 513, 16, 64, dtype=torch.float16, device=device).transpose(
-                    1, 2
-                ),
+                torch.randn(
+                    2, 513, 16, 64, dtype=torch.float16, device=device
+                ).transpose(1, 2),
                 torch.randn(2, 16, 513, 64, dtype=torch.float16, device=device),
                 torch.randn(2, 16, 513, device=device),
                 None,

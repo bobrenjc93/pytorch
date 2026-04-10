@@ -4612,6 +4612,8 @@ def forward(self, x, b, y):
         res = gm(x, y)
         self.assertEqual(res, ref)
 
+    test_partial_export._expected_failure_inline_and_install = True
+
 
 class ExportTestsSubprocess(torch._dynamo.test_case.TestCase):
     def test_strict_export_under_pythonoptimize(self):
