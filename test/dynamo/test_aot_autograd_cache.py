@@ -3251,11 +3251,15 @@ class AOTAutogradCachePicklerTests(torch._dynamo.test_case.TestCase):
 
         config = self.default_config()
         config2 = self.default_config()
-        config2.fw_compiler = lambda gm, inputs: gm
+        config2.aot_id = 1
+        config3 = self.default_config()
+        config3.fw_compiler = lambda gm, inputs: gm
 
         c1 = self.gen_cache_key(fn, config)
         c2 = self.gen_cache_key(fn, config2)
+        c3 = self.gen_cache_key(fn, config3)
         self.assertEqual(c1, c2)
+        self.assertEqual(c1, c3)
 
     def test_to_cacheable_strips_runtime_only_fields(self):
         config = self.default_config()
@@ -3280,10 +3284,6 @@ class AOTAutogradCachePicklerTests(torch._dynamo.test_case.TestCase):
 
         base_config = self.default_config()
         base = self.gen_cache_key(fn, base_config)
-
-        config_with_aot_id = self.default_config()
-        config_with_aot_id.aot_id = 1
-        self.assertNotEqual(base, self.gen_cache_key(fn, config_with_aot_id))
 
         config_with_static_inputs = self.default_config()
         config_with_static_inputs.static_input_indices = [0]

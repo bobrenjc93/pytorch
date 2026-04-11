@@ -667,10 +667,11 @@ class AOTAutogradCachePickler(FxGraphCachePickler):
         """
         cacheable = aot_config.to_cacheable()
         return (
-            CacheableAOTConfig,
+            # Cache entries persist the full CacheableAOTConfig, but cache keys
+            # intentionally ignore the debug-only aot_id so equivalent graphs can hit.
+            _ident,
             (
                 cacheable.num_params_buffers,
-                cacheable.aot_id,
                 cacheable.keep_inference_input_mutations,
                 cacheable.is_export,
                 cacheable.no_tangents,
