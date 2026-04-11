@@ -1,8 +1,9 @@
 # mypy: allow-untyped-defs
 import warnings
 from collections.abc import Callable
-from typing import Any, TYPE_CHECKING, TypeAlias, TypeVar
+from typing import Any, TYPE_CHECKING
 from typing_extensions import ParamSpec
+from typing_extensions import TypeAlias, TypeVar
 
 import torch
 from torch import sym_float, Tensor

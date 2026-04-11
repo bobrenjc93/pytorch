@@ -9,8 +9,9 @@ import collections
 import functools
 from dataclasses import dataclass, field, replace
 from enum import Enum
-from typing import Any, NewType, Protocol, TYPE_CHECKING, TypeVar
+from typing import Any, NewType, Protocol, TYPE_CHECKING
 from typing_extensions import ParamSpec
+from typing_extensions import TypeVar
 
 import torch
 import torch.utils._pytree as pytree

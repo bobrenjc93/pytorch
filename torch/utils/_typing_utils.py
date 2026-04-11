@@ -1,8 +1,9 @@
 """Miscellaneous utilities to aid with typing."""
 
 from collections.abc import Callable
-from typing import Any, cast, Concatenate, TypeVar
+from typing import Any, cast, Concatenate
 from typing_extensions import ParamSpec
+from typing_extensions import TypeVar
 
 
 # Helper to turn Optional[T] into T when we know None either isn't

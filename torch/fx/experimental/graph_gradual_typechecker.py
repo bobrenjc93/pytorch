@@ -3,8 +3,8 @@ import itertools
 import operator
 from collections.abc import Callable
 from functools import reduce
-from typing import TypeVar
 from typing_extensions import ParamSpec
+from typing_extensions import TypeVar
 
 import sympy
 

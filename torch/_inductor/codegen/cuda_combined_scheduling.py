@@ -19,7 +19,7 @@ from .triton import TritonScheduling
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
-    from typing import TypeAlias
+    from typing_extensions import TypeAlias
 
     from sympy import Expr
 

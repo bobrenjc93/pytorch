@@ -15,18 +15,18 @@ from collections.abc import Iterator
 
 # TODO: Use TypeAlias when Python 3.6 is deprecated
 from typing import (
-    _eval_type,  # pyrefly: ignore [missing-module-attribute]
-    _GenericAlias,  # pyrefly: ignore [missing-module-attribute]
-    _tp_cache,  # pyrefly: ignore [missing-module-attribute]
-    _type_check,  # pyrefly: ignore [missing-module-attribute]
+    _eval_type, # pyrefly: ignore [missing-module-attribute]
+    _GenericAlias, # pyrefly: ignore [missing-module-attribute]
+    _tp_cache, # pyrefly: ignore [missing-module-attribute]
+    _type_check, # pyrefly: ignore [missing-module-attribute]
     _type_repr,
     Any,
     ForwardRef,
     Generic,
     get_type_hints,
-    TypeVar,
     Union,
 )
+from typing_extensions import TypeVar
 
 from torch.utils.data.datapipes._hook_iterator import _SnapshotState, hook_iterator
 

@@ -8,8 +8,8 @@ NOTE: Fake implementations:
 # flake8: noqa: B950
 import math
 from collections.abc import Callable
-from typing import TypeVar
 from typing_extensions import ParamSpec
+from typing_extensions import TypeVar
 
 import torch
 from torch.onnx.ops import _dtype_mappings

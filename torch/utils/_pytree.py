@@ -40,10 +40,9 @@ from typing import (
     overload,
     Protocol,
     TYPE_CHECKING,
-    TypeAlias,
-    TypeVar,
 )
 from typing_extensions import deprecated, NamedTuple, Self, TypeIs
+from typing_extensions import TypeAlias, TypeVar
 
 from torch.torch_version import TorchVersion as _TorchVersion
 

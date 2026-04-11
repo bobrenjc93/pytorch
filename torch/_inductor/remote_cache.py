@@ -10,8 +10,9 @@ import os
 import sys
 import typing
 from abc import abstractmethod
-from typing import Any, Generic, TypeAlias, TypeVar, Union
+from typing import Any, Generic, Union
 from typing_extensions import override
+from typing_extensions import TypeAlias, TypeVar
 
 from torch._dynamo.utils import dynamo_timed
 from torch._inductor import config

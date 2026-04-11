@@ -1,6 +1,7 @@
 from collections.abc import Callable
-from typing import Any, TypeVar
+from typing import Any
 from typing_extensions import ParamSpec, TypeVarTuple, Unpack
+from typing_extensions import TypeVar
 
 from torch._prims.context import TorchRefsMode
 from torch.fx import GraphModule

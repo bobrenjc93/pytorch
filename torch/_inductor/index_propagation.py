@@ -24,7 +24,8 @@ SymPy expressions yet, despite sympy.Min and sympy.Max existing.
 import itertools
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any, Literal, overload, TypeAlias
+from typing import Any, Literal, overload
+from typing_extensions import TypeAlias
 
 import sympy
 

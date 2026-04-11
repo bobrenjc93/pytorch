@@ -33,8 +33,9 @@ import math
 import re
 from collections.abc import Callable, Iterable, Sequence
 from contextlib import nullcontext
-from typing import Any, NoReturn, TYPE_CHECKING, TypeVar, Union
+from typing import Any, NoReturn, TYPE_CHECKING, Union
 from typing_extensions import TypeIs
+from typing_extensions import TypeVar
 
 import torch._C
 import torch._refs

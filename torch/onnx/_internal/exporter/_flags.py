@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import functools
-from typing import TYPE_CHECKING, TypeVar
+from typing import TYPE_CHECKING
 from typing_extensions import ParamSpec
+from typing_extensions import TypeVar
 
 
 if TYPE_CHECKING:

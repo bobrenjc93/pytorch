@@ -7,8 +7,9 @@ from collections import defaultdict, OrderedDict
 from collections.abc import Callable, Hashable, Iterable, Sequence
 from copy import deepcopy
 from itertools import chain
-from typing import Any, cast, overload, TypeAlias, TypeVar
+from typing import Any, cast, overload
 from typing_extensions import deprecated, ParamSpec, Self
+from typing_extensions import TypeAlias, TypeVar
 
 import torch
 import torch.utils.hooks as hooks

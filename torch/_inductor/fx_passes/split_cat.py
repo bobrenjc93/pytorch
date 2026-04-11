@@ -5,7 +5,8 @@ import operator
 import os
 from collections import defaultdict
 from collections.abc import Callable, Sequence
-from typing import Any, TypeAlias
+from typing import Any
+from typing_extensions import TypeAlias
 
 import torch
 from torch._dynamo.utils import counters

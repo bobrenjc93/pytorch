@@ -7,7 +7,8 @@ from collections.abc import Callable, Generator, Mapping, Sequence
 from dataclasses import dataclass
 from enum import auto, Enum
 from functools import partial
-from typing import Any, cast, Protocol, TypeAlias
+from typing import Any, cast, Protocol
+from typing_extensions import TypeAlias
 
 import torch
 import torch.distributed as dist

@@ -34,8 +34,9 @@ from pathlib import Path
 from tempfile import _TemporaryFileWrapper
 from time import time, time_ns
 from types import ModuleType
-from typing import Any, cast, Generic, Literal, NoReturn, TYPE_CHECKING, TypeVar
+from typing import Any, cast, Generic, Literal, NoReturn, TYPE_CHECKING
 from typing_extensions import override, Self
+from typing_extensions import TypeVar
 
 import torch
 import torch._library.opaque_object as opaque_object

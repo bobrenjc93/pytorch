@@ -8,8 +8,9 @@ from collections import OrderedDict
 from collections.abc import Callable
 from copy import deepcopy
 from numbers import Number
-from typing import Any, cast, Concatenate, TypeVar, Union
+from typing import Any, cast, Concatenate, Union
 from typing_extensions import ParamSpec
+from typing_extensions import TypeVar
 
 import torch
 import torch._C as _C

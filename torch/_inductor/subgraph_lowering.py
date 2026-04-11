@@ -5,8 +5,9 @@ import operator
 from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Any, TypeVar
+from typing import Any
 from typing_extensions import ParamSpec
+from typing_extensions import TypeVar
 
 import torch
 from torch.utils._ordered_set import OrderedSet

@@ -7,8 +7,8 @@ aten = torch.ops.aten
 import inspect
 import warnings
 from collections.abc import Callable
-from typing import TypeVar
 from typing_extensions import ParamSpec
+from typing_extensions import TypeVar
 
 from torch.types import Number
 

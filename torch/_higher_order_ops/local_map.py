@@ -9,7 +9,8 @@ import contextlib
 import functools
 from collections.abc import Callable, Generator, Sequence
 from contextlib import contextmanager
-from typing import Any, TypeAlias
+from typing import Any
+from typing_extensions import TypeAlias
 
 import torch
 import torch.utils._pytree as pytree

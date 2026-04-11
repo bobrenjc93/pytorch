@@ -1,4 +1,4 @@
-from typing import TypeAlias as _TypeAlias, TypeVar
+from typing_extensions import TypeAlias as _TypeAlias, TypeVar
 
 from torch import Tensor
 

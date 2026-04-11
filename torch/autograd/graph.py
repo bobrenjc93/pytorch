@@ -20,9 +20,9 @@ from typing import (
     NamedTuple,
     Optional,
     TYPE_CHECKING,
-    TypeAlias,
     Union,
 )
+from typing_extensions import TypeAlias
 from weakref import WeakKeyDictionary, WeakValueDictionary
 
 import torch

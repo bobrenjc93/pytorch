@@ -4,8 +4,9 @@ import itertools
 import logging
 import re
 from collections.abc import Callable, Iterable, Sequence
-from typing import Any, TypeVar
+from typing import Any
 from typing_extensions import Self
+from typing_extensions import TypeVar
 from unittest.mock import patch
 
 import sympy

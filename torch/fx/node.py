@@ -6,8 +6,9 @@ import operator
 import types
 import typing
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from typing import Any, Optional, TYPE_CHECKING, TypeAlias, Union
+from typing import Any, Optional, TYPE_CHECKING, Union
 from typing_extensions import ParamSpec, TypeVar
+from typing_extensions import TypeAlias
 
 import torch
 from torch._C import _fx_map_aggregate, _fx_map_arg, _NodeBase

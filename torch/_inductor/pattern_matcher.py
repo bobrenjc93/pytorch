@@ -51,8 +51,9 @@ from abc import ABC, abstractmethod
 from collections import defaultdict
 from collections.abc import Callable, Collection, Generator, Iterable, Mapping, Sequence
 from pathlib import Path
-from typing import Any, NoReturn, Protocol, TypeVar
+from typing import Any, NoReturn, Protocol
 from typing_extensions import Self, TypeIs
+from typing_extensions import TypeVar
 
 import torch
 import torch._guards

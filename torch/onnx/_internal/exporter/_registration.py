@@ -19,7 +19,8 @@ import math
 import operator
 import types
 from collections.abc import Callable
-from typing import Literal, TypeAlias
+from typing import Literal
+from typing_extensions import TypeAlias
 
 import torch
 import torch._ops

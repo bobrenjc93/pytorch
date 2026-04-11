@@ -1,5 +1,5 @@
+from typing_extensions import TypeVar
 # mypy: allow-untyped-defs
-from typing import TypeVar
 
 import torch
 

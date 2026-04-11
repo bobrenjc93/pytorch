@@ -5,6 +5,7 @@ import os
 import types
 import typing
 import typing_extensions
+from typing_extensions import TypeVar
 import zipfile
 from pathlib import Path
 
@@ -15,7 +16,7 @@ from torch.utils._ordered_set import OrderedSet
 
 
 _InputT = typing_extensions.ParamSpec("_InputT")
-_RetT = typing.TypeVar("_RetT")
+_RetT = TypeVar("_RetT")
 
 
 __all__ = []  # type: ignore[var-annotated]

@@ -3,8 +3,8 @@ import math
 from collections.abc import Callable, Sequence
 from enum import Enum
 from functools import wraps
-from typing import TypeVar
 from typing_extensions import ParamSpec
+from typing_extensions import TypeVar
 
 import torch
 import torch._prims_common as utils

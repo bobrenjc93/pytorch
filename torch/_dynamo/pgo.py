@@ -22,8 +22,9 @@ import pickle
 import re
 import zlib
 from collections import defaultdict
-from typing import TYPE_CHECKING, TypeVar
+from typing import TYPE_CHECKING
 from typing_extensions import override, Self
+from typing_extensions import TypeVar
 
 import torch._dynamo.config
 import torch._utils_internal

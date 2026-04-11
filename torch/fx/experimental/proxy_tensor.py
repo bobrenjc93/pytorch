@@ -25,11 +25,10 @@ from typing import (
     overload,
     Protocol,
     TYPE_CHECKING,
-    TypeAlias,
-    TypeVar,
     Union,
 )
 from typing_extensions import ParamSpec, Self, TypeVarTuple, Unpack
+from typing_extensions import TypeAlias, TypeVar
 from weakref import WeakKeyDictionary
 
 import torch

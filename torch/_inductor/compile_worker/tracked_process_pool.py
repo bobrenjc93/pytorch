@@ -8,8 +8,9 @@ from concurrent.futures import Future, ProcessPoolExecutor
 from dataclasses import dataclass
 from multiprocessing.context import BaseContext
 from time import time
-from typing import Any, TypeVar
+from typing import Any
 from typing_extensions import ParamSpec
+from typing_extensions import TypeVar
 
 # _thread_safe_fork is needed because the subprocesses in the pool can read
 # justknobs, e.g., in the Triton compiler. For internal, the import installs

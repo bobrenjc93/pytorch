@@ -17,9 +17,9 @@ from typing import (
     Protocol,
     TYPE_CHECKING,
     TypeGuard,
-    TypeVar,
 )
 from typing_extensions import override, TypedDict, TypeIs, Unpack
+from typing_extensions import TypeVar
 
 import torch
 from torch._C._autograd import CreationMeta

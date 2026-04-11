@@ -14,8 +14,8 @@ import sys
 import threading
 import time
 from collections.abc import Callable
-from typing import TypeVar
 from typing_extensions import ParamSpec
+from typing_extensions import TypeVar
 
 from torch.distributed.elastic.timer.api import TimerClient, TimerRequest
 from torch.distributed.elastic.timer.debug_info_logging import (

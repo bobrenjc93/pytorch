@@ -1,4 +1,4 @@
-from typing import TypeAlias
+from typing_extensions import TypeAlias
 
 import torch
 from torch import Tensor

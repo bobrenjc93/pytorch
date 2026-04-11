@@ -12,8 +12,9 @@ The module offers both context manager and manual acquisition patterns:
 from __future__ import annotations
 
 from contextlib import _GeneratorContextManager, contextmanager, ExitStack
-from typing import TYPE_CHECKING, TypeAlias
+from typing import TYPE_CHECKING
 from typing_extensions import Protocol
+from typing_extensions import TypeAlias
 
 from filelock import BaseFileLock, Timeout
 

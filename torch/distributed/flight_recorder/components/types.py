@@ -8,12 +8,12 @@ import math
 import os
 from enum import auto, Enum
 from typing import (
-    _eval_type,  # pyrefly: ignore [missing-module-attribute]
+    _eval_type, # pyrefly: ignore [missing-module-attribute]
     Any,
     Generic,
     NamedTuple,
-    TypeVar,
 )
+from typing_extensions import TypeVar
 
 from torch.distributed.flight_recorder.components.fr_logger import FlightRecorderLogger
 

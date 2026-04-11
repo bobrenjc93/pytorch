@@ -7,8 +7,9 @@ from collections import defaultdict
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from itertools import count
-from typing import Any, cast, TypeAlias, TypeVar
+from typing import Any, cast
 from typing_extensions import TypeIs
+from typing_extensions import TypeAlias, TypeVar
 
 import torch
 from torch._ops import OpOverload

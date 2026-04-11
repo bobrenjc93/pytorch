@@ -15,8 +15,9 @@ from io import BufferedReader, BufferedWriter
 from os import PathLike
 from pathlib import Path
 from threading import Lock
-from typing import Generic, TypeVar
+from typing import Generic
 from typing_extensions import override
+from typing_extensions import TypeVar
 
 from filelock import BaseFileLock, FileLock
 

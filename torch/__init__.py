@@ -30,13 +30,13 @@ from typing import (
     overload as _overload,
     TYPE_CHECKING,
     TypeGuard as _TypeGuard,
-    TypeVar as _TypeVar,
 )
 from typing_extensions import (
     deprecated as _deprecated,
     ParamSpec as _ParamSpec,
     TypeIs as _TypeIs,
 )
+from typing_extensions import TypeVar as _TypeVar
 
 
 # As a bunch of torch.packages internally still have this check

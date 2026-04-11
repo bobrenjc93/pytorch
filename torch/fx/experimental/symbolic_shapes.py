@@ -43,11 +43,10 @@ from typing import (
     NamedTuple,
     NoReturn,
     TYPE_CHECKING,
-    TypeAlias,
     TypeGuard,
-    TypeVar,
 )
 from typing_extensions import deprecated, ParamSpec
+from typing_extensions import TypeAlias, TypeVar
 
 import torch
 import torch.fx

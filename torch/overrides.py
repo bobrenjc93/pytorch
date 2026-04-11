@@ -30,8 +30,9 @@ import types
 import warnings
 from collections.abc import Callable, Iterable
 from functools import wraps
-from typing import Any, cast, TypeVar
+from typing import Any, cast
 from typing_extensions import ParamSpec
+from typing_extensions import TypeVar
 
 import torch
 from torch._C import (
