@@ -24,7 +24,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable, Sequence
 from copy import copy
 from dataclasses import dataclass
-from typing import Any, Generic, TYPE_CHECKING, TypeVar
+from typing import Any, cast, Generic, TYPE_CHECKING, TypeVar
 
 import torch
 from torch._dynamo.precompile_context import BackendCacheArtifact
@@ -49,14 +49,14 @@ from .runtime_wrappers import (
     SerializableCompiledFunction,
     SubclassMeta,
 )
-from .schemas import AOTAutogradCacheInfo  # noqa: F401
+from .schemas import AOTAutogradCacheInfo, AOTConfig  # noqa: F401
 from .utils import simple_wraps
 
 
 if TYPE_CHECKING:
     from torch._inductor.compile_fx import _CompileFxKwargs
 
-    from .schemas import AOTConfig, ViewAndMutationMeta
+    from .schemas import CacheableAOTConfig, ViewAndMutationMeta
 
 log = logging.getLogger(__name__)
 aot_graphs_log = getArtifactLogger(__name__, "aot_graphs")
@@ -382,7 +382,7 @@ class GenericAOTAutogradResult(Generic[TForward, TBackward]):
     backward_time_taken_ns: int
 
     # Used by standalone_compile
-    sanitized_aot_config: AOTConfig
+    sanitized_aot_config: CacheableAOTConfig
 
     guards_expr: str | None
 
@@ -717,7 +717,7 @@ def deserialize_bundled_cache_entry(
     with torch._guards.tracing(context):
         compiled_fn = entry.wrap_post_compile(
             [],
-            entry.sanitized_aot_config,
+            cast(AOTConfig, entry.sanitized_aot_config),
             {
                 "cudagraphs": cudagraphs,
                 "boxed_forward_device_index": boxed_forward_device_index,
