@@ -466,6 +466,7 @@ class ViewAndMutationMeta:
     # Instead, we keep any necessary subclass metadata necessary about each traced_tangent.
     # This list is generated after calling make_runtime_safe().
     traced_tangent_metas: list[Any] | None = None
+    _is_runtime_safe: bool = field(init=False, default=False, repr=False)
 
     num_symints_saved_for_bw: int | None = None
 
@@ -538,6 +539,7 @@ class ViewAndMutationMeta:
     tangent_source_stack_traces: list[str | None] | None = None
 
     def __post_init__(self) -> None:
+        self._is_runtime_safe = False
         # pre-compute the indices of the inputs that are mutated.
         # When keep_input_mutations is set, we don't need to worry about our epilogue
         # handling data-only mutations, because we keep them directly in the graph.
@@ -680,6 +682,22 @@ class ViewAndMutationMeta:
         # this information.
         self.num_forward = self.num_forward_returns + self.num_outputs_rng_offset
 
+    def _get_traced_tangents(self) -> list[Any]:
+        traced_tangents = object.__getattribute__(self, "__dict__").get(
+            "traced_tangents"
+        )
+        if traced_tangents is None:
+            raise AssertionError("traced_tangents must be initialized before access")
+        if self._is_runtime_safe and len(traced_tangents) == 0:
+            raise AssertionError(
+                "traced_tangents should not be accessed after "
+                "make_runtime_safe(); use traced_tangent_metas at runtime"
+            )
+        return traced_tangents
+
+    def _set_traced_tangents(self, traced_tangents: list[Any]) -> None:
+        object.__getattribute__(self, "__dict__")["traced_tangents"] = traced_tangents
+
     def make_runtime_safe(self) -> None:
         """
         There are various fields in ViewAndMutationMeta that aren't serializable. This function is called after all tracing
@@ -690,6 +708,8 @@ class ViewAndMutationMeta:
         # TODO: This function is only a best effort: there are other fields that may not be cache safe
         # (i.e., there's no guarantee that tensor_flatten() returns a serializable result), or that
         # SubclassCreationMeta is cache safe.
+        if self._is_runtime_safe:
+            raise AssertionError("make_runtime_safe called twice")
         if self.traced_tangent_metas is not None:
             raise AssertionError(
                 "traced_tangent_metas should be None before calling make_runtime_safe"
@@ -728,6 +748,7 @@ class ViewAndMutationMeta:
                 vm.has_symbolic_inputs for vm in out_info.view_meta_sequence.sequence
             ):
                 self.output_info[i] = replace(out_info, view_meta_sequence=None)
+        self._is_runtime_safe = True
 
     @property
     def tensors_saved_for_backwards_slice(self) -> slice:
@@ -830,6 +851,12 @@ class ViewAndMutationMeta:
             )
             and self.num_backward_tokens == other.num_backward_tokens
         )
+
+
+ViewAndMutationMeta.traced_tangents = property(  # type: ignore[assignment]
+    ViewAndMutationMeta._get_traced_tangents,
+    ViewAndMutationMeta._set_traced_tangents,
+)
 
 
 @dataclass(eq=False)

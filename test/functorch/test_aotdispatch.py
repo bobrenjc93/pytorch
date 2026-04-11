@@ -6937,6 +6937,48 @@ def forward(self, primals_1, tangents_1):
         finally:
             handle.destroy()
 
+    def test_view_and_mutation_meta_traced_tangents_after_make_runtime_safe(self):
+        from torch._functorch._aot_autograd.schemas import (
+            OutputAliasInfo,
+            OutputType,
+            ViewAndMutationMeta,
+        )
+
+        meta = ViewAndMutationMeta(
+            input_info=[],
+            output_info=[
+                OutputAliasInfo(
+                    output_type=OutputType.non_alias,
+                    raw_type=torch.Tensor,
+                    base_idx=None,
+                    dynamic_dims=None,
+                    requires_grad=True,
+                    requires_grad_for_backward=True,
+                )
+            ],
+            num_intermediate_bases=0,
+            keep_input_mutations=False,
+            traced_tangents=[torch.randn(2)],
+            subclass_inp_meta=[],
+            subclass_fw_graph_out_meta=[],
+            subclass_tangent_meta=[],
+            traced_tangents_descs=[],
+        )
+
+        meta.make_runtime_safe()
+
+        self.assertTrue(meta._is_runtime_safe)
+        self.assertEqual(meta.traced_tangent_metas, [None])
+        with self.assertRaisesRegex(
+            AssertionError,
+            "traced_tangents should not be accessed after make_runtime_safe",
+        ):
+            meta.traced_tangents
+        with self.assertRaisesRegex(
+            AssertionError, "make_runtime_safe called twice"
+        ):
+            meta.make_runtime_safe()
+
     def test_collect_metadata_subclass_fw_outs_follow_input_mutation_type(self):
         from torch._functorch._aot_autograd.collect_metadata_analysis import (
             run_functionalized_fw_and_collect_metadata,
