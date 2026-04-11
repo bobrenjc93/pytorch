@@ -57,9 +57,10 @@ from typing import (
     Literal,
     NoReturn,
     overload,
+    TypeAlias,
     TypeGuard,
 )
-from typing_extensions import ParamSpec, TypeAlias, TypeIs, TypeVar
+from typing_extensions import ParamSpec, TypeIs, TypeVar
 
 import torch
 import torch._functorch.config

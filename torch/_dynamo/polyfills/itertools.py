@@ -7,8 +7,8 @@ from __future__ import annotations
 import itertools
 import operator
 from collections.abc import Callable
-from typing import overload, TYPE_CHECKING
-from typing_extensions import TypeAlias, TypeVar, TypeVarTuple, Unpack
+from typing import overload, TYPE_CHECKING, TypeAlias
+from typing_extensions import TypeVar, TypeVarTuple, Unpack
 
 from ..decorators import substitute_in_graph
 
@@ -144,6 +144,7 @@ def takewhile(predicate: _Predicate[_T], iterable: Iterable[_T], /) -> Iterator[
         yield x
 
 
+@overload
 def starmap(
     function: Callable[[Unpack[_Ts]], _U],
     iterable: Iterable[tuple[Unpack[_Ts]]],

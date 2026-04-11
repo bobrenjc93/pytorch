@@ -74,8 +74,7 @@ if TYPE_CHECKING:
     from . import AutogradFunctionContextVariable
 
 from collections.abc import Generator, Iterable
-from typing import ParamSpec
-from typing_extensions import TypeVar
+from typing_extensions import ParamSpec, TypeVar
 
 
 P = ParamSpec("P")

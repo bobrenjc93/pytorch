@@ -3,7 +3,6 @@ Python polyfills for builtins
 """
 
 from collections.abc import Iterable, MutableMapping
-
 from typing_extensions import TypeVar
 
 from ..decorators import substitute_in_graph

@@ -19,8 +19,8 @@ import heapq
 import logging
 import time
 from collections.abc import Callable
-from typing import Any, TYPE_CHECKING
-from typing_extensions import Self, TypeAlias
+from typing import Any, TYPE_CHECKING, TypeAlias
+from typing_extensions import Self
 
 
 if TYPE_CHECKING:
