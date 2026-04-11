@@ -8,9 +8,14 @@ from torch._dynamo.testing import CompileCounter
 from torch.backends.cuda import SDPAParams
 from torch.nn import functional as F
 from torch.nn.attention import _cur_sdpa_kernel_backends, sdpa_kernel, SDPBackend
-from torch.nn.attention.flex_attention import create_block_mask, flex_attention
+from torch.nn.attention.flex_attention import (
+    AuxRequest,
+    create_block_mask,
+    flex_attention,
+)
+from torch.testing._internal.common_cuda import PLATFORM_SUPPORTS_FLASH_ATTENTION
 from torch.testing._internal.common_device_type import instantiate_device_type_tests
-from torch.testing._internal.common_utils import skipIfHpu
+from torch.testing._internal.common_utils import skipIfHpu, TEST_WITH_ROCM
 
 
 requires_cuda = unittest.skipUnless(torch.cuda.is_available(), "requires cuda")
