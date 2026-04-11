@@ -14,8 +14,8 @@ from typing import (
     NamedTuple,
     Optional,
     overload,
-    TypeAlias,
     TYPE_CHECKING,
+    TypeAlias,
     TypeGuard,
     Union,
 )

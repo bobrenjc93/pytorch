@@ -1,7 +1,7 @@
-from typing import TypeAlias
 import functools
 import logging
 from collections.abc import Callable, Sequence
+from typing import TypeAlias
 
 import torch
 from torch.fx import Node

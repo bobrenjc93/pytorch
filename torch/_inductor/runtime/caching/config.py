@@ -1,7 +1,7 @@
-from typing_extensions import TypeVar
 import os
 from collections.abc import Callable
 from functools import cache, partial
+from typing_extensions import TypeVar
 
 import torch
 from torch._environment import is_fbcode

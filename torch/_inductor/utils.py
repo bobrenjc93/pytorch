@@ -44,8 +44,8 @@ from typing import (
     Literal,
     NamedTuple,
     Protocol,
-    TypeAlias,
     TYPE_CHECKING,
+    TypeAlias,
     TypeGuard,
 )
 from typing_extensions import dataclass_transform, ParamSpec, Self, TypeVar

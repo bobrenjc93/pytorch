@@ -19,8 +19,8 @@ from typing import (
     Literal,
     NamedTuple,
     Optional,
-    TypeAlias,
     TYPE_CHECKING,
+    TypeAlias,
     Union,
 )
 from weakref import WeakKeyDictionary, WeakValueDictionary

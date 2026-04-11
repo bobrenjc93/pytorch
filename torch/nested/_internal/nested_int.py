@@ -1,4 +1,4 @@
-from typing import * # noqa: F403
+from typing import *  # noqa: F403
 
 import torch
 from torch.fx.experimental._constant_symnode import ConstantIntNode

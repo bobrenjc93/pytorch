@@ -38,9 +38,7 @@ KeepDims = TypeVar("KeepDims")
 #
 OutArray = TypeVar("OutArray")
 
-NotImplementedType = TypeVar(
-    "NotImplementedType", bound=types.NotImplementedType
-)
+NotImplementedType = TypeVar("NotImplementedType", bound=types.NotImplementedType)
 
 
 def normalize_array_like(x, parm=None):  # codespell:ignore

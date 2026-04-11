@@ -2,7 +2,7 @@
 import functools
 import math
 import operator
-from typing import * # noqa: F403
+from typing import *  # noqa: F403
 
 import torch
 import torch.nn.functional as F

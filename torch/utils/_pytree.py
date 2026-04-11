@@ -39,8 +39,8 @@ from typing import (
     NoReturn,
     overload,
     Protocol,
-    TypeAlias,
     TYPE_CHECKING,
+    TypeAlias,
 )
 from typing_extensions import deprecated, NamedTuple, Self, TypeIs, TypeVar
 

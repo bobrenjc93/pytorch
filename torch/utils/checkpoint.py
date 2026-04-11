@@ -8,7 +8,7 @@ import uuid
 import warnings
 import weakref
 from collections import defaultdict
-from typing import * # noqa: F403
+from typing import *  # noqa: F403
 from typing_extensions import Self
 import enum
 from weakref import ReferenceType

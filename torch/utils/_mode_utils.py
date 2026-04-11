@@ -1,8 +1,7 @@
-from typing_extensions import TypeVar
 # mypy: allow-untyped-defs
+from typing_extensions import TypeVar
 
 import torch
-
 
 T = TypeVar("T")
 

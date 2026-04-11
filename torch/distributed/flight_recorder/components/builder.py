@@ -9,7 +9,7 @@ import ast
 import copy
 import os
 import sys
-from typing import Any # type: ignore[attr-defined]
+from typing import Any  # type: ignore[attr-defined]
 
 from torch.distributed.flight_recorder.components.fr_logger import FlightRecorderLogger
 from torch.distributed.flight_recorder.components.types import (

@@ -35,8 +35,8 @@ from typing_extensions import (
     deprecated as _deprecated,
     ParamSpec as _ParamSpec,
     TypeIs as _TypeIs,
+    TypeVar as _TypeVar,
 )
-from typing_extensions import TypeVar as _TypeVar
 
 
 # As a bunch of torch.packages internally still have this check

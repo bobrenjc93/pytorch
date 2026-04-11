@@ -1,5 +1,5 @@
 # mypy: allow-untyped-defs
-from typing import * # noqa: F403
+from typing import *  # noqa: F403
 
 import torch
 from torch._C import DispatchKey, DispatchKeySet

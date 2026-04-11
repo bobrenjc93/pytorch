@@ -42,8 +42,8 @@ from typing import (
     Generic,
     NamedTuple,
     NoReturn,
-    TypeAlias,
     TYPE_CHECKING,
+    TypeAlias,
     TypeGuard,
 )
 from typing_extensions import deprecated, ParamSpec, TypeVar

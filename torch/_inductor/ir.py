@@ -21,11 +21,19 @@ from typing import (
     overload,
     SupportsFloat,
     SupportsInt,
-    TypeAlias,
     TYPE_CHECKING,
+    TypeAlias,
     Union,
 )
-from typing_extensions import assert_never, Never, override, ParamSpec, Self, TypeIs, TypeVar
+from typing_extensions import (
+    assert_never,
+    Never,
+    override,
+    ParamSpec,
+    Self,
+    TypeIs,
+    TypeVar,
+)
 from unittest.mock import patch
 
 import sympy

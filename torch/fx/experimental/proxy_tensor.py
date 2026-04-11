@@ -19,15 +19,7 @@ from collections import defaultdict, OrderedDict
 from collections.abc import Callable, Generator, Mapping, Sequence
 from contextlib import _GeneratorContextManager, contextmanager, ExitStack, nullcontext
 from dataclasses import dataclass
-from typing import (
-    Any,
-    Concatenate,
-    overload,
-    Protocol,
-    TypeAlias,
-    TYPE_CHECKING,
-    Union,
-)
+from typing import Any, Concatenate, overload, Protocol, TYPE_CHECKING, TypeAlias, Union
 from typing_extensions import ParamSpec, Self, TypeVar, TypeVarTuple, Unpack
 from weakref import WeakKeyDictionary
 

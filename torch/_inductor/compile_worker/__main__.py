@@ -1,4 +1,3 @@
-from typing_extensions import TypeVar
 # mypy: allow-untyped-defs
 import argparse
 import base64
@@ -7,6 +6,7 @@ import importlib
 import logging
 import os
 import sys
+from typing_extensions import TypeVar
 
 from torch._inductor.async_compile import pre_fork_setup
 from torch._inductor.codecache import torch_key
