@@ -2301,9 +2301,17 @@ def aot_stage2_autograd(
         aot_config,
     )
 
+    backward_state_indices = [
+        idx for idx, x in enumerate(aot_state.flat_args) if isinstance(x, BackwardState)
+    ]
+    if len(backward_state_indices) > 1:
+        raise AssertionError(
+            f"expected at most 1 backward_state_index, got {len(backward_state_indices)}"
+        )
+
     try_save_cache_entry, entry = _cache_autograd_info(
         aot_config,
-        aot_state.flat_args,
+        backward_state_indices,
         compiled_fw_func,
         compiled_bw_func,
         fw_module_str,
@@ -2329,6 +2337,7 @@ def aot_stage2_autograd(
         lazy_backward_info,
         try_save_cache_entry,  # type: ignore[arg-type]
         entry,  # type: ignore[arg-type]
+        backward_state_indices,
         _indices_of_inps_to_detach,
         num_symints_saved_for_bw,
     )
@@ -2345,17 +2354,10 @@ def _aot_stage2c_make_autograd_function(
     lazy_backward_info: AutogradLazyBackwardCompileInfo | None,
     try_save_cache_entry: Callable[..., Any],
     entry: GenericAOTAutogradResult[Any, Any] | None,
+    backward_state_indices: list[int],
     _indices_of_inps_to_detach: list[int],
     num_symints_saved_for_bw: int,
 ) -> DispatchReturn:
-    backward_state_indices = [
-        idx for idx, x in enumerate(flat_args) if isinstance(x, BackwardState)
-    ]
-    if len(backward_state_indices) > 1:
-        raise AssertionError(
-            f"expected at most 1 backward_state_index, got {len(backward_state_indices)}"
-        )
-
     disable_amp = torch._C._is_any_autocast_enabled()
     compile_spec = AOTDispatchAutogradCompileSpec(
         compiled_fw_func=compiled_fw_func,
@@ -2394,7 +2396,7 @@ def _aot_stage2c_make_autograd_function(
 
 def _cache_autograd_info(
     aot_config: AOTConfig,
-    flat_args: list[Any],
+    backward_state_indices: list[int],
     compiled_fw_func: Callable[..., Any],
     compiled_bw_func: Callable[..., Any] | None,
     fw_module_str: str | None,
@@ -2411,14 +2413,6 @@ def _cache_autograd_info(
     GenericAOTAutogradResult[Any, Any] | None,
     Callable[..., Any],
 ]:
-    backward_state_indices = [
-        idx for idx, x in enumerate(flat_args) if isinstance(x, BackwardState)
-    ]
-    if len(backward_state_indices) > 1:
-        raise AssertionError(
-            f"expected at most 1 backward_state_index, got {len(backward_state_indices)}"
-        )
-
     make_runtime_safe(fw_metadata, maybe_subclass_meta)
 
     try_save_cache_entry: Callable[..., Any] | None = None
