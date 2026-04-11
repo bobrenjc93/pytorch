@@ -26,7 +26,9 @@ import dataclasses
 import logging
 import os
 from functools import partial
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
+
+from typing_extensions import TypeAlias
 
 import torch
 from torch._dynamo.utils import counters, get_runtime_metrics_context
@@ -41,12 +43,12 @@ from torch._inductor.cudagraph_utils import (
 )
 from torch._inductor.freezing_utils import has_frozen_params, is_frozen_param
 from torch._inductor.utils import (
-    _unstable_customized_partition_wrapper,
-    align_inputs_from_check_idxs,
     BoxedBool,
     CUDAGraphWrapperMetadata,
     GraphPartitionMap,
     InputType,
+    _unstable_customized_partition_wrapper,
+    align_inputs_from_check_idxs,
     output_node,
     set_tracing_context_output_strides,
 )
@@ -57,7 +59,6 @@ from torch.utils._python_dispatch import is_in_torch_dispatch_mode
 
 from . import config
 from .runtime.autotune_cache import AutotuneCacheBundler
-
 
 if TYPE_CHECKING:
     from collections import Counter

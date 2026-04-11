@@ -59,7 +59,9 @@ from __future__ import annotations
 
 from contextlib import AbstractContextManager, contextmanager
 from threading import local
-from typing import Any, cast, Generic, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Generic, cast
+
+from typing_extensions import TypeVar
 
 from torch.utils._ordered_set import OrderedSet
 
@@ -72,7 +74,6 @@ from .ops_handler import (  # noqa: F401
     StoreMode,
     WrapperHandler,
 )
-
 
 if TYPE_CHECKING:
     from collections.abc import Callable

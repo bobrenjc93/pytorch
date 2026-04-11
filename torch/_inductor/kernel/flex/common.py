@@ -5,15 +5,15 @@ import math
 from collections.abc import Sequence
 from functools import partial
 from pathlib import Path
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import sympy
+from typing_extensions import TypeAlias
 
 import torch
 from torch._inductor.virtualized import V
 from torch.utils._ordered_set import OrderedSet
 from torch.utils._pytree import tree_map, tree_map_only
-
 
 if TYPE_CHECKING:
     from torch._inductor.codegen.cuda_combined_scheduling import _IntLike
@@ -26,7 +26,6 @@ from ...ir import (
     ExternKernel,
     FixedLayout,
     FlexibleLayout,
-    get_fill_order,
     InputBuffer,
     IRNode,
     MutationLayoutSHOULDREMOVE,
@@ -34,6 +33,7 @@ from ...ir import (
     StorageBox,
     Subgraph,
     TensorBox,
+    get_fill_order,
 )
 from ...lowering import (
     _full,
@@ -44,7 +44,6 @@ from ...lowering import (
 )
 from ...select_algorithm import realize_inputs
 from ...utils import load_template
-
 
 SubgraphResults: TypeAlias = list[ComputedBuffer | None] | ComputedBuffer | None
 
