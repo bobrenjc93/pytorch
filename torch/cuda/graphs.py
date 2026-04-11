@@ -4,9 +4,8 @@ from __future__ import annotations
 import gc
 import typing
 from collections.abc import Callable
-from typing import overload, TYPE_CHECKING, Union
+from typing import overload, TYPE_CHECKING, TypeAlias, Union
 from typing_extensions import ParamSpec, Self, TypeVar
-from typing_extensions import TypeAlias
 
 import torch
 from torch import Tensor

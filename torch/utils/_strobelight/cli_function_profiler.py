@@ -9,8 +9,7 @@ import time
 from collections.abc import Callable, Sequence
 from threading import Lock
 from typing import Any
-from typing_extensions import ParamSpec
-from typing_extensions import TypeVar
+from typing_extensions import ParamSpec, TypeVar
 
 
 logger = logging.getLogger("strobelight_function_profiler")

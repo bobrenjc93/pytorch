@@ -1,6 +1,5 @@
 import operator
-from typing import Any, TYPE_CHECKING
-from typing_extensions import TypeAlias
+from typing import Any, TYPE_CHECKING, TypeAlias
 
 import torch.fx
 import torch.fx.traceback

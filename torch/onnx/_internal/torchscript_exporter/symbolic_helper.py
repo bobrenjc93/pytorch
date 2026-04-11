@@ -109,8 +109,7 @@ from typing import (
     Literal,
     NoReturn,
 )
-from typing_extensions import ParamSpec as _ParamSpec, TypeIs as _TypeIs
-from typing_extensions import TypeVar as _TypeVar
+from typing_extensions import ParamSpec as _ParamSpec, TypeIs as _TypeIs, TypeVar as _TypeVar
 
 import torch
 import torch._C._onnx as _C_onnx

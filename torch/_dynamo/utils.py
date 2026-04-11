@@ -57,10 +57,10 @@ from typing import (
     Literal,
     NoReturn,
     overload,
+    TypeAlias,
     TypeGuard,
 )
-from typing_extensions import ParamSpec, TypeIs
-from typing_extensions import TypeAlias, TypeVar
+from typing_extensions import ParamSpec, TypeIs, TypeVar
 
 import torch
 import torch._functorch.config
@@ -1211,7 +1211,7 @@ if sys.version_info >= (3, 12):
         typing.ParamSpec,
         typing.TypeVar,
         typing.TypeVarTuple,
-        TypeAliasType,
+        typing.TypeAliasType,
     )
 
 

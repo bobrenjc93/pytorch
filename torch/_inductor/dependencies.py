@@ -5,8 +5,7 @@ import logging
 import re
 from collections.abc import Callable, Iterable, Sequence
 from typing import Any
-from typing_extensions import Self
-from typing_extensions import TypeVar
+from typing_extensions import Self, TypeVar
 from unittest.mock import patch
 
 import sympy

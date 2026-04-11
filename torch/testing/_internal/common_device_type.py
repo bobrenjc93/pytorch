@@ -13,8 +13,7 @@ from collections.abc import Callable, Iterable, Sequence
 from enum import Enum
 from functools import partial, wraps
 from typing import Any, ClassVar
-from typing_extensions import ParamSpec
-from typing_extensions import TypeVar
+from typing_extensions import ParamSpec, TypeVar
 
 import torch
 from torch._inductor.utils import GPU_TYPES

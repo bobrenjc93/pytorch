@@ -1,4 +1,5 @@
-from typing_extensions import TypeAlias, TypeVar
+from typing import TypeAlias
+from typing_extensions import TypeVar
 # mypy: allow-untyped-defs
 # Copyright (c) Meta Platforms, Inc. and affiliates
 import functools

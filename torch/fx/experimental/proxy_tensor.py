@@ -24,11 +24,11 @@ from typing import (
     Concatenate,
     overload,
     Protocol,
+    TypeAlias,
     TYPE_CHECKING,
     Union,
 )
-from typing_extensions import ParamSpec, Self, TypeVarTuple, Unpack
-from typing_extensions import TypeAlias, TypeVar
+from typing_extensions import ParamSpec, Self, TypeVar, TypeVarTuple, Unpack
 from weakref import WeakKeyDictionary
 
 import torch

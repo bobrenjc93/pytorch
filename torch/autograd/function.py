@@ -6,8 +6,7 @@ import warnings
 from collections import OrderedDict
 from collections.abc import Callable
 from typing import Any, Concatenate
-from typing_extensions import deprecated, ParamSpec
-from typing_extensions import TypeVar
+from typing_extensions import deprecated, ParamSpec, TypeVar
 
 import torch
 import torch._C as _C

@@ -7,8 +7,7 @@ from .module_tracker import ModuleTracker
 from typing import Any
 from collections.abc import Callable
 from collections.abc import Iterator
-from typing_extensions import ParamSpec
-from typing_extensions import TypeVar
+from typing_extensions import ParamSpec, TypeVar
 from collections import defaultdict
 from torch.utils._python_dispatch import TorchDispatchMode
 from math import prod

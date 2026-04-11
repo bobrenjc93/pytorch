@@ -24,8 +24,7 @@ import functools
 import warnings
 from collections.abc import Callable
 from typing import Any, TYPE_CHECKING
-from typing_extensions import deprecated, ParamSpec
-from typing_extensions import TypeVar
+from typing_extensions import deprecated, ParamSpec, TypeVar
 
 import torch
 import torch.utils._pytree as pytree

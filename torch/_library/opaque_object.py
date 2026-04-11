@@ -39,9 +39,8 @@ import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Literal, NewType, TYPE_CHECKING
+from typing import Any, Literal, NewType, TYPE_CHECKING, TypeAlias
 from typing_extensions import TypeIs
-from typing_extensions import TypeAlias
 from weakref import WeakKeyDictionary
 
 import torch

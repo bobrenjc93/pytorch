@@ -3,8 +3,7 @@
 # flake8: noqa: F821
 from collections.abc import Callable, Collection, Mapping, MutableMapping
 from typing import cast
-from typing_extensions import TypeIs
-from typing_extensions import TypeVar
+from typing_extensions import TypeIs, TypeVar
 
 import torch
 from torch.distributed._shard.sharded_tensor.api import ShardedTensor

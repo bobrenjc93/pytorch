@@ -2,8 +2,7 @@
 import inspect
 from collections.abc import Callable
 from typing import Any
-from typing_extensions import TypeVarTuple, Unpack
-from typing_extensions import TypeVar
+from typing_extensions import TypeVar, TypeVarTuple, Unpack
 
 from .dispatcher import Dispatcher, MethodDispatcher
 

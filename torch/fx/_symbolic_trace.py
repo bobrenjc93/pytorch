@@ -12,8 +12,7 @@ import warnings
 from collections.abc import Callable
 from itertools import chain
 from types import CodeType, FunctionType, ModuleType
-from typing import Any, get_args, NamedTuple
-from typing_extensions import TypeAlias
+from typing import Any, get_args, NamedTuple, TypeAlias
 
 import torch
 import torch.utils._pytree as pytree

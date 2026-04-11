@@ -26,8 +26,7 @@ import dataclasses
 import logging
 import os
 from functools import partial
-from typing import Any, TYPE_CHECKING
-from typing_extensions import TypeAlias
+from typing import Any, TYPE_CHECKING, TypeAlias
 
 import torch
 from torch._dynamo.utils import counters, get_runtime_metrics_context

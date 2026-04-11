@@ -7,8 +7,7 @@ import operator
 import sys
 from functools import reduce
 from typing import Any, cast as typing_cast, TYPE_CHECKING
-from typing_extensions import ParamSpec
-from typing_extensions import TypeVar
+from typing_extensions import ParamSpec, TypeVar
 
 import torch
 import torch._custom_op

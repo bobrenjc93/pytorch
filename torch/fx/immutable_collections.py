@@ -1,7 +1,6 @@
 from collections.abc import Iterable
 from typing import Any, NoReturn
-from typing_extensions import Self
-from typing_extensions import TypeVar
+from typing_extensions import Self, TypeVar
 
 from torch.utils._pytree import (
     _dict_flatten,

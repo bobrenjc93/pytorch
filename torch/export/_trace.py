@@ -11,8 +11,7 @@ import warnings
 from collections.abc import Callable
 from contextlib import contextmanager, ExitStack, nullcontext
 from itertools import chain
-from typing import Any, TYPE_CHECKING
-from typing_extensions import TypeAlias
+from typing import Any, TYPE_CHECKING, TypeAlias
 from unittest import mock
 
 

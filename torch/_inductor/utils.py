@@ -44,11 +44,11 @@ from typing import (
     Literal,
     NamedTuple,
     Protocol,
+    TypeAlias,
     TYPE_CHECKING,
     TypeGuard,
 )
-from typing_extensions import dataclass_transform, ParamSpec, Self
-from typing_extensions import TypeAlias, TypeVar
+from typing_extensions import dataclass_transform, ParamSpec, Self, TypeVar
 from unittest import mock
 
 import sympy

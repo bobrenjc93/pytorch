@@ -1,8 +1,7 @@
 import warnings
 from collections.abc import Callable, Iterable
 from typing import Any, NamedTuple
-from typing_extensions import Self
-from typing_extensions import TypeVar
+from typing_extensions import Self, TypeVar
 
 import torch
 from torch import _VF, Tensor

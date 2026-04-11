@@ -3,8 +3,7 @@ import contextlib
 import io
 from collections.abc import Callable
 from typing import Any
-from typing_extensions import ParamSpec
-from typing_extensions import TypeVar
+from typing_extensions import ParamSpec, TypeVar
 
 import torch
 from torch._higher_order_ops.invoke_subgraph import NestedCompileRegionOptions

@@ -14,9 +14,8 @@ import typing
 import warnings
 from collections.abc import Callable
 from enum import Enum
-from typing import Any, cast, Literal, NamedTuple, overload
-from typing_extensions import deprecated, Never, NotRequired, Self, TypedDict
-from typing_extensions import TypeAlias, TypeVar
+from typing import Any, cast, Literal, NamedTuple, overload, TypeAlias
+from typing_extensions import deprecated, Never, NotRequired, Self, TypedDict, TypeVar
 
 import torch
 from torch import Tensor

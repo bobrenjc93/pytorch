@@ -1,8 +1,7 @@
 from collections import OrderedDict
 from collections.abc import Iterator, Sequence
 from typing import cast, TYPE_CHECKING
-from typing_extensions import TypeIs
-from typing_extensions import TypeVar
+from typing_extensions import TypeIs, TypeVar
 
 import torch
 from torch._utils import _get_device_index

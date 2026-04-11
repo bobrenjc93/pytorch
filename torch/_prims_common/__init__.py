@@ -14,12 +14,12 @@ from typing import (
     NamedTuple,
     Optional,
     overload,
+    TypeAlias,
     TYPE_CHECKING,
     TypeGuard,
     Union,
 )
-from typing_extensions import deprecated
-from typing_extensions import TypeAlias, TypeVar
+from typing_extensions import deprecated, TypeVar
 
 import torch
 from torch import sym_float, sym_int, sym_max, sym_min

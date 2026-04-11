@@ -42,11 +42,11 @@ from typing import (
     Generic,
     NamedTuple,
     NoReturn,
+    TypeAlias,
     TYPE_CHECKING,
     TypeGuard,
 )
-from typing_extensions import deprecated, ParamSpec
-from typing_extensions import TypeAlias, TypeVar
+from typing_extensions import deprecated, ParamSpec, TypeVar
 
 import torch
 import torch.fx

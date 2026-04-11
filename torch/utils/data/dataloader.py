@@ -19,8 +19,7 @@ import threading
 import warnings
 from collections.abc import Callable
 from typing import Any, Generic, NoReturn, TYPE_CHECKING
-from typing_extensions import Self
-from typing_extensions import TypeVar
+from typing_extensions import Self, TypeVar
 
 import torch
 import torch.distributed as dist

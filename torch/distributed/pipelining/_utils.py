@@ -7,8 +7,7 @@ import logging
 import warnings
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import cast, Literal, overload, Protocol, TYPE_CHECKING
-from typing_extensions import TypeAlias
+from typing import cast, Literal, overload, Protocol, TYPE_CHECKING, TypeAlias
 
 import torch
 from torch import fx

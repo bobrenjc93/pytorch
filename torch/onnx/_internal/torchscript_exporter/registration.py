@@ -4,8 +4,7 @@
 import warnings
 from collections.abc import Callable, Collection, Sequence
 from typing import Generic
-from typing_extensions import ParamSpec
-from typing_extensions import TypeVar
+from typing_extensions import ParamSpec, TypeVar
 
 from torch.onnx import _constants, errors
 

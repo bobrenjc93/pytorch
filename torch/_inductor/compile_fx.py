@@ -20,8 +20,7 @@ from inspect import currentframe
 from itertools import count
 from operator import attrgetter
 from typing import Any, TYPE_CHECKING
-from typing_extensions import Never, override, ParamSpec, Protocol, TypedDict, Unpack
-from typing_extensions import TypeVar
+from typing_extensions import Never, override, ParamSpec, Protocol, TypedDict, TypeVar, Unpack
 from unittest import mock
 
 import torch._inductor.async_compile

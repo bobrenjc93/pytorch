@@ -1,4 +1,4 @@
-from typing_extensions import TypeAlias
+from typing import TypeAlias
 import functools
 import logging
 from collections.abc import Callable, Sequence

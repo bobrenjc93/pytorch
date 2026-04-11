@@ -8,8 +8,7 @@ import weakref
 from collections import namedtuple, OrderedDict
 from collections.abc import Callable, Iterator, Mapping
 from typing import Any, Optional, overload, Union
-from typing_extensions import Self
-from typing_extensions import TypeVar
+from typing_extensions import Self, TypeVar
 
 import torch
 from torch import device, dtype, Tensor

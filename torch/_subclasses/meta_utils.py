@@ -18,8 +18,7 @@ from typing import (
     TYPE_CHECKING,
     TypeGuard,
 )
-from typing_extensions import override, TypedDict, TypeIs, Unpack
-from typing_extensions import TypeVar
+from typing_extensions import override, TypedDict, TypeIs, TypeVar, Unpack
 
 import torch
 from torch._C._autograd import CreationMeta

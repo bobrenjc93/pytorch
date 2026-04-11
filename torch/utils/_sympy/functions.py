@@ -5,8 +5,7 @@ import operator
 import sys
 from collections.abc import Callable
 from typing import SupportsFloat, TYPE_CHECKING
-from typing_extensions import TypeVarTuple, Unpack
-from typing_extensions import TypeVar
+from typing_extensions import TypeVar, TypeVarTuple, Unpack
 
 import sympy
 from sympy import S

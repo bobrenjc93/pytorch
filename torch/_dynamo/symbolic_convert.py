@@ -45,9 +45,8 @@ import traceback
 import types
 import weakref
 from collections import deque
-from typing import Any, cast, NoReturn, TYPE_CHECKING
-from typing_extensions import TypeIs
-from typing_extensions import TypeAlias, TypeVar
+from typing import Any, cast, NoReturn, TYPE_CHECKING, TypeAlias
+from typing_extensions import TypeIs, TypeVar
 
 import torch
 import torch._logging

@@ -7,8 +7,7 @@ import sys
 import weakref
 from collections.abc import Callable, Sequence
 from typing import Any, overload, TYPE_CHECKING, Union
-from typing_extensions import deprecated, ParamSpec
-from typing_extensions import TypeVar
+from typing_extensions import deprecated, ParamSpec, TypeVar
 
 import torch
 import torch._library as _library

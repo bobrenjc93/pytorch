@@ -1,8 +1,7 @@
 import functools
 from collections.abc import Callable
 from typing import Concatenate
-from typing_extensions import ParamSpec
-from typing_extensions import TypeVar
+from typing_extensions import ParamSpec, TypeVar
 
 
 _P = ParamSpec("_P")
