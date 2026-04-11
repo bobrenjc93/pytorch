@@ -246,7 +246,10 @@ class GenericCompiledBackward(InductorOutput[TOut]):
     num_symints_saved_for_bw_: int
 
     def post_compile(self, result: TOut, fx_config: _CompileFxKwargs) -> TOut:
-        compiled_bw = super().post_compile(result, fx_config)
+        # The concrete post_compile comes from the loadable mixin in each subclass MRO.
+        compiled_bw = super().post_compile(  # pyrefly: ignore[missing-attribute]
+            result, fx_config
+        )
         # See note [Wrapping bw_compiler in disable]
         # This is done by _wrapped_bw_compiler in torch/_dynamo/backends/common.py
         # But since on cache hit we do not call the bw_compiler, we need to reapply the disable
