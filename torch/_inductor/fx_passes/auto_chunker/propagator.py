@@ -4,7 +4,8 @@ import math
 from collections.abc import Callable, Sequence
 from enum import Enum
 from queue import Queue
-from typing import Any, TypeAlias
+from typing import Any
+from typing_extensions import TypeAlias
 
 import torch
 from torch.fx import Graph, Node

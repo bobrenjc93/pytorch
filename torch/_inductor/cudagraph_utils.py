@@ -5,6 +5,7 @@ import dataclasses
 from collections.abc import Callable
 from enum import Enum
 from typing import Any, TYPE_CHECKING
+from typing_extensions import TypeAlias
 
 import torch
 from torch._dynamo.utils import counters, get_metrics_context
@@ -13,7 +14,6 @@ from torch._subclasses.fake_tensor import get_plain_tensors, is_fake
 from torch.utils._ordered_set import OrderedSet
 
 from .utils import is_using_cudagraph_partition
-
 
 if TYPE_CHECKING:
     from collections.abc import Sequence, Set as AbstractSet
@@ -25,8 +25,8 @@ static_inputs_log = torch._logging.getArtifactLogger(
 )
 
 
-OutputType = list[int | torch.Tensor | None]
-ModelType = Callable[[list[InputType]], OutputType]
+OutputType: TypeAlias = list[int | torch.Tensor | None]
+ModelType: TypeAlias = Callable[[list[InputType]], OutputType]
 
 
 @dataclasses.dataclass(frozen=True, slots=True)

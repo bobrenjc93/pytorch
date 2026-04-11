@@ -59,7 +59,7 @@ from __future__ import annotations
 
 from contextlib import AbstractContextManager, contextmanager
 from threading import local
-from typing import Any, cast, Generic, TYPE_CHECKING, TypeVar
+from typing import Any, cast, Generic, TYPE_CHECKING
 
 from torch.utils._ordered_set import OrderedSet
 

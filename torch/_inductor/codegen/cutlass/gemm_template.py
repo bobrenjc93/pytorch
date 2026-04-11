@@ -7,6 +7,7 @@ import re
 import time
 from abc import ABC, abstractmethod
 from typing import Any
+from typing_extensions import TypeAlias
 
 import torch
 import torch.utils._pytree as pytree
@@ -44,9 +45,8 @@ from .utils import (
     XW_DTYPES,
 )
 
-
-GemmOperation = Any
-EVTArgRenames = Any
+GemmOperation: TypeAlias = Any
+EVTArgRenames: TypeAlias = Any
 
 log = logging.getLogger(__name__)
 

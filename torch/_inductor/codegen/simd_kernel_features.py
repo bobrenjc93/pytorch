@@ -6,6 +6,7 @@ import functools
 import itertools
 import typing
 from typing import Any
+from typing_extensions import TypeAlias
 
 import sympy
 
@@ -19,7 +20,6 @@ from ..runtime.hints import ReductionHint
 from ..scheduler import SchedulerNode
 from ..utils import cache_on_self
 from ..virtualized import V
-
 
 if typing.TYPE_CHECKING:
     from collections.abc import Iterable, Sequence
@@ -39,7 +39,7 @@ class NodeScheduleMarker:
         return False
 
 
-NodeScheduleEntry = SchedulerNode | type[NodeScheduleMarker]
+NodeScheduleEntry: TypeAlias = SchedulerNode | type[NodeScheduleMarker]
 
 
 class DisableReduction(NodeScheduleMarker):

@@ -1,8 +1,13 @@
 # mypy: allow-untyped-defs
 import functools
 from collections.abc import Callable, Sequence
-from typing import Any, Optional, Protocol, TYPE_CHECKING, TypeVar
-
+from typing import (
+    Any,
+    Optional,
+    Protocol,
+    TYPE_CHECKING,
+)
+from typing_extensions import TypeAlias, TypeVar
 import sympy
 
 import torch
@@ -35,7 +40,7 @@ class DTypeVar(Protocol):
     def dtype(self) -> torch.dtype: ...
 
 
-DTypeArg = DTypeVar | torch.types.Number | str | OpsValue
+DTypeArg: TypeAlias = DTypeVar | torch.types.Number | str | OpsValue
 
 
 # Inputs need to be cacheable (e.g., not a CSEVar) in order for the cache to be effective

@@ -17,6 +17,7 @@ import traceback
 from collections.abc import Callable, Iterator, Sequence
 from typing import Any, IO
 from unittest.mock import patch
+from typing_extensions import TypeAlias
 
 import torch
 from functorch.compile import draw_graph, get_aot_graph_name, get_graph_being_compiled
@@ -45,7 +46,6 @@ from .scheduler import (
 )
 from .virtualized import V
 
-
 log = logging.getLogger(__name__)
 
 # Graph execution tracking for debugging
@@ -55,7 +55,7 @@ GRAPH_COMPILE_IDS: dict[int, str | None] | None = None
 
 ir_pre_fusion_log = getArtifactLogger(__name__, "ir_pre_fusion")
 ir_post_fusion_log = getArtifactLogger(__name__, "ir_post_fusion")
-SchedulerNodeList = list[Any]
+SchedulerNodeList: TypeAlias = list[Any]
 BufMeta = collections.namedtuple("BufMeta", ["name", "n_origin"])
 GRAPHVIZ_COMMAND_SCALABLE = ["dot", "-Gnslimit=2", "-Gnslimit1=2", "-Gmaxiter=5000"]
 

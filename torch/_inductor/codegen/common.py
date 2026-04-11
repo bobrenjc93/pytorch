@@ -16,7 +16,7 @@ from abc import ABC, abstractmethod
 from enum import auto, Enum
 from itertools import chain
 from typing import Any, cast, ClassVar, Generic, NamedTuple, TYPE_CHECKING
-from typing_extensions import Self, TypeVar
+from typing_extensions import Self, TypeAlias, TypeVar
 
 import sympy
 
@@ -309,7 +309,7 @@ class DeviceCodegen:
     fx_wrapper_codegen: WrapperConstructor | None = None
 
 
-KernelArgType = WorkspaceArg | TensorArg | SizeArg | TMADescriptorArg | ConstexprArg
+KernelArgType: TypeAlias = WorkspaceArg | TensorArg | SizeArg | TMADescriptorArg | ConstexprArg
 
 device_codegens: dict[str, DeviceCodegen] = {}
 

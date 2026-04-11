@@ -5,6 +5,7 @@ import itertools
 from dataclasses import dataclass
 from typing import Any, TYPE_CHECKING
 from unittest.mock import patch
+from typing_extensions import TypeAlias
 
 import sympy
 
@@ -21,13 +22,12 @@ from ..common import KernelTemplate
 from .kernel import CUTLASSTemplateCaller, CUTLASSTemplateKernel
 from .utils import DTYPE_TO_CUTLASS_TYPE
 
-
 if TYPE_CHECKING:
     from ...scheduler import BaseSchedulerNode  # noqa: TC004
 else:
     BaseSchedulerNode = Any
 
-GemmOperation = Any
+GemmOperation: TypeAlias = Any
 
 autotuning_log = getArtifactLogger(__name__, "autotuning")
 

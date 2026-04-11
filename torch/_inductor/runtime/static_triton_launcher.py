@@ -2,11 +2,14 @@ import functools
 import os
 from functools import cached_property
 from typing import Any
-from typing_extensions import Unpack
+from typing_extensions import TypeVarTuple, Unpack
 
 from ..utils import is_rocm
 from .triton_compat import ASTSource, CompiledKernel, knobs as triton_knobs
 from .triton_helpers import get_constexprs
+
+
+_Args = TypeVarTuple("_Args")
 
 
 class StaticallyLaunchedTritonKernel:
@@ -235,7 +238,7 @@ class StaticallyLaunchedTritonKernel:
         grid_y: int,
         grid_z: int,
         stream: int,
-        *args: Unpack[tuple[object, ...]],
+        *args: Unpack[_Args],
     ) -> None:
         """Actually run the kernel at runtime. This function is the hot codepath."""
 
@@ -248,6 +251,7 @@ class StaticallyLaunchedTritonKernel:
         # Get rid of constants before passing to cubin launcher
 
         arg_tys = self.arg_tys
+        kernel_args: tuple[object, ...] = args
 
         if is_rocm():
             # ROCm/HIP kernel ABI: The Triton HIP backend ALWAYS includes both
@@ -276,15 +280,15 @@ class StaticallyLaunchedTritonKernel:
             # Not passing both parameters causes segmentation faults because the kernel
             # expects them at specific positions in the argument array.
             arg_tys = arg_tys + "OO"
-            args = (*args, None, None)
+            kernel_args = (*kernel_args, None, None)
 
         else:
             for has_scratch in [self.has_global_scratch, self.has_profile_scratch]:
                 if has_scratch:
                     arg_tys = arg_tys + "O"
-                    args = (*args, None)
+                    kernel_args = (*kernel_args, None)
         # pyrefly: ignore [bad-argument-type]
-        assert len(args) == len(arg_tys)
+        assert len(kernel_args) == len(arg_tys)
 
         # TODO: can handle grid functions here or in C++, so
         # that we don't need the grid handler above.
@@ -296,7 +300,7 @@ class StaticallyLaunchedTritonKernel:
             self.num_warps,
             self.shared,
             arg_tys,
-            args,
+            kernel_args,
             stream,
         )
 

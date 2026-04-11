@@ -19,8 +19,13 @@ import sys
 import threading
 import time
 from collections import namedtuple
-from typing import Any, Generic, Literal, TYPE_CHECKING, TypeVar
-
+from typing import (
+    Any,
+    Generic,
+    Literal,
+    TYPE_CHECKING,
+)
+from typing_extensions import TypeAlias, TypeVar
 import torch
 from torch._dynamo.utils import counters, set_feature_use
 from torch._inductor import metrics
@@ -116,7 +121,7 @@ if TYPE_CHECKING:
 
     LauncherType = Any
 
-_KernelType = (
+_KernelType: TypeAlias = (
     CompiledKernel | StaticallyLaunchedCudaKernel | StaticallyLaunchedXpuKernel
 )
 _T = TypeVar("_T", bound=_KernelType)

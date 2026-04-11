@@ -24,8 +24,8 @@ SymPy expressions yet, despite sympy.Min and sympy.Max existing.
 import itertools
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any, Literal, overload, TypeAlias
-
+from typing import Any, Literal, overload
+from typing_extensions import TypeAlias
 import sympy
 
 import torch
@@ -39,7 +39,7 @@ from .utils import generate_assert
 from .virtualized import V
 
 
-_ExprType = sympy.Expr | float | int | bool
+_ExprType: TypeAlias = sympy.Expr | float | int | bool
 
 
 def _is_constant(val: _ExprType):

@@ -5,8 +5,9 @@ import math
 import os
 from collections.abc import Callable
 from functools import lru_cache
-from typing import Any, cast, TypeVar
+from typing import Any, cast
 from unittest.mock import patch
+from typing_extensions import TypeVar
 
 import torch
 import torch.utils

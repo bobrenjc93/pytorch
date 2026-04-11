@@ -22,11 +22,18 @@ from typing import (
     SupportsFloat,
     SupportsInt,
     TYPE_CHECKING,
-    TypeAlias,
-    TypeVar,
     Union,
 )
-from typing_extensions import assert_never, Never, override, ParamSpec, Self, TypeIs
+from typing_extensions import (
+    assert_never,
+    Never,
+    override,
+    ParamSpec,
+    Self,
+    TypeIs,
+    TypeAlias,
+    TypeVar,
+)
 from unittest.mock import patch
 
 import sympy
@@ -5519,7 +5526,7 @@ class TritonTemplateBuffer(TemplateBuffer):
         return out
 
 
-PrimitiveInfoType = int | float | bool | str | list[int | str | float | bool]
+PrimitiveInfoType: TypeAlias = int | float | bool | str | list[int | str | float | bool]
 
 
 class ChoiceCaller:

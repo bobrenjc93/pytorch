@@ -6,6 +6,7 @@ import textwrap
 from collections import Counter
 from collections.abc import Callable, Iterable, Sequence
 from typing import Any
+from typing_extensions import TypeAlias
 
 import sympy
 
@@ -78,7 +79,6 @@ from .wrapper import (
     WrapperLine,
 )
 
-
 aten = torch.ops.aten
 log = logging.getLogger(__name__)
 
@@ -100,7 +100,7 @@ class SymbolBuffer(CodegenSymbol):
         return sym_int
 
 
-CodegenBuffer = BufferLike | SymbolBuffer
+CodegenBuffer: TypeAlias = BufferLike | SymbolBuffer
 
 
 @dataclasses.dataclass

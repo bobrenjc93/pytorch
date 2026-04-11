@@ -46,7 +46,7 @@ from ...select_algorithm import realize_inputs
 from ...utils import load_template
 
 
-SubgraphResults = list[ComputedBuffer | None] | ComputedBuffer | None
+SubgraphResults: TypeAlias = list[ComputedBuffer | None] | ComputedBuffer | None
 
 
 def zeros_and_scatter_lowering(shape: list[int], indices, values):

@@ -45,11 +45,15 @@ from typing import (
     NamedTuple,
     Protocol,
     TYPE_CHECKING,
-    TypeAlias,
     TypeGuard,
+)
+from typing_extensions import (
+    dataclass_transform,
+    ParamSpec,
+    Self,
+    TypeAlias,
     TypeVar,
 )
-from typing_extensions import dataclass_transform, ParamSpec, Self
 from unittest import mock
 
 import sympy
@@ -137,8 +141,8 @@ log = logging.getLogger(__name__)
 
 
 _T = TypeVar("_T")
-VarRanges = dict[sympy.Expr, sympy.Expr]
-InputType = torch.Tensor | int | torch.SymInt | None
+VarRanges: TypeAlias = dict[sympy.Expr, sympy.Expr]
+InputType: TypeAlias = torch.Tensor | int | torch.SymInt | None
 
 XPU_KERNEL_FORMAT = (
     "spv" if _IS_WINDOWS else os.getenv("TORCHINDUCTOR_XPU_KERNEL_FORMAT", "zebin")
@@ -701,7 +705,7 @@ def tuple_sorted(x: tuple[_T, ...]) -> list[_T]:
 
 P = ParamSpec("P")
 RV = TypeVar("RV", covariant=True)
-FN_TYPE = Callable[Concatenate[Any, P], RV]
+FN_TYPE: TypeAlias = Callable[Concatenate[Any, P], RV]
 
 
 class CachedMethod(Protocol, Generic[P, RV]):
@@ -4328,8 +4332,8 @@ class CUDAGraphWrapperMetadata:
     partition_index: int
 
 
-PartitionFnType = Callable[..., Any]
-CUDAGraphWrapperType = Callable[
+PartitionFnType: TypeAlias = Callable[..., Any]
+CUDAGraphWrapperType: TypeAlias = Callable[
     [PartitionFnType, CUDAGraphWrapperMetadata], PartitionFnType
 ]
 
