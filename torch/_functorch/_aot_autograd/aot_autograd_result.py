@@ -551,6 +551,7 @@ class GenericAOTAutogradResult(Generic[TForward, TBackward]):
                 try_save_cache_entry=None,
             )
             compiled_function = AOTDispatchAutograd.post_compile(compile_spec)
+
         else:
             compiled_function = RuntimeWrapper(
                 indices_of_inps_to_detach=self.indices_of_inps_to_detach,
@@ -613,6 +614,8 @@ class GenericAOTAutogradResult(Generic[TForward, TBackward]):
         compiled_function = self._apply_runtime_wrappers(
             compiled_fw_func, compiled_bw_func, needs_autograd, aot_config
         )
+        # Now that we're pretty sure it's a successful load, add guards
+        # to the existing shape environment from the cache.
         self._install_guards(args)
         return compiled_function
 
