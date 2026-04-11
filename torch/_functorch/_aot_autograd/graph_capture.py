@@ -435,6 +435,7 @@ def aot_dispatch_autograd_graph(
     # traced_tangents corresponds to the set of outputs in the traced forward that should get grad_outputs in the traced backward.
     # It includes outputs of the original forward, *and* any updated inputs due to input mutations.
     # However, it does *not* include any outputs that are aliases of inputs or intermediates, or any metadata-only input mutations.
+    fw_metadata.assert_traced_tangents_available()
     joint_inputs = (flat_args, fw_metadata.traced_tangents)
     joint_inputs_descs = (flat_args_descs, fw_metadata.traced_tangents_descs)
 

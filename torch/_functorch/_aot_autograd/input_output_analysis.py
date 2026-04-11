@@ -45,6 +45,7 @@ def remove_dupe_metadata(
     keep_arg_mask: list[bool],
     add_dupe_map: list[int],
 ) -> ViewAndMutationMeta:
+    m.assert_traced_tangents_available()
     if len(m.input_info) != len(keep_arg_mask):
         raise AssertionError(
             f"len(m.input_info)={len(m.input_info)} != len(keep_arg_mask)={len(keep_arg_mask)}"
@@ -131,6 +132,7 @@ def create_synthetic_base_metadata(
     inner_args: list[Any],
     inner_args_desc: list[AOTInput],
 ) -> tuple[ViewAndMutationMeta, list[int]]:
+    m.assert_traced_tangents_available()
     # maps inner arg indices to outer arg indices
     synthetic_base_to_indices: dict[int, list[int]] = {}
     for inner_idx in range(len(inner_args)):

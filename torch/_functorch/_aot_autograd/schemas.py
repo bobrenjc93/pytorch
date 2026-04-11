@@ -539,7 +539,6 @@ class ViewAndMutationMeta:
     tangent_source_stack_traces: list[str | None] | None = None
 
     def __post_init__(self) -> None:
-        self._is_runtime_safe = False
         # pre-compute the indices of the inputs that are mutated.
         # When keep_input_mutations is set, we don't need to worry about our epilogue
         # handling data-only mutations, because we keep them directly in the graph.
@@ -682,21 +681,12 @@ class ViewAndMutationMeta:
         # this information.
         self.num_forward = self.num_forward_returns + self.num_outputs_rng_offset
 
-    def _get_traced_tangents(self) -> list[Any]:
-        traced_tangents = object.__getattribute__(self, "__dict__").get(
-            "traced_tangents"
-        )
-        if traced_tangents is None:
-            raise AssertionError("traced_tangents must be initialized before access")
-        if self._is_runtime_safe and len(traced_tangents) == 0:
+    def assert_traced_tangents_available(self) -> None:
+        if self._is_runtime_safe:
             raise AssertionError(
-                "traced_tangents should not be accessed after "
+                "traced_tangents should only be used while tracing before "
                 "make_runtime_safe(); use traced_tangent_metas at runtime"
             )
-        return traced_tangents
-
-    def _set_traced_tangents(self, traced_tangents: list[Any]) -> None:
-        object.__getattribute__(self, "__dict__")["traced_tangents"] = traced_tangents
 
     def make_runtime_safe(self) -> None:
         """
@@ -837,6 +827,18 @@ class ViewAndMutationMeta:
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, ViewAndMutationMeta):
             return NotImplemented
+        if self._is_runtime_safe or other._is_runtime_safe:
+            tangents_match = (
+                self._is_runtime_safe == other._is_runtime_safe
+                and self.traced_tangent_metas == other.traced_tangent_metas
+            )
+        else:
+            tangents_match = len(self.traced_tangents) == len(
+                other.traced_tangents
+            ) and all(
+                x.shape == y.shape and x.dtype == y.dtype
+                for x, y in zip(self.traced_tangents, other.traced_tangents)
+            )
         return (
             self.input_info == other.input_info
             and self.output_info == other.output_info
@@ -844,19 +846,9 @@ class ViewAndMutationMeta:
             and self.keep_input_mutations == other.keep_input_mutations
             and self.is_rng_op_functionalized == other.is_rng_op_functionalized
             and self.num_outputs_rng_offset == other.num_outputs_rng_offset
-            and len(self.traced_tangents) == len(other.traced_tangents)
-            and all(
-                x.shape == y.shape and x.dtype == y.dtype
-                for x, y in zip(self.traced_tangents, other.traced_tangents)
-            )
+            and tangents_match
             and self.num_backward_tokens == other.num_backward_tokens
         )
-
-
-ViewAndMutationMeta.traced_tangents = property(  # type: ignore[assignment]
-    ViewAndMutationMeta._get_traced_tangents,
-    ViewAndMutationMeta._set_traced_tangents,
-)
 
 
 @dataclass(eq=False)
