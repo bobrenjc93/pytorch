@@ -16,6 +16,7 @@ from torch._inductor.codegen.common import CSEVariable, OpOverrides
 from torch._inductor.virtualized import OpsValue, V
 from torch.utils._sympy.value_ranges import ValueRanges
 
+
 CuteDSLArg: TypeAlias = CSEVariable | str | bool | float | int
 
 

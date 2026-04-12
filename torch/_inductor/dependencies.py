@@ -5,27 +5,28 @@ import logging
 import re
 from collections.abc import Callable, Iterable, Sequence
 from typing import Any
+from typing_extensions import Self, TypeVar
 from unittest.mock import patch
 
 import sympy
-from typing_extensions import Self, TypeVar
 
 import torch
 from torch._inductor.utils import get_free_symbols
 from torch.fx.experimental.symbolic_shapes import free_symbols, free_unbacked_symbols
 from torch.utils._ordered_set import OrderedSet
 
-from ..utils._sympy.symbol import SymT, make_symbol
+from ..utils._sympy.symbol import make_symbol, SymT
 from .codegen.common import index_prevent_reordering
 from .ops_handler import DefaultHandler
 from .utils import (
-    VarRanges,
     get_dtype_size,
     reduction_num_outputs,
     sympy_index_symbol,
     sympy_subs,
+    VarRanges,
 )
 from .virtualized import ReductionType, V
+
 
 T = TypeVar("T")
 

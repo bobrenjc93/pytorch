@@ -29,7 +29,7 @@ from ...ir import (
     Layout,
     ReinterpretView,
 )
-from ...utils import Placeholder, is_dynamic
+from ...utils import is_dynamic, Placeholder
 from ...virtualized import V
 from ..common import IndentedBuffer
 from ..cuda import cuda_env
@@ -39,10 +39,11 @@ from .python_evt import CutlassEVTCodegen, scaled_mm_evt
 from .template import CUTLASSTemplate
 from .utils import (
     ACCUMULATOR_DTYPES,
-    XW_DTYPES,
     dtype_match,
     torch_dtype_to_cutlass_type,
+    XW_DTYPES,
 )
+
 
 GemmOperation: TypeAlias = Any
 EVTArgRenames: TypeAlias = Any

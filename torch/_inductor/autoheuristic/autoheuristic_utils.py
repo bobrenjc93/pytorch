@@ -4,6 +4,7 @@ from typing import Any, TypeAlias
 
 import torch
 
+
 Feedback: TypeAlias = float
 Choice: TypeAlias = str
 Value: TypeAlias = Any

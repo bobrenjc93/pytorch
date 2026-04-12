@@ -8,6 +8,7 @@ import torch
 
 from .virtualized import OpsValue, V
 
+
 BlockShapeType: TypeAlias = Sequence[int | str] | None
 
 

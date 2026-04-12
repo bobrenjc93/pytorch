@@ -13,12 +13,13 @@ import torch
 
 from ...utils._ordered_set import OrderedSet
 from ...utils._sympy.functions import FloorDiv, ModularIndexing
-from ...utils._sympy.symbol import SymT, make_symbol
-from ..dependencies import Dep, MemoryDep, extract_loop_body_with_args
+from ...utils._sympy.symbol import make_symbol, SymT
+from ..dependencies import Dep, extract_loop_body_with_args, MemoryDep
 from ..runtime.hints import ReductionHint
 from ..scheduler import SchedulerNode
 from ..utils import cache_on_self
 from ..virtualized import V
+
 
 if typing.TYPE_CHECKING:
     from collections.abc import Iterable, Sequence

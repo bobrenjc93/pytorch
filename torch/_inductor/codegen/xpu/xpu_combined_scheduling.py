@@ -1,7 +1,7 @@
 # mypy: allow-untyped-defs
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, TypeAlias
+from typing import Any, TYPE_CHECKING, TypeAlias
 
 from torch._inductor.scheduler import (
     BaseSchedulerNode,
@@ -13,6 +13,7 @@ from torch._inductor.scheduler import (
 
 from ..cutlass.scheduling import CUTLASSScheduling
 from ..triton import TritonScheduling
+
 
 if TYPE_CHECKING:
     from collections.abc import Sequence

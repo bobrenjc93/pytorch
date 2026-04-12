@@ -3,14 +3,14 @@ import functools
 import hashlib
 import itertools
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, TypeAlias
+from typing import Any, TYPE_CHECKING, TypeAlias
 from unittest.mock import patch
 
 import sympy
 
 import torch
 from torch._inductor import config
-from torch._inductor.utils import Placeholder, clear_on_fresh_cache
+from torch._inductor.utils import clear_on_fresh_cache, Placeholder
 from torch._logging import getArtifactLogger
 
 from ...autotune_process import CUTLASSBenchmarkRequest, TensorMeta
@@ -20,6 +20,7 @@ from ...virtualized import V
 from ..common import KernelTemplate
 from .kernel import CUTLASSTemplateCaller, CUTLASSTemplateKernel
 from .utils import DTYPE_TO_CUTLASS_TYPE
+
 
 if TYPE_CHECKING:
     from ...scheduler import BaseSchedulerNode  # noqa: TC004

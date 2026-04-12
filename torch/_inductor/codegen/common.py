@@ -13,12 +13,12 @@ import os
 import re
 import tempfile
 from abc import ABC, abstractmethod
-from enum import Enum, auto
+from enum import auto, Enum
 from itertools import chain
-from typing import TYPE_CHECKING, Any, ClassVar, Generic, NamedTuple, TypeAlias, cast
+from typing import Any, cast, ClassVar, Generic, NamedTuple, TYPE_CHECKING, TypeAlias
+from typing_extensions import Self, TypeVar
 
 import sympy
-from typing_extensions import Self, TypeVar
 
 import torch
 import torch.fx
@@ -28,21 +28,21 @@ from torch.utils._config_module import ConfigModule
 from torch.utils._ordered_set import OrderedSet
 from torch.utils._sympy.numbers import int_oo
 from torch.utils._sympy.printers import PythonPrinter as _PythonPrinter
-from torch.utils._sympy.symbol import SymT, free_symbol_is_type, symbol_is_type
-from torch.utils._sympy.value_ranges import ValueRanges, bound_sympy
+from torch.utils._sympy.symbol import free_symbol_is_type, symbol_is_type, SymT
+from torch.utils._sympy.value_ranges import bound_sympy, ValueRanges
 
 from .. import config, metrics
 from ..dtype_propagation import DtypePropagationOpsHandler
 from ..ops_handler import BasicMathOpsMixin, DefaultHandler
 from ..shape_propagation import ShapePropagationOpsHandler
 from ..utils import (
-    DeferredLineBase,
-    IndentedBuffer,
-    ScopedDict,
     boolean_ops,
+    DeferredLineBase,
     generate_assert,
     get_current_backend,
+    IndentedBuffer,
     ir_dataclass,
+    ScopedDict,
     sympy_dot,
     sympy_index_symbol,
     sympy_subs,
@@ -51,13 +51,14 @@ from ..utils import (
 )
 from ..virtualized import (
     NullHandler,
+    ops,
     OpsHandler,
     OpsValue,
     ReductionType,
     StoreMode,
     V,
-    ops,
 )
+
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator, MutableMapping, Sequence
@@ -308,7 +309,9 @@ class DeviceCodegen:
     fx_wrapper_codegen: WrapperConstructor | None = None
 
 
-KernelArgType: TypeAlias = WorkspaceArg | TensorArg | SizeArg | TMADescriptorArg | ConstexprArg
+KernelArgType: TypeAlias = (
+    WorkspaceArg | TensorArg | SizeArg | TMADescriptorArg | ConstexprArg
+)
 
 device_codegens: dict[str, DeviceCodegen] = {}
 
@@ -723,7 +726,7 @@ def check_dtype(
     if config.test_configs.runtime_triton_dtype_assert and backend == "triton":
         buffer.writeline(f"tl.static_assert({var}.dtype == {triton_type(dtype)})")
     elif config.test_configs.static_cpp_dtype_assert and backend == "cpp":
-        from .cpp_utils import DTYPE_TO_CPP, CppCSEVariable
+        from .cpp_utils import CppCSEVariable, DTYPE_TO_CPP
 
         assert isinstance(var, CppCSEVariable), type(var)
         if dtype == torch.bool:

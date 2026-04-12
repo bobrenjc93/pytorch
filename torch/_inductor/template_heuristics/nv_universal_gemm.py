@@ -12,6 +12,7 @@ from torch.utils._ordered_set import OrderedSet
 
 from .gemm import GemmMaxAutotuneTemplateConfigHeuristics
 
+
 if TYPE_CHECKING:
     from ..kernel_inputs import KernelInputs, MMKernelInputs
 

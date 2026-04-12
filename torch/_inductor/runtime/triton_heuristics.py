@@ -19,14 +19,7 @@ import sys
 import threading
 import time
 from collections import namedtuple
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    Generic,
-    Literal,
-    TypeAlias,
-)
-
+from typing import Any, Generic, Literal, TYPE_CHECKING, TypeAlias
 from typing_extensions import TypeVar
 
 import torch
@@ -40,10 +33,10 @@ from torch.utils._ordered_set import OrderedSet
 from ..triton_bundler import TritonBundler
 from ..utils import (
     GPU_KERNEL_BIN_EXTS,
-    XPU_KERNEL_FORMAT,
     prefix_is_reduction,
     tlx_only_cuda_options,
     triton_version_uses_attrs_dict,
+    XPU_KERNEL_FORMAT,
 )
 from . import triton_helpers
 from .autotune_cache import AutotuneCache
@@ -51,13 +44,13 @@ from .benchmarking import benchmarker
 from .coordinate_descent_tuner import CoordescTuner
 from .hints import (
     _NUM_THREADS_PER_WARP,
-    TRITON_MAX_BLOCK,
-    TRITON_MAX_RSPLIT,
     AutotuneHint,
     DeviceProperties,
     HeuristicType,
     ReductionHint,
     TileHint,
+    TRITON_MAX_BLOCK,
+    TRITON_MAX_RSPLIT,
 )
 from .runtime_utils import (
     cache_dir,
@@ -76,23 +69,23 @@ from .runtime_utils import (
     validate_triton_config,
 )
 from .static_triton_launcher import (
+    statically_launched_kernel_by_device,
     StaticallyLaunchedCudaKernel,
     StaticallyLaunchedXpuKernel,
-    statically_launched_kernel_by_device,
 )
 from .triton_compat import (
-    HAS_WARP_SPEC,
     ASTSource,
+    autograd_profiler,
+    cc_warp_size,
     CompiledKernel,
     Config,
     GPUTarget,
+    HAS_WARP_SPEC,
     IntelGPUError,
     KernelInterface,
+    knobs,
     OutOfResources,
     PTXASError,
-    autograd_profiler,
-    cc_warp_size,
-    knobs,
     triton,
 )
 from .triton_helpers import get_constexprs

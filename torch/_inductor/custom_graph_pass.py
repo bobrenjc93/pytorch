@@ -2,9 +2,10 @@ import hashlib
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Sequence
 from functools import lru_cache
-from typing import TYPE_CHECKING, Any, TypeAlias
+from typing import Any, TYPE_CHECKING, TypeAlias
 
 import torch.fx.graph
+
 
 if TYPE_CHECKING:
     from torch._functorch.partitioners import NodeInfo

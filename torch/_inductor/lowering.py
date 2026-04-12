@@ -13,11 +13,11 @@ import sys
 import warnings
 from collections import defaultdict
 from collections.abc import Callable, Collection, Iterable, Sequence
-from typing import TYPE_CHECKING, Any, TypeGuard, cast
+from typing import Any, cast, TYPE_CHECKING, TypeGuard
+from typing_extensions import ParamSpec, TypeVar
 from unittest.mock import patch
 
 import sympy
-from typing_extensions import ParamSpec, TypeVar
 
 import torch
 import torch.ao.quantization.fx._decomposed
@@ -30,17 +30,17 @@ from torch._library.fake_class_registry import FakeScriptObject
 from torch._library.opaque_object import is_opaque_value
 from torch._library.utils import get_layout_constraint_tag
 from torch._prims_common import (
-    ELEMENTWISE_TYPE_PROMOTION_KIND,
-    Number,
     canonicalize_dim,
     canonicalize_dims,
     check,
     dtype_to_type,
     elementwise_dtypes,
+    ELEMENTWISE_TYPE_PROMOTION_KIND,
     get_computation_dtype,
     is_boolean_dtype,
     is_float_dtype,
     is_integer_dtype,
+    Number,
 )
 from torch.fx.experimental.sym_node import magic_methods, method_to_operator
 from torch.fx.experimental.symbolic_shapes import (
@@ -66,17 +66,17 @@ from .ir import (
     ExpandView,
     IndexingConstant,
     IRNode,
+    is_triton,
     MutableBox,
     OnlineSoftmaxReduction,
+    ops_wrapper,
     PermuteView,
     Pointwise,
     Reduction,
     SqueezeView,
     TensorBox,
-    View,
-    is_triton,
-    ops_wrapper,
     validate_ir,
+    View,
 )
 from .utils import (
     ceildiv,
@@ -92,7 +92,8 @@ from .utils import (
     sympy_product,
     use_scatter_fallback,
 )
-from .virtualized import V, ops
+from .virtualized import ops, V
+
 
 if TYPE_CHECKING:
     from .ops_handler import ReductionType
@@ -8133,6 +8134,7 @@ def resize(x, size, *, memory_format=None):
 
 from torch._higher_order_ops.auto_functionalize import auto_functionalized
 
+
 make_fallback(auto_functionalized)
 
 
@@ -8473,6 +8475,7 @@ def with_effects(token, op, *args, **kwargs):
 
 from .comm_lowering import register_comm_lowerings, register_symm_mem_lowerings
 
+
 register_comm_lowerings()
 register_symm_mem_lowerings()
 
@@ -8606,18 +8609,22 @@ def lower_inline_asm_elementwise(
 # populate lowerings defined in kernel/*
 from . import kernel
 
+
 import_submodule(kernel)
 
 from . import quantized_lowerings
+
 
 quantized_lowerings.register_quantized_ops()
 quantized_lowerings.register_woq_mm_ops()
 
 from . import mkldnn_lowerings
 
+
 mkldnn_lowerings.register_onednn_fusion_ops()
 
 from . import jagged_lowerings
+
 
 jagged_lowerings.register_jagged_ops()
 

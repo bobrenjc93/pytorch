@@ -14,30 +14,30 @@ from contextlib import AbstractContextManager, nullcontext
 from enum import Enum
 from functools import partial
 from typing import (
-    TYPE_CHECKING,
     Any,
+    cast,
     ClassVar,
     Literal,
+    overload,
     SupportsFloat,
     SupportsInt,
+    TYPE_CHECKING,
     TypeAlias,
     Union,
-    cast,
-    overload,
+)
+from typing_extensions import (
+    assert_never,
+    Never,
+    override,
+    ParamSpec,
+    Self,
+    TypeIs,
+    TypeVar,
 )
 from unittest.mock import patch
 
 import sympy
 from sympy import Expr, Integer, Symbol
-from typing_extensions import (
-    Never,
-    ParamSpec,
-    Self,
-    TypeIs,
-    TypeVar,
-    assert_never,
-    override,
-)
 
 import torch._export.serde.schema as export_schema
 import torch._library.utils as library_utils
@@ -52,25 +52,25 @@ from torch._inductor.utils import get_free_symbols
 from torch._library.fake_class_registry import FakeScriptObject
 from torch._library.opaque_object import get_opaque_obj_repr, is_opaque_value
 from torch._prims_common import (
-    StrideType,
     compute_required_storage_length,
     is_boolean_dtype,
     is_contiguous_for_memory_format_or_false,
     is_float_dtype,
     make_channels_last_strides_for,
+    StrideType,
 )
 from torch.fx.experimental.symbolic_shapes import (
-    GuardOnDataDependentSymNode,
-    IterateExprs,
-    ShapeEnv,
-    SymTypes,
     _remove_effect_token_unbacked_bindings,
     compute_unbacked_bindings,
     free_symbols,
     free_unbacked_symbols,
+    GuardOnDataDependentSymNode,
     has_free_unbacked_symbols,
+    IterateExprs,
     rebind_unbacked,
     resolve_unbacked_bindings,
+    ShapeEnv,
+    SymTypes,
 )
 from torch.fx.node import Node
 from torch.utils._ordered_set import OrderedSet
@@ -82,16 +82,16 @@ from . import config, dependencies
 from .codegen.common import (
     BackendFeature,
     CodegenSymbol,
-    Kernel,
     get_scheduling_for_device,
     index_prevent_reordering,
+    Kernel,
 )
 from .dependencies import (
     Dep,
-    SymbolUsageCollectorOpsHandler,
     extract_free_symbols,
     extract_input_node_reduction_ranges,
     extract_read_writes,
+    SymbolUsageCollectorOpsHandler,
     var_builder,
 )
 from .loop_body import LoopBody
@@ -99,7 +99,6 @@ from .ops_handler import OpCounterCSE, OpCountResult, ReductionType, StoreMode
 from .runtime.benchmarking import benchmarker
 from .runtime.hints import DeviceProperties, ReductionHint
 from .utils import (
-    GPU_ALIGN_BYTES,
     argsort,
     argsort_sym,
     cache_on_self,
@@ -112,6 +111,7 @@ from .utils import (
     dtype_from_size,
     get_dtype_size,
     get_kernel_metadata,
+    GPU_ALIGN_BYTES,
     ir_dataclass,
     is_dynamic,
     is_gpu,
@@ -122,7 +122,8 @@ from .utils import (
     sympy_subs,
     tensor_is_aligned,
 )
-from .virtualized import OpsValue, V, ops
+from .virtualized import ops, OpsValue, V
+
 
 if TYPE_CHECKING:
     from torch.fx.experimental.symbolic_shapes import SympyBoolean

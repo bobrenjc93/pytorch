@@ -4,18 +4,18 @@ import math as pymath
 import warnings
 from collections.abc import Callable
 from typing import Any
-
 from typing_extensions import TypeVar
 
 from .triton_compat import (  # noqa: F401
-    JITFunction,
     _log2,
     builtins_use_semantic_kwarg,
+    JITFunction,
     libdevice,
     math,
     tl,
     triton,
 )
+
 
 _T = TypeVar("_T")
 _LOG_2_E: tl.constexpr = tl.constexpr(pymath.log2(pymath.e))

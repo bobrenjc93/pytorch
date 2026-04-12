@@ -6,7 +6,6 @@ from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any, TypeAlias
-
 from typing_extensions import ParamSpec, TypeVar
 
 import torch
@@ -16,7 +15,8 @@ from . import ir
 from .exc import SubgraphLoweringException
 from .graph import GraphLowering
 from .ops_handler import SimpleCSEHandler
-from .virtualized import V, WrapperHandler, ops
+from .virtualized import ops, V, WrapperHandler
+
 
 T = TypeVar("T")
 _P = ParamSpec("_P")

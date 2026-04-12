@@ -2,16 +2,10 @@ import dataclasses
 import itertools
 from collections import Counter, defaultdict
 from collections.abc import Callable
-from typing import (
-    TYPE_CHECKING,
-    Literal,
-    TypeAlias,
-    Union,
-    overload,
-)
+from typing import Literal, overload, TYPE_CHECKING, TypeAlias, Union
+from typing_extensions import TypeVar
 
 import sympy
-from typing_extensions import TypeVar
 
 import torch
 from torch._inductor.dependencies import index_vars_no_squeeze
@@ -19,9 +13,10 @@ from torch._inductor.utils import sympy_product, sympy_subs
 from torch.utils._ordered_set import OrderedSet
 from torch.utils._sympy.functions import Identity
 from torch.utils._sympy.solve import try_solve
-from torch.utils._sympy.symbol import SymT, symbol_is_type
+from torch.utils._sympy.symbol import symbol_is_type, SymT
 
 from .virtualized import V
+
 
 T = TypeVar("T")
 U = TypeVar("U")
@@ -33,6 +28,7 @@ VarsAndRanges: TypeAlias = tuple[list[sympy.Symbol], list[sympy.Expr]]
 
 loop_tiling_log = torch._logging.getArtifactLogger(__name__, "loop_tiling")
 from torch.utils._sympy.functions import FloorDiv, ModularIndexing
+
 
 if TYPE_CHECKING:
     from torch._inductor.scheduler import FusedSchedulerNode, SchedulerNode

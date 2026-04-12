@@ -13,24 +13,25 @@ from torch.fx.experimental.symbolic_shapes import free_symbols, guard_or_false
 from torch.utils._ordered_set import OrderedSet
 
 from ..pattern_matcher import (
-    MULTIPLE,
     Arg,
     CallFunction,
     CallFunctionVarArgs,
     CallMethodVarArgs,
     FailedMatch,
+    get_arg_value,
     Ignored,
     KeywordArg,
     ListOf,
     Match,
     MatchContext,
+    MULTIPLE,
     PatternExpr,
     PatternMatcherPass,
-    RepeatedExpr,
-    get_arg_value,
     register_graph_pattern,
+    RepeatedExpr,
 )
-from .group_batch_fusion import POST_GRAD_FUSIONS, PRE_GRAD_FUSIONS, is_node_meta_valid
+from .group_batch_fusion import is_node_meta_valid, POST_GRAD_FUSIONS, PRE_GRAD_FUSIONS
+
 
 log = logging.getLogger(__name__)
 

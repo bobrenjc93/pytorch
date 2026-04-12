@@ -52,7 +52,6 @@ from collections import defaultdict
 from collections.abc import Callable, Collection, Generator, Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any, NoReturn, Protocol, TypeAlias
-
 from typing_extensions import Self, TypeIs, TypeVar
 
 import torch
@@ -79,6 +78,7 @@ from ..fx import Transformer
 from . import config
 from .decomposition import select_decomp_table
 from .lowering import fallback_node_due_to_unsupported_type
+
 
 log = logging.getLogger(__name__)
 aten = torch.ops.aten

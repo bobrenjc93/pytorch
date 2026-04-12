@@ -6,17 +6,15 @@ import os
 from collections.abc import Callable
 from functools import lru_cache
 from typing import Any, cast
-from unittest.mock import patch
-
 from typing_extensions import TypeVar
+from unittest.mock import patch
 
 import torch
 import torch.utils
 from torch.utils._ordered_set import OrderedSet
 
 from ..._dynamo.utils import counters
-from .. import config, ir
-from .. import lowering as L
+from .. import config, ir, lowering as L
 from ..kernel.mm_common import mm_args
 from ..select_algorithm import DataProcessorTemplateWrapper
 from ..utils import (
@@ -25,25 +23,26 @@ from ..utils import (
     is_same_tensor,
     parallel_num_threads,
 )
-from ..virtualized import V, ops
+from ..virtualized import ops, V
 from .cpp import get_export_declaration
 from .cpp_micro_gemm import (
     CppMicroBrgemm,
     CppMicroGemm,
     CppMicroGemmAMX,
     CppMicroGemmFP32Vec,
-    LayoutType,
     create_micro_gemm,
     is_int8_woq_gemm_small_m_dim_corner_case,
+    LayoutType,
 )
 from .cpp_template import CppTemplate
 from .cpp_template_kernel import CppTemplateKernel
 from .cpp_utils import (
+    create_epilogue_with_attr,
     DTYPE_TO_CPP,
     GemmBlocking,
-    create_epilogue_with_attr,
     get_gemm_template_output_and_compute_dtype,
 )
+
 
 log = logging.getLogger(__name__)
 

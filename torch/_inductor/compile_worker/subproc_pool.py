@@ -15,8 +15,7 @@ from collections.abc import Callable
 from concurrent.futures import Future, ProcessPoolExecutor
 from concurrent.futures.process import BrokenProcessPool
 from enum import Enum, IntEnum
-from typing import IO, Any, TypeAlias
-
+from typing import Any, IO, TypeAlias
 from typing_extensions import Never, ParamSpec, TypeVar
 
 # _thread_safe_fork is needed because the subprocesses in the pool can read
@@ -33,6 +32,7 @@ from torch._inductor.compile_worker.utils import _async_compile_initializer
 from torch._inductor.utils import get_ld_library_path, python_subprocess_env
 from torch._utils_internal import find_compile_subproc_binary
 from torch.monitor import _WaitCounter, _WaitCounterTracker
+
 
 log = logging.getLogger(__name__)
 

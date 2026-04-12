@@ -12,10 +12,15 @@ from torch.utils._ordered_set import OrderedSet
 
 from ..utils import torch_dtype_to_cutlass_type, try_import_cutlass
 
+
 EpilogueFunctor: TypeAlias = Any  # EpilogueFunctor local class defined in _trace
 Buffer: TypeAlias = ComputedBuffer | InputBuffer
-CutlassTupleType: TypeAlias = Any  # cutlass.backend.c_types.tuple_factory_.<locals>.TupleType
-CutlassVisitorType: TypeAlias = Any  # cutlass.backend.c_types.visitor_factory.<locals>.VisitorType
+CutlassTupleType: TypeAlias = (
+    Any  # cutlass.backend.c_types.tuple_factory_.<locals>.TupleType
+)
+CutlassVisitorType: TypeAlias = (
+    Any  # cutlass.backend.c_types.visitor_factory.<locals>.VisitorType
+)
 CutlassArgType: TypeAlias = (
     Any  # Can be a CutlassTupleType, CutlassVisitorType, EmptyByte, or ctype.c_void_p
 )
@@ -38,11 +43,11 @@ if try_import_cutlass():
     from cutlass_cppgen.backend.evt.backend.emitter_base import (  # type: ignore[import-not-found]
         FusionCallbacks,
     )
-    from cutlass_cppgen.backend.evt.backend.sm90_emitter import (  # type: ignore[import-not-found]
-        CollectiveEpilogue,
-    )
     from cutlass_cppgen.backend.evt.backend.sm100_emitter import (  # type: ignore[import-not-found]
         Sm100CollectiveEpilogue,
+    )
+    from cutlass_cppgen.backend.evt.backend.sm90_emitter import (  # type: ignore[import-not-found]
+        CollectiveEpilogue,
     )
     from cutlass_cppgen.backend.evt.frontend import (  # type: ignore[import-not-found]
         PythonASTFrontend,

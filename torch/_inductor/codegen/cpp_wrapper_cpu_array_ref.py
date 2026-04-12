@@ -22,6 +22,7 @@ from .wrapper import (
     PythonWrapperCodegen,
 )
 
+
 BufferName: TypeAlias = str
 
 # Default thread stack sizes vary by platform:

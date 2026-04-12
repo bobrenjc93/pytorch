@@ -16,15 +16,15 @@ import textwrap
 import time
 from collections import defaultdict
 from collections.abc import Callable, Sequence
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import as_completed, ThreadPoolExecutor
 from io import StringIO
 from pathlib import Path
 from types import ModuleType
-from typing import TYPE_CHECKING, Any, NamedTuple, Optional, TypeAlias, cast
+from typing import Any, cast, NamedTuple, Optional, TYPE_CHECKING, TypeAlias
+from typing_extensions import Self
 from unittest.mock import patch
 
 import sympy
-from typing_extensions import Self
 
 import torch
 import torch._inductor.async_compile  # noqa: F401 required to warm up AsyncCompile pools
@@ -53,7 +53,7 @@ from .autotune_process import (
     TritonGPUBenchmarkRequest,
     use_pipelined_autotuning,
 )
-from .codecache import PersistentCache, PyCodeCache, code_hash
+from .codecache import code_hash, PersistentCache, PyCodeCache
 from .codegen.common import (
     CSEVariable,
     IndentedBuffer,
@@ -65,11 +65,11 @@ from .codegen.common import (
 from .codegen.simd_kernel_features import SIMDKernelFeatures
 from .codegen.subgraph import SubgraphChoiceCaller
 from .codegen.triton import (
+    texpr,
     TMACompatibilityChecker,
     TritonKernel,
     TritonScheduling,
     TritonSymbols,
-    texpr,
 )
 from .codegen.triton_utils import config_of, equal_1_arg_indices, signature_to_meta
 from .codegen.wrapper import pexpr
@@ -81,12 +81,12 @@ from .runtime.hints import DeviceProperties
 from .runtime.triton_compat import HAS_WARP_SPEC
 from .runtime.triton_heuristics import FixedGrid
 from .utils import (
-    FakeIndentedBuffer,
-    Placeholder,
     ceildiv,
     do_bench_using_profiling,
+    FakeIndentedBuffer,
     get_dtype_size,
     is_gpu,
+    Placeholder,
     restore_stdout_stderr,
     sympy_dot,
     sympy_index_symbol,
@@ -98,6 +98,7 @@ from .utils import (
     use_aten_gemm_kernels,
 )
 from .virtualized import V
+
 
 log = logging.getLogger(__name__)
 

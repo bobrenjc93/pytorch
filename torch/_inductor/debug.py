@@ -15,12 +15,11 @@ import shutil
 import tempfile
 import traceback
 from collections.abc import Callable, Iterator, Sequence
-from typing import IO, Any, TypeAlias
+from typing import Any, IO, TypeAlias
 from unittest.mock import patch
 
-from functorch.compile import draw_graph, get_aot_graph_name, get_graph_being_compiled
-
 import torch
+from functorch.compile import draw_graph, get_aot_graph_name, get_graph_being_compiled
 from torch import fx
 from torch._dynamo.repro.after_aot import save_graph_repro
 from torch._dynamo.utils import get_debug_dir
@@ -29,7 +28,7 @@ from torch._logging import getArtifactLogger
 from torch._logging._internal import trace_structured
 from torch._utils_internal import signpost_event
 from torch.fx.graph_module import GraphModule
-from torch.fx.passes.shape_prop import TensorMetadata, _extract_tensor_metadata
+from torch.fx.passes.shape_prop import _extract_tensor_metadata, TensorMetadata
 from torch.fx.passes.tools_common import legalize_graph
 from torch.types import FileLike
 from torch.utils._ordered_set import OrderedSet
@@ -45,6 +44,7 @@ from .scheduler import (
     SchedulerNode,
 )
 from .virtualized import V
+
 
 log = logging.getLogger(__name__)
 

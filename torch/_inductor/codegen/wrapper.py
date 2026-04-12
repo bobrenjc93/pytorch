@@ -15,7 +15,7 @@ import re
 import tempfile
 from collections.abc import Callable
 from itertools import chain, count
-from typing import TYPE_CHECKING, Any, TypeAlias
+from typing import Any, TYPE_CHECKING, TypeAlias
 
 import sympy
 from sympy import Expr
@@ -34,13 +34,13 @@ from torch.fx.experimental.symbolic_shapes import (
     CallMethodKey,
     ConvertIntKey,
     DivideByKey,
-    SymTypes,
     resolve_unbacked_bindings,
+    SymTypes,
 )
 from torch.fx.node import _get_qualified_name
 from torch.utils._ordered_set import OrderedSet
 from torch.utils._sympy.singleton_int import SingletonInt
-from torch.utils._sympy.symbol import SymT, symbol_is_type
+from torch.utils._sympy.symbol import symbol_is_type, SymT
 
 from .. import async_compile, config, ir
 from ..codecache import output_code_log
@@ -50,14 +50,14 @@ from ..runtime.hints import DeviceProperties
 from ..stream_constants import DEFAULT_STREAM, DEFAULT_STREAM_IDX, STREAM_NAME_TEMPLATE
 from ..stream_utils import get_stream_name
 from ..utils import (
-    DelayReplaceLine,
-    IndentedBuffer,
-    LineContext,
     cache_on_self,
+    DelayReplaceLine,
     get_benchmark_name,
     get_dtype_size,
+    IndentedBuffer,
     is_codegen_graph_partition_subgraph,
     is_using_cudagraph_partition,
+    LineContext,
     sympy_product,
     sympy_str,
     sympy_subs,
@@ -76,6 +76,7 @@ from .cpp_utils import cexpr
 from .custom_extern_kernel_codegen import CUSTOM_EXTERN_KERNEL_CODEGEN
 from .triton_utils import config_of, should_unwrap_unspec_arg, signature_to_meta
 
+
 if TYPE_CHECKING:
     from collections.abc import Iterable, Iterator, Sequence
 
@@ -93,7 +94,9 @@ pexpr = PythonPrinter().doprint
 
 
 ReuseKey: TypeAlias = tuple[torch.device, torch.dtype, str, bool]
-CommBufferReuseKey: TypeAlias = tuple[torch.device, torch.dtype, str, "ir.CommBufferType", str]
+CommBufferReuseKey: TypeAlias = tuple[
+    torch.device, torch.dtype, str, "ir.CommBufferType", str
+]
 BufferLike: TypeAlias = ir.Buffer | WorkspaceArg
 FxConversionFunc: TypeAlias = Callable[["WrapperLine"], None]
 
@@ -2727,9 +2730,9 @@ class PythonWrapperCodegen(CodeGen):
         epilogue_fusion: tuple[ir.ComputedBuffer, str] | None,
     ):
         from ..runtime.triton_heuristics import (
+            config_to_dict,
             FixedGrid,
             PrecomputedGrid,
-            config_to_dict,
         )
         from .common import (
             ConstexprArg,

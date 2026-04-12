@@ -11,23 +11,16 @@ from collections.abc import Callable, KeysView, Sequence
 from enum import Enum
 from functools import partial, wraps
 from types import FrameType
-from typing import (
-    Any,
-    Literal,
-    TypeAlias,
-    Union,
-    get_args,
-    get_origin,
-)
-
-from functorch.compile import min_cut_rematerialization_partition
+from typing import Any, get_args, get_origin, Literal, TypeAlias, Union
 from typing_extensions import TypeVar
 
 import torch
+from functorch.compile import min_cut_rematerialization_partition
 from torch._inductor.custom_graph_pass import CustomGraphPass, CustomPartitionerFn
 from torch._inductor.scheduler import BaseSchedulerNode
-from torch.utils._config_module import ConfigModule, _ConfigEntry
+from torch.utils._config_module import _ConfigEntry, ConfigModule
 from torch.utils._ordered_set import OrderedSet
+
 
 log = logging.getLogger(__name__)
 

@@ -7,7 +7,6 @@ import operator
 from collections import Counter, defaultdict
 from collections.abc import Callable
 from typing import Any
-
 from typing_extensions import ParamSpec, TypeVar
 
 import torch
@@ -30,45 +29,44 @@ from ..comms import remove_fsdp2_unsharded_param_graph_input_usage
 from ..fx_utils import FakeTensorUpdater, get_fake_args_kwargs, get_node_storage
 from ..lowering import lowerings as L
 from ..pattern_matcher import (
-    MULTIPLE,
+    _return_true,
     Arg,
     CallFunction,
     CallFunctionVarArgs,
-    Ignored,
-    KeywordArg,
-    ListOf,
-    Match,
-    MultiOutputPattern,
-    _return_true,
     filter_nodes,
     fwd_only,
     get_arg_value,
     get_mutation_region_id,
+    Ignored,
     init_once_fakemode,
+    KeywordArg,
+    ListOf,
+    Match,
+    MultiOutputPattern,
+    MULTIPLE,
+    PatternMatcherPass as PatternMatcherPassBase,
     register_graph_pattern,
     register_replacement,
     stable_topological_sort,
 )
-from ..pattern_matcher import (
-    PatternMatcherPass as PatternMatcherPassBase,
-)
 from ..utils import (
-    OPTIMUS_EXCLUDE_POST_GRAD,
     decode_device,
     get_all_devices,
     get_gpu_type,
     is_gpu,
     is_pointwise_use,
+    OPTIMUS_EXCLUDE_POST_GRAD,
 )
 from ..virtualized import V
 from .b2b_gemm import B2B_GEMM_PASS
 from .ddp_fusion import fuse_ddp_communication
-from .group_batch_fusion import POST_GRAD_FUSIONS, group_batch_fusion_passes
+from .group_batch_fusion import group_batch_fusion_passes, POST_GRAD_FUSIONS
 from .micro_pipeline_tp import micro_pipeline_tp_pass
 from .pre_grad import is_same_dict, save_inductor_dict
 from .reduced_atomic_contention import partitioned_scatter_optimization_pass
 from .reinplace import reinplace_inplaceable_ops
 from .split_cat import POST_GRAD_PATTERNS
+
 
 _T = TypeVar("_T")
 _P = ParamSpec("_P")

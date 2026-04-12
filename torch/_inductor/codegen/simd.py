@@ -11,10 +11,10 @@ import math
 import operator
 import textwrap
 from collections import Counter
-from typing import TYPE_CHECKING, Any, Generic, NamedTuple
+from typing import Any, Generic, NamedTuple, TYPE_CHECKING
+from typing_extensions import TypeVar
 
 import sympy
-from typing_extensions import TypeVar
 
 import torch
 import torch._logging
@@ -26,17 +26,18 @@ from torch.fx.immutable_collections import immutable_dict
 from torch.utils._ordered_set import OrderedSet
 from torch.utils._sympy.functions import FloorDiv, Identity, ModularIndexing
 from torch.utils._sympy.symbol import (
-    SymT,
     free_symbol_is_type,
     prefix_str,
     symbol_is_type,
+    SymT,
 )
 
 from ..._dynamo.utils import counters
 from .. import config, ir, scheduler
 from ..analyze_preserves_zero_mask import prologue_preserves_zero_mask
-from ..codecache import PyCodeCache, code_hash
+from ..codecache import code_hash, PyCodeCache
 from ..dependencies import MemoryDep, StarDep, WeakDep
+
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -49,20 +50,20 @@ from ..runtime.hints import DeviceProperties
 from ..runtime.runtime_utils import green_text, last_power_of_2, yellow_text
 from ..scheduler import BaseSchedulerNode, BaseScheduling, WhyNoFuse
 from ..utils import (
-    IndentedBuffer,
-    Placeholder,
     cache_property_on_self,
     expr_fits_within_32bit,
     get_dtype_size,
+    IndentedBuffer,
+    Placeholder,
     prefix_is_reduction,
     sympy_index_symbol,
     sympy_product,
     sympy_subs,
     unique,
 )
-from ..virtualized import OpsWrapper, V, ops
+from ..virtualized import ops, OpsWrapper, V
 from .block_analysis import BlockPatternMatcher
-from .common import CSEVariable, Kernel, PythonPrinter, index_prevent_reordering
+from .common import CSEVariable, index_prevent_reordering, Kernel, PythonPrinter
 from .multi_kernel import MultiKernel, SizeHintMultiKernel
 from .simd_kernel_features import (
     DisableReduction,
@@ -71,6 +72,7 @@ from .simd_kernel_features import (
     NodeScheduleMarker,
     SIMDKernelFeatures,
 )
+
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Iterator, Sequence

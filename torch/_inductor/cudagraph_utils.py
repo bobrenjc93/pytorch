@@ -4,7 +4,7 @@ from __future__ import annotations
 import dataclasses
 from collections.abc import Callable
 from enum import Enum
-from typing import TYPE_CHECKING, Any, TypeAlias
+from typing import Any, TYPE_CHECKING, TypeAlias
 
 import torch
 from torch._dynamo.utils import counters, get_metrics_context
@@ -14,9 +14,9 @@ from torch.utils._ordered_set import OrderedSet
 
 from .utils import is_using_cudagraph_partition
 
+
 if TYPE_CHECKING:
-    from collections.abc import Sequence
-    from collections.abc import Set as AbstractSet
+    from collections.abc import Sequence, Set as AbstractSet
 
 
 cudagraphs_log = torch._logging.getArtifactLogger(__name__, "cudagraphs")

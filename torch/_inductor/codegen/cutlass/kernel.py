@@ -5,7 +5,7 @@ import logging
 from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Literal, TypeAlias
+from typing import Any, Literal, TYPE_CHECKING, TypeAlias
 
 from sympy import Expr, symbols
 
@@ -14,10 +14,11 @@ from torch import dtype as torch_dtype
 from torch._inductor.codegen.common import get_device_op_overrides
 from torch._inductor.codegen.cpp_wrapper_cpu import CppWrapperCpu
 from torch._inductor.scheduler import BaseSchedulerNode
-from torch._inductor.utils import OrderedSet, Placeholder, do_bench_using_profiling
+from torch._inductor.utils import do_bench_using_profiling, OrderedSet, Placeholder
 from torch.utils._sympy.value_ranges import ValueRanges
 
 from .utils import DTYPE_TO_CUTLASS_TYPE
+
 
 if TYPE_CHECKING:
     from .template import ArgInfo
@@ -42,7 +43,8 @@ from ..common import (
     WorkspaceArg,
     WorkspaceZeroMode,
 )
-from ..cpp_utils import DTYPE_TO_CPP, CppPrinter
+from ..cpp_utils import CppPrinter, DTYPE_TO_CPP
+
 
 if TYPE_CHECKING:
     from torch._inductor.codegen.cutlass.template import CUTLASSTemplate

@@ -19,71 +19,63 @@ from dataclasses import dataclass
 from inspect import currentframe
 from itertools import count
 from operator import attrgetter
-from typing import TYPE_CHECKING, Any
-from unittest import mock
-
-from functorch.compile import min_cut_rematerialization_partition
+from typing import Any, TYPE_CHECKING
 from typing_extensions import (
     Never,
+    override,
     ParamSpec,
     Protocol,
     TypedDict,
     TypeVar,
     Unpack,
-    override,
 )
+from unittest import mock
 
 import torch._inductor.async_compile
 import torch.fx
 import torch.utils._pytree as pytree
+from functorch.compile import min_cut_rematerialization_partition
 from torch import fx
 from torch._dispatch.python import enable_python_dispatcher
 from torch._dynamo import (
     compiled_autograd,
-)
-from torch._dynamo import (
     config as dynamo_config,
-)
-from torch._dynamo import (
     logging as dynamo_logging,
-)
-from torch._dynamo import (
     utils as dynamo_utils,
 )
 from torch._dynamo.backends import common as dynamo_common
 from torch._dynamo.device_interface import get_interface_for_device
 from torch._dynamo.repro.after_aot import wrap_compiler_debug
 from torch._dynamo.utils import (
-    CompileEventLogger,
-    GmWrapper,
     chromium_event_timed,
+    CompileEventLogger,
     counters,
     detect_fake_mode,
     dynamo_timed,
     flatten_graph_inputs,
     get_inputs_devices,
     get_metrics_context,
+    GmWrapper,
     lazy_format_graph_code,
     set_feature_use,
 )
-from torch._functorch import aot_autograd
-from torch._functorch import config as functorch_config
+from torch._functorch import aot_autograd, config as functorch_config
 from torch._functorch._aot_autograd.subclass_parametrization import (
     unwrap_tensor_subclass_parameters,
 )
 from torch._functorch.aot_autograd import (
-    GraphOutputName,
-    SerializableAOTDispatchCompiler,
     aot_export_module,
+    GraphOutputName,
     make_boxed_func,
+    SerializableAOTDispatchCompiler,
 )
-from torch._inductor.codecache import FxGraphCache, code_hash, output_code_log
+from torch._inductor.codecache import code_hash, FxGraphCache, output_code_log
 from torch._inductor.cudagraph_utils import (
     BoxedDeviceIndex,
-    PlaceholderInfo,
     cudagraphs_log,
     format_default_skip_message,
     log_cudagraph_skip_and_bump_counter,
+    PlaceholderInfo,
 )
 from torch._inductor.custom_graph_pass import CustomPartitionerFn
 from torch._inductor.debug import (
@@ -94,18 +86,18 @@ from torch._inductor.output_code import (
     CompiledAOTI,
     CompiledFxGraph,
     CompiledFxGraphConstantsWithGm,
-    OutputCode,
     get_expanded_dims,
     index_expanded_dims,
+    OutputCode,
 )
 from torch._inductor.runtime.cache_dir_utils import cache_dir
 from torch._inductor.utils import (
     BoxedBool,
-    InputType,
     count_tangents,
     fresh_cache,
     get_all_devices,
     get_static_bw_input_idxs,
+    InputType,
     is_gpu,
     should_assume_input_aligned,
     should_use_remote_fx_graph_cache,
@@ -116,7 +108,7 @@ from torch._library.opaque_object import is_opaque_type
 from torch._logging import trace_structured
 from torch._utils_internal import compile_time_strobelight_meta
 from torch.fx import GraphModule
-from torch.fx.experimental.symbolic_shapes import SymExprPrinter, free_unbacked_symbols
+from torch.fx.experimental.symbolic_shapes import free_unbacked_symbols, SymExprPrinter
 from torch.fx.passes.fake_tensor_prop import FakeTensorProp
 from torch.monitor import _WaitCounter
 from torch.utils._ordered_set import OrderedSet
@@ -134,7 +126,7 @@ from .fx_passes.joint_graph import joint_graph_passes
 from .fx_passes.post_grad import post_grad_passes, view_to_reshape
 from .fx_passes.pre_grad import pre_grad_passes
 from .graph import GraphLowering
-from .ir import IRNode, get_device_type
+from .ir import get_device_type, IRNode
 from .output_code import complex_memory_overlap  # noqa: F401
 from .triton_bundler import TritonBundler
 from .utils import (
@@ -149,6 +141,7 @@ from .utils import (
     shape_env_from_inputs,
 )
 from .virtualized import V
+
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Generator, Sequence

@@ -31,8 +31,7 @@ import logging
 import os
 import os.path
 import re
-from typing import TYPE_CHECKING, Any, TypeAlias
-
+from typing import Any, TYPE_CHECKING, TypeAlias
 from typing_extensions import override
 
 import torch
@@ -45,13 +44,14 @@ from torch.compiler._cache import (
 from torch.utils._triton import has_triton
 
 from ..remote_cache import (
+    create_cache,
     JsonDataTy,
     RemoteCache,
     RemoteCacheBackend,
     RemoteCacheJsonSerde,
-    create_cache,
 )
-from .triton_compat import HAS_WARP_SPEC, Config
+from .triton_compat import Config, HAS_WARP_SPEC
+
 
 if TYPE_CHECKING:
     from ..remote_cache import Sample
