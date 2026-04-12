@@ -146,8 +146,16 @@ def takewhile(predicate: _Predicate[_T], iterable: Iterable[_T], /) -> Iterator[
 
 @overload
 def starmap(
-    function: Callable[[Unpack[_Ts]], _U],
-    iterable: Iterable[tuple[Unpack[_Ts]]],
+    function: Callable[[], _U],
+    iterable: Iterable[tuple[()]],
+    /,
+) -> itertools.starmap[_U]: ...
+
+
+@overload
+def starmap(
+    function: Callable[[_T, Unpack[_Ts]], _U],
+    iterable: Iterable[tuple[_T, Unpack[_Ts]]],
     /,
 ) -> itertools.starmap[_U]: ...
 
