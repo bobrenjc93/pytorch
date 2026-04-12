@@ -1,7 +1,6 @@
 import functools
 from collections.abc import Callable, Sequence
-from typing import Protocol
-from typing_extensions import TypeAlias
+from typing import Protocol, TypeAlias
 
 import sympy
 

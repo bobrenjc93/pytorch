@@ -37,26 +37,26 @@ from datetime import datetime
 from functools import lru_cache
 from io import StringIO
 from typing import (
+    TYPE_CHECKING,
     Any,
-    cast,
     Concatenate,
     Generic,
     Literal,
     NamedTuple,
     Protocol,
-    TYPE_CHECKING,
-    TypeGuard,
-)
-from typing_extensions import (
-    dataclass_transform,
-    ParamSpec,
-    Self,
     TypeAlias,
-    TypeVar,
+    TypeGuard,
+    cast,
 )
 from unittest import mock
 
 import sympy
+from typing_extensions import (
+    ParamSpec,
+    Self,
+    TypeVar,
+    dataclass_transform,
+)
 
 import torch
 import torch.utils._pytree as pytree
@@ -67,7 +67,6 @@ from torch.utils._dtype_abbrs import dtype_abbrs
 from torch.utils._ordered_set import OrderedSet
 from torch.utils._pytree import tree_flatten, tree_map_only
 
-
 OPTIMUS_EXCLUDE_POST_GRAD = [
     "activation_quantization_aten_pass",
     "inductor_autotune_lookup_table",
@@ -75,12 +74,11 @@ OPTIMUS_EXCLUDE_POST_GRAD = [
 
 from torch.fx.experimental._size_hinting import _sympy_subs
 from torch.fx.experimental.symbolic_shapes import (
-    free_symbols,
-    free_unbacked_symbols,
     IterateExprs,
     ShapeEnv,
+    free_symbols,
+    free_unbacked_symbols,
 )
-
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Sequence, ValuesView
@@ -128,12 +126,11 @@ from torch.utils._sympy.functions import (
     Identity,
     ModularIndexing,
 )
-from torch.utils._sympy.symbol import make_symbol, SymT
-from torch.utils._sympy.value_ranges import bound_sympy, ValueRanges
+from torch.utils._sympy.symbol import SymT, make_symbol
+from torch.utils._sympy.value_ranges import ValueRanges, bound_sympy
 
 from . import config
 from .runtime.runtime_utils import ceildiv as runtime_ceildiv
-
 
 _IS_WINDOWS = sys.platform == "win32"
 

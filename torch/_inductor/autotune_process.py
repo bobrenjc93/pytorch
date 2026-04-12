@@ -19,9 +19,8 @@ import time
 import warnings
 from collections.abc import Callable, Iterable, Sequence
 from concurrent.futures import Future, ProcessPoolExecutor, ThreadPoolExecutor
-from ctypes import byref, c_size_t, c_void_p, CDLL
-from typing import Any, IO, TYPE_CHECKING
-from typing_extensions import TypeAlias
+from ctypes import CDLL, byref, c_size_t, c_void_p
+from typing import IO, TYPE_CHECKING, Any, TypeAlias
 
 import torch
 import torch._inductor.async_compile  # noqa: F401 required to warm up AsyncCompile pools
@@ -32,9 +31,9 @@ from torch._inductor.codecache import (
     CppCodeCache,
     CUDACodeCache,
     DLLWrapper,
-    get_hash,
     PyCodeCache,
     XPUCodeCache,
+    get_hash,
 )
 from torch._inductor.compile_worker.timer import Timer
 from torch._inductor.utils import (
@@ -65,7 +64,6 @@ if TYPE_CHECKING:
 from . import config
 from .runtime.benchmarking import benchmarker
 from .virtualized import V
-
 
 CUDA_VISIBLE_DEVICES = "CUDA_VISIBLE_DEVICES"
 

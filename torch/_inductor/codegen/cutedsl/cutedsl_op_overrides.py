@@ -7,9 +7,9 @@ template kernels, particularly for flex attention modifications.
 """
 
 import math
+from typing import TypeAlias
 
 import sympy
-from typing_extensions import TypeAlias
 
 import torch
 from torch._inductor.codegen.common import CSEVariable, OpOverrides

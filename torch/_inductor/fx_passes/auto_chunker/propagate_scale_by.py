@@ -1,7 +1,7 @@
 import functools
 import logging
 from collections.abc import Callable, Sequence
-from typing_extensions import TypeAlias
+from typing import TypeAlias
 
 import torch
 from torch.fx import Node
@@ -14,7 +14,6 @@ from .utils import (
     get_scale_by_from_metas,
     get_scale_by_from_node,
 )
-
 
 aten = torch.ops.aten
 prims = torch.ops.prims

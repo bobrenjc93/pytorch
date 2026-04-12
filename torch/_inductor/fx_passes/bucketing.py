@@ -3,8 +3,7 @@ import logging
 import operator
 from collections import defaultdict
 from collections.abc import Callable
-from typing import Any, Literal
-from typing_extensions import TypeAlias
+from typing import Any, Literal, TypeAlias
 
 import torch
 import torch.distributed as dist
@@ -12,15 +11,14 @@ import torch.utils._pytree as pytree
 from torch._dispatch.python import enable_python_dispatcher
 from torch._dynamo.utils import detect_fake_mode
 from torch._inductor.comm_analysis import (
-    get_collective_type_from_kernel_name,
     NCCL_COLL,
+    get_collective_type_from_kernel_name,
 )
 from torch._inductor.runtime.runtime_utils import dynamo_timed
 from torch._logging import trace_structured
 from torch.fx.experimental.proxy_tensor import make_fx
 from torch.fx.traceback import NodeSource, NodeSourceAction
 from torch.utils._ordered_set import OrderedSet
-
 
 logger: logging.Logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)

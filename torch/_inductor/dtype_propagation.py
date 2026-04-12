@@ -2,13 +2,15 @@
 import functools
 from collections.abc import Callable, Sequence
 from typing import (
+    TYPE_CHECKING,
     Any,
     Optional,
     Protocol,
-    TYPE_CHECKING,
+    TypeAlias,
 )
-from typing_extensions import TypeAlias, TypeVar
+
 import sympy
+from typing_extensions import TypeVar
 
 import torch
 from torch._prims_common import (
@@ -21,7 +23,6 @@ from torch.utils._ordered_set import OrderedSet
 from .ops_handler import OP_NAMES, OpsHandler
 from .utils import upcast_compute_type
 from .virtualized import OpsValue, V
-
 
 T = TypeVar("T")
 _MISSING_SHAPE = object()

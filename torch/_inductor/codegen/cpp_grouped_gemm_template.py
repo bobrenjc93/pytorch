@@ -4,6 +4,7 @@ import os
 from collections.abc import Callable
 from typing import Any, cast
 from unittest.mock import patch
+
 from typing_extensions import TypeVar
 
 import torch
@@ -27,12 +28,11 @@ from .cpp_gemm_template import (
 from .cpp_micro_gemm import CppMicroGemmAMX, create_micro_gemm
 from .cpp_template_kernel import CppTemplateKernel
 from .cpp_utils import (
-    create_epilogue_with_attr,
     DTYPE_TO_CPP,
     GemmBlocking,
+    create_epilogue_with_attr,
     get_gemm_template_output_and_compute_dtype,
 )
-
 
 log = logging.getLogger(__name__)
 

@@ -1,7 +1,7 @@
 from collections.abc import Callable
 from typing import Generic
-from typing_extensions import TypeVar
 
+from typing_extensions import TypeVar
 
 T = TypeVar("T")
 

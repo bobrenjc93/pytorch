@@ -16,12 +16,11 @@ from os import PathLike
 from pathlib import Path
 from threading import Lock
 from typing import Generic
-from typing_extensions import override, TypeVar
 
 from filelock import BaseFileLock, FileLock
+from typing_extensions import TypeVar, override
 
 from . import locks
-
 
 # Type variable for cache value types
 _V = TypeVar("_V")

@@ -27,7 +27,7 @@ import threading
 import warnings
 from bisect import bisect_right
 from copy import copy
-from ctypes import c_void_p, CDLL, cdll
+from ctypes import CDLL, c_void_p, cdll
 from datetime import timedelta
 from functools import lru_cache, partial
 from pathlib import Path
@@ -35,14 +35,15 @@ from tempfile import _TemporaryFileWrapper
 from time import time, time_ns
 from types import ModuleType
 from typing import (
+    TYPE_CHECKING,
     Any,
-    cast,
     Generic,
     Literal,
     NoReturn,
-    TYPE_CHECKING,
+    cast,
 )
-from typing_extensions import override, Self, TypeVar
+
+from typing_extensions import Self, TypeVar, override
 
 import torch
 import torch._library.opaque_object as opaque_object
@@ -70,13 +71,13 @@ from torch._inductor.codegen.rocm.compile_command import (
 from torch._inductor.compile_worker.utils import in_toplevel_process
 from torch._inductor.cpp_builder import (
     _LINKER_SCRIPT,
-    _set_gpu_runtime_env,
     _TORCH_PATH,
-    batch_convert_cubins_to_obj,
-    convert_cubin_to_obj,
     CppBuilder,
     CppOptions,
     CppTorchDeviceOptions,
+    _set_gpu_runtime_env,
+    batch_convert_cubins_to_obj,
+    convert_cubin_to_obj,
     get_compiler_version_info,
     get_cpp_compiler,
     get_ld_and_objcopy,
@@ -97,19 +98,19 @@ from torch._inductor.runtime.compile_tasks import _reload_python_module
 from torch._inductor.runtime.runtime_utils import cache_dir, default_cache_dir
 from torch._inductor.utils import (
     ALIGN_BYTES,
+    XPU_KERNEL_FORMAT,
     clear_on_fresh_cache,
     determine_aoti_mmap_flags,
     is_linux,
     is_windows,
-    XPU_KERNEL_FORMAT,
 )
 from torch._library.fake_class_registry import FakeScriptObject
 from torch._library.opaque_object import is_opaque_reference_type
 from torch._logging import trace_structured
 from torch._subclasses.fake_tensor import (
-    extract_tensor_metadata,
     FakeTensor,
     TensorMetadata,
+    extract_tensor_metadata,
 )
 from torch._utils_internal import log_cache_bypass
 from torch.compiler import config as cconfig
@@ -121,9 +122,9 @@ from torch.compiler._cache import (
 from torch.export.pt2_archive._package_weights import TensorProperties, Weights
 from torch.export.pt2_archive.constants import CUSTOM_OBJ_FILENAME_PREFIX
 from torch.fx.experimental.symbolic_shapes import (
+    ShapeEnv,
     guarding_hint_or_throw,
     has_guarding_hint,
-    ShapeEnv,
 )
 from torch.utils._ordered_set import OrderedSet
 
@@ -133,7 +134,6 @@ from .runtime import autotune_cache
 from .runtime.autotune_cache import AutotuneCacheBundler
 from .triton_bundler import TritonBundler
 from .virtualized import V
-
 
 T = TypeVar("T")
 
@@ -2839,8 +2839,8 @@ end
                         # as seen in https://docs.python.org/2/library/resource.html
                         if _IS_WINDOWS:
                             from ctypes import (
-                                byref,
                                 Structure,
+                                byref,
                                 windll,  # pyrefly: ignore [missing-module-attribute]
                             )
                             from ctypes.wintypes import DWORD, LPVOID, WORD

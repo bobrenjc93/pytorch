@@ -5,8 +5,7 @@ import operator
 import os
 from collections import defaultdict
 from collections.abc import Callable, Sequence
-from typing import Any
-from typing_extensions import TypeAlias
+from typing import Any, TypeAlias
 
 import torch
 from torch._dynamo.utils import counters
@@ -14,25 +13,24 @@ from torch.fx.experimental.symbolic_shapes import free_symbols, guard_or_false
 from torch.utils._ordered_set import OrderedSet
 
 from ..pattern_matcher import (
+    MULTIPLE,
     Arg,
     CallFunction,
     CallFunctionVarArgs,
     CallMethodVarArgs,
     FailedMatch,
-    get_arg_value,
     Ignored,
     KeywordArg,
     ListOf,
     Match,
     MatchContext,
-    MULTIPLE,
     PatternExpr,
     PatternMatcherPass,
-    register_graph_pattern,
     RepeatedExpr,
+    get_arg_value,
+    register_graph_pattern,
 )
-from .group_batch_fusion import is_node_meta_valid, POST_GRAD_FUSIONS, PRE_GRAD_FUSIONS
-
+from .group_batch_fusion import POST_GRAD_FUSIONS, PRE_GRAD_FUSIONS, is_node_meta_valid
 
 log = logging.getLogger(__name__)
 

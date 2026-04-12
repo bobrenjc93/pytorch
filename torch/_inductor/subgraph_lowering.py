@@ -5,8 +5,9 @@ import operator
 from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Any
-from typing_extensions import ParamSpec, TypeAlias, TypeVar
+from typing import Any, TypeAlias
+
+from typing_extensions import ParamSpec, TypeVar
 
 import torch
 from torch.utils._ordered_set import OrderedSet
@@ -15,8 +16,7 @@ from . import ir
 from .exc import SubgraphLoweringException
 from .graph import GraphLowering
 from .ops_handler import SimpleCSEHandler
-from .virtualized import ops, V, WrapperHandler
-
+from .virtualized import V, WrapperHandler, ops
 
 T = TypeVar("T")
 _P = ParamSpec("_P")

@@ -3,15 +3,14 @@ import functools
 import hashlib
 import itertools
 from dataclasses import dataclass
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, TypeAlias
 from unittest.mock import patch
-from typing_extensions import TypeAlias
 
 import sympy
 
 import torch
 from torch._inductor import config
-from torch._inductor.utils import clear_on_fresh_cache, Placeholder
+from torch._inductor.utils import Placeholder, clear_on_fresh_cache
 from torch._logging import getArtifactLogger
 
 from ...autotune_process import CUTLASSBenchmarkRequest, TensorMeta

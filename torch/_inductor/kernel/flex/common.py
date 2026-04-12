@@ -5,10 +5,9 @@ import math
 from collections.abc import Sequence
 from functools import partial
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypeAlias
 
 import sympy
-from typing_extensions import TypeAlias
 
 import torch
 from torch._inductor.virtualized import V

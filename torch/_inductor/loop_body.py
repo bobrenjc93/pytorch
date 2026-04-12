@@ -5,11 +5,11 @@ import collections
 import functools
 import itertools
 import re
-from enum import auto, Enum
-from typing import Any, NamedTuple, TYPE_CHECKING
-from typing_extensions import TypeVar
+from enum import Enum, auto
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 import sympy
+from typing_extensions import TypeVar
 
 import torch.fx
 from torch._dynamo.utils import identity
@@ -26,8 +26,7 @@ from .utils import (
     sympy_index_symbol_with_prefix,
     sympy_subs,
 )
-from .virtualized import ops, V
-
+from .virtualized import V, ops
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence

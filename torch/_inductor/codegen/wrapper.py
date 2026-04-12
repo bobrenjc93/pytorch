@@ -15,8 +15,7 @@ import re
 import tempfile
 from collections.abc import Callable
 from itertools import chain, count
-from typing import Any, TYPE_CHECKING
-from typing_extensions import TypeAlias
+from typing import TYPE_CHECKING, Any, TypeAlias
 
 import sympy
 from sympy import Expr
@@ -35,13 +34,13 @@ from torch.fx.experimental.symbolic_shapes import (
     CallMethodKey,
     ConvertIntKey,
     DivideByKey,
-    resolve_unbacked_bindings,
     SymTypes,
+    resolve_unbacked_bindings,
 )
 from torch.fx.node import _get_qualified_name
 from torch.utils._ordered_set import OrderedSet
 from torch.utils._sympy.singleton_int import SingletonInt
-from torch.utils._sympy.symbol import symbol_is_type, SymT
+from torch.utils._sympy.symbol import SymT, symbol_is_type
 
 from .. import async_compile, config, ir
 from ..codecache import output_code_log
@@ -51,14 +50,14 @@ from ..runtime.hints import DeviceProperties
 from ..stream_constants import DEFAULT_STREAM, DEFAULT_STREAM_IDX, STREAM_NAME_TEMPLATE
 from ..stream_utils import get_stream_name
 from ..utils import (
-    cache_on_self,
     DelayReplaceLine,
+    IndentedBuffer,
+    LineContext,
+    cache_on_self,
     get_benchmark_name,
     get_dtype_size,
-    IndentedBuffer,
     is_codegen_graph_partition_subgraph,
     is_using_cudagraph_partition,
-    LineContext,
     sympy_product,
     sympy_str,
     sympy_subs,
@@ -2728,9 +2727,9 @@ class PythonWrapperCodegen(CodeGen):
         epilogue_fusion: tuple[ir.ComputedBuffer, str] | None,
     ):
         from ..runtime.triton_heuristics import (
-            config_to_dict,
             FixedGrid,
             PrecomputedGrid,
+            config_to_dict,
         )
         from .common import (
             ConstexprArg,

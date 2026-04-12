@@ -7,23 +7,23 @@ import re
 import warnings
 from io import StringIO
 from typing import (
+    TYPE_CHECKING,
     Any,
     Generic,
     Literal,
     NamedTuple,
-    TYPE_CHECKING,
+    TypeAlias,
 )
-from typing_extensions import TypeAlias, TypeVar
 from unittest.mock import patch
 
 import sympy
+from typing_extensions import TypeVar
 
 import torch
 import torch.utils._pytree as pytree
 
 from ..utils._ordered_set import OrderedSet
 from .utils import IndentedBuffer, reduction_num_outputs, sympy_index_symbol, sympy_str
-
 
 if TYPE_CHECKING:
     from collections.abc import Callable

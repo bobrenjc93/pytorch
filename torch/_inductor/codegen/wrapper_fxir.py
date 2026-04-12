@@ -5,8 +5,7 @@ import operator
 import textwrap
 from collections import Counter
 from collections.abc import Callable, Iterable, Sequence
-from typing import Any
-from typing_extensions import TypeAlias
+from typing import Any, TypeAlias
 
 import sympy
 
@@ -41,7 +40,7 @@ from torch.utils._sympy.solve import try_solve
 
 from .. import config, ir
 from ..runtime.triton_compat import Config
-from ..utils import cache_property_on_self, LineContext, ValueWithLineMap
+from ..utils import LineContext, ValueWithLineMap, cache_property_on_self
 from .common import (
     CodegenSymbol,
     FileBackedGraphModule,

@@ -4,8 +4,7 @@ import math
 from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Optional
-from typing_extensions import TypeAlias
+from typing import Any, Optional, TypeAlias
 
 import torch
 from torch._inductor.analysis.device_info import DeviceInfo, lookup_device_info

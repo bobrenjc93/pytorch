@@ -3,12 +3,13 @@ import sys
 import weakref
 from asyncio import AbstractEventLoop, Future
 from collections.abc import Awaitable, Callable, Coroutine, Generator, Iterator
-from contextlib import contextmanager, ExitStack
+from contextlib import ExitStack, contextmanager
 from contextvars import Context
-from typing import Any, Protocol
-from typing_extensions import TypeAlias, TypeVar
-from torch.utils._ordered_set import OrderedSet
+from typing import Any, Protocol, TypeAlias
 
+from typing_extensions import TypeVar
+
+from torch.utils._ordered_set import OrderedSet
 
 T = TypeVar("T")
 TCoro: TypeAlias = Generator[Any, None, T]

@@ -3,8 +3,7 @@ from __future__ import annotations
 import logging
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
-from typing_extensions import TypeAlias
+from typing import TYPE_CHECKING, TypeAlias
 
 import torch
 from torch._inductor.utils import ensure_nvmatmul_heuristics_available

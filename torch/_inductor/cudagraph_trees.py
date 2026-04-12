@@ -50,9 +50,11 @@ import warnings
 import weakref
 from collections import defaultdict
 from contextlib import AbstractContextManager
-from enum import auto, Enum
-from typing import Any, cast, TYPE_CHECKING
-from typing_extensions import TypeAlias, TypeVar
+from enum import Enum, auto
+from typing import TYPE_CHECKING, Any, TypeAlias, cast
+
+from typing_extensions import TypeVar
+
 import torch.fx
 from torch import Tensor
 from torch._dynamo.callback import CallbackTrigger
@@ -72,17 +74,17 @@ from torch._inductor.compile_fx import (
     static_input,
 )
 from torch._inductor.cudagraph_utils import (
-    check_for_mutation,
     CheckInvariantStatus,
-    collect_cuda_data_ptrs,
     FunctionID,
-    log_cudagraph_skip_and_bump_counter,
-    log_data_ptr_mismatch,
-    maybe_warning_due_to_dynamic_shape,
     ModelType,
     OutputType,
     PlaceholderInfo,
     WrappedFunction,
+    check_for_mutation,
+    collect_cuda_data_ptrs,
+    log_cudagraph_skip_and_bump_counter,
+    log_data_ptr_mismatch,
+    maybe_warning_due_to_dynamic_shape,
 )
 from torch._library.opaque_object import is_opaque_value
 from torch._opaque_base import OpaqueBase
@@ -91,7 +93,6 @@ from torch.storage import UntypedStorage
 from torch.utils import _pytree as pytree
 from torch.utils._ordered_set import OrderedSet
 from torch.utils.weak import TensorWeakRef
-
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Generator, Iterator, Sequence
@@ -110,6 +111,8 @@ S = TypeVar("S", bound="StorageWeakRefWrapper")
 if torch.backends.cuda.is_built():
     from torch._C import (
         _cuda_CUDAAllocator_AllocatorState as AllocatorState,
+    )
+    from torch._C import (
         _set_cached_tensors_enabled,
     )
 else:
@@ -796,9 +799,9 @@ class CUDAWarmupNode:
 
 
 # Aliases for List that say what the indices denote
-InputList: TypeAlias = list  # input indexes
-OutputList: TypeAlias = list  # output indexes
-LevelList: TypeAlias = list  # levels (distance from root of tree)
+InputList = list  # input indexes
+OutputList = list  # output indexes
+LevelList = list  # levels (distance from root of tree)
 
 
 class OutputAliasInfo:

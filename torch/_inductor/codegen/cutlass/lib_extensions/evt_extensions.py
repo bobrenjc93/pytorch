@@ -1,6 +1,5 @@
 from collections.abc import Callable
-from typing import Any
-from typing_extensions import TypeAlias
+from typing import Any, TypeAlias
 
 from sympy import Expr
 
@@ -39,11 +38,11 @@ if try_import_cutlass():
     from cutlass_cppgen.backend.evt.backend.emitter_base import (  # type: ignore[import-not-found]
         FusionCallbacks,
     )
-    from cutlass_cppgen.backend.evt.backend.sm100_emitter import (  # type: ignore[import-not-found]
-        Sm100CollectiveEpilogue,
-    )
     from cutlass_cppgen.backend.evt.backend.sm90_emitter import (  # type: ignore[import-not-found]
         CollectiveEpilogue,
+    )
+    from cutlass_cppgen.backend.evt.backend.sm100_emitter import (  # type: ignore[import-not-found]
+        Sm100CollectiveEpilogue,
     )
     from cutlass_cppgen.backend.evt.frontend import (  # type: ignore[import-not-found]
         PythonASTFrontend,

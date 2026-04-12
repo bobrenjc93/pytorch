@@ -1,8 +1,7 @@
 # mypy: allow-untyped-defs
 from __future__ import annotations
 
-from typing import Any, TYPE_CHECKING
-from typing_extensions import TypeAlias
+from typing import TYPE_CHECKING, Any, TypeAlias
 
 from ..scheduler import (
     BaseSchedulerNode,
@@ -16,7 +15,6 @@ from .cutlass.scheduling import CUTLASSScheduling
 from .nv_universal_gemm.nv_universal_gemm_scheduling import NVUniversalGemmScheduling
 from .rocm.rocm_cpp_scheduling import ROCmCPPScheduling
 from .triton import TritonScheduling
-
 
 if TYPE_CHECKING:
     from collections.abc import Sequence

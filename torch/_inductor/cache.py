@@ -9,11 +9,11 @@ from os import getenv
 from pathlib import Path
 from tempfile import gettempdir
 from threading import Lock
-from typing import Any, Generic, TYPE_CHECKING
-from typing_extensions import assert_never, override, Self, TypeVar
+from typing import TYPE_CHECKING, Any, Generic
+
+from typing_extensions import Self, TypeVar, assert_never, override
 
 from torch.utils._filelock import FileLock
-
 
 if TYPE_CHECKING:
     from concurrent.futures import Future, ThreadPoolExecutor

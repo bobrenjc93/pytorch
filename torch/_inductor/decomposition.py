@@ -5,8 +5,9 @@ import math
 import operator
 import sys
 from collections.abc import Callable
-from typing import Any
-from typing_extensions import ParamSpec, TypeAlias, TypeVar
+from typing import Any, TypeAlias
+
+from typing_extensions import ParamSpec, TypeVar
 
 import torch
 import torch._decomp as decomp
@@ -19,10 +20,14 @@ from torch._decomp import (
 )
 from torch._decomp.decompositions import (
     _grid_sampler_2d as decomp_grid_sampler_2d,
+)
+from torch._decomp.decompositions import (
     _index_add,
-    embedding_dense_backward as decomp_embedding_dense_backward,
     pw_cast_for_opmath,
     pw_cast_for_opmath_non_tensor_args,
+)
+from torch._decomp.decompositions import (
+    embedding_dense_backward as decomp_embedding_dense_backward,
 )
 from torch._decomp.decompositions_for_rng import extra_random_decomps
 from torch._dynamo.utils import counters
@@ -30,8 +35,8 @@ from torch._environment import is_fbcode
 from torch._higher_order_ops.out_dtype import out_dtype
 from torch._inductor.utils import pad_listlike
 from torch._prims_common import (
-    elementwise_dtypes,
     ELEMENTWISE_TYPE_PROMOTION_KIND,
+    elementwise_dtypes,
     suggest_memory_format,
     type_to_dtype,
 )
@@ -44,7 +49,6 @@ from .utils import (
     needs_fallback_due_to_atomic_add_limitations,
     use_scatter_fallback,
 )
-
 
 _T = TypeVar("_T")
 _P = ParamSpec("_P")

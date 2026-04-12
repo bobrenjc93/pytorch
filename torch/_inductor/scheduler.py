@@ -15,14 +15,14 @@ import textwrap
 import traceback
 import typing
 from collections import Counter, defaultdict
-from concurrent.futures import as_completed, Future
-from typing import Any, Generic, TYPE_CHECKING
-from typing_extensions import ParamSpec, TypeAlias, TypeVar
+from concurrent.futures import Future, as_completed
+from typing import TYPE_CHECKING, Any, Generic, TypeAlias
+
+from typing_extensions import ParamSpec, TypeVar
 
 from torch.utils._ordered_set import OrderedSet
 
 from .ir import ComputedBuffer, Pointwise
-
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator, Sequence
@@ -44,12 +44,12 @@ from torch._inductor.ir import TritonTemplateCallerBase
 from torch._inductor.metrics import get_metric_table, is_metric_table_enabled
 from torch._inductor.stream_utils import get_stream_name
 from torch.fx.experimental.symbolic_shapes import free_symbols
-from torch.utils._sympy.symbol import free_symbol_is_type, symbol_is_type, SymT
+from torch.utils._sympy.symbol import SymT, free_symbol_is_type, symbol_is_type
 from torch.utils._triton import has_triton
 
 from . import comms, config, config_comms, dependencies, ir, metrics
 from .analyze_preserves_zero_mask import can_codegen_without_upcasts
-from .codegen.common import BackendFeature, get_scheduling_for_device, Kernel
+from .codegen.common import BackendFeature, Kernel, get_scheduling_for_device
 from .comm_analysis import (
     estimate_nccl_collective_runtime,
     estimate_nccl_collective_runtime_nccl_estimator,
@@ -58,12 +58,12 @@ from .dependencies import Dep, MemoryDep, StarDep, WeakDep
 from .exc import GPUTooOldForTriton, TritonMissing
 from .fx_utils import count_flops_fx
 from .ir import (
-    assign_origin_node,
-    get_device_type,
     GraphPartitionSignature,
     MultiOutput,
     MultiOutputLayout,
     NoneLayout,
+    assign_origin_node,
+    get_device_type,
 )
 from .loop_body import LoopBody
 from .memory import MemoryPlanningInfoForBuffer, MemoryPlanningInfoForNode
@@ -71,6 +71,8 @@ from .runtime.hints import DeviceProperties, ReductionHint
 from .runtime.runtime_utils import green_text, red_text
 from .sizevars import SimplifyIndexing
 from .utils import (
+    GraphPartitionMap,
+    IndentedBuffer,
     _unstable_customized_partition_wrapper,
     cache_on_self,
     cmp,
@@ -80,8 +82,6 @@ from .utils import (
     get_dtype_size,
     get_gpu_dram_gbps,
     get_op_names,
-    GraphPartitionMap,
-    IndentedBuffer,
     is_collective,
     is_cudagraph_unsafe_op,
     is_gpu,
@@ -91,7 +91,6 @@ from .utils import (
     sympy_product,
 )
 from .virtualized import V
-
 
 log = logging.getLogger(__name__)
 fusion_log = torch._logging.getArtifactLogger(__name__, "fusion")
@@ -3750,9 +3749,9 @@ class Scheduler:
 
     def insert_memory_check_nodes(self) -> None:
         from .memory import (
+            FreeableInputBuffer,
             assign_memory_planning_info_for_scheduler_buffers,
             compute_memory_timeline,
-            FreeableInputBuffer,
             get_freeable_input_buf,
         )
 

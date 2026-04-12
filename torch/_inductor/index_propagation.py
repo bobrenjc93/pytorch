@@ -24,20 +24,19 @@ SymPy expressions yet, despite sympy.Min and sympy.Max existing.
 import itertools
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any, Literal, overload
-from typing_extensions import TypeAlias
+from typing import Any, Literal, TypeAlias, overload
+
 import sympy
 
 import torch
 from torch._prims_common import dtype_to_type, is_integer_dtype
 from torch.utils._sympy.functions import FloorDiv, ModularIndexing, Where
-from torch.utils._sympy.value_ranges import bound_sympy, ValueRanges
+from torch.utils._sympy.value_ranges import ValueRanges, bound_sympy
 
 from .ops_handler import DefaultHandler
 from .sizevars import statically_known_true
 from .utils import generate_assert
 from .virtualized import V
-
 
 _ExprType: TypeAlias = sympy.Expr | float | int | bool
 
