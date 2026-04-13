@@ -570,7 +570,7 @@ class GenericAOTAutogradResult(Generic[TForward, TBackward]):
         )
         return compiled_function
 
-    def _install_guards(self, args: list[torch.Tensor]) -> None:
+    def _check_guards(self, args: list[torch.Tensor]) -> None:
         if self.guards_expr:
             from .autograd_cache import AOTAutogradCache
 
@@ -585,8 +585,7 @@ class GenericAOTAutogradResult(Generic[TForward, TBackward]):
         args: list[torch.Tensor],
         aot_config: AOTConfig,
         fx_config: _CompileFxKwargs,
-        # pyrefly: ignore [implicit-any]
-    ) -> Callable:
+    ) -> Callable[..., Any]:
         """
         This function takes a result and carefully reconstructs the original callable
         that AOTAutograd returned the first time it was run. It does this by running the various
@@ -616,7 +615,7 @@ class GenericAOTAutogradResult(Generic[TForward, TBackward]):
         )
         # Now that we're pretty sure it's a successful load, add guards
         # to the existing shape environment from the cache.
-        self._install_guards(args)
+        self._check_guards(args)
         return compiled_function
 
 
