@@ -1061,10 +1061,10 @@ def _apply_final_input_mutations(
         if not is_fun(f_inpt):
             raise AssertionError(f"expected functional tensor, got {type(f_inpt)}")
 
+        inpt_new = from_fun(f_inpt)
         if meta.input_info[idx].mutation_type != MutationType.MUTATED_IN_GRAPH:
             continue
 
-        inpt_new = from_fun(f_inpt)
         if not isinstance(inpt_new, torch.Tensor):
             raise AssertionError(f"expected tensor from from_fun, got {type(inpt_new)}")
         mcs: MutationCounters | None = None
