@@ -51,11 +51,11 @@ Stack variable source attribution:
   ConstantVariable(int: 1) originated from:
   File "test_exc.py", line N
                 return {1, 2}
-                        ^
+^
   ConstantVariable(int: 2) originated from:
   File "test_exc.py", line N
                 return {1, 2}
-                           ^
+^
 """
 
 

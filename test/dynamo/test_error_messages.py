@@ -45,33 +45,26 @@ class GenericCtxMgr:
 
 
 def _generic_ctx_mgr_stack_source_attribution() -> str:
-    if sys.version_info >= (3, 14):
-        caret1 = "                     ^^^^^^^^^^^^^^^\n"
-        caret2 = "                         ^^^^^^^^^^^^^^^\n"
-    elif sys.version_info >= (3, 11):
-        caret1 = "                   ^^^^^^^^^^^^^^^\n"
-        caret2 = "                       ^^^^^^^^^^^^^^^\n"
+    if sys.version_info >= (3, 11):
+        caret = "^^^^^^^^^^^^^^^\n"
     else:
-        caret1 = ""
-        caret2 = ""
+        caret = ""
     return (
         "Stack variable source attribution:\n"
         "  WithExitFunctionVariable() originated from:\n"
         '  File "test_error_messages.py", line N\n'
         "                with GenericCtxMgr():\n"
-        f"{caret1}"
+        f"{caret}"
         "  WithExitFunctionVariable() originated from:\n"
         '  File "test_error_messages.py", line N\n'
         "                    with GenericCtxMgr():\n"
-        f"{caret2}"
+        f"{caret}"
     )
 
 
 def _assert_failure_stack_source_attribution() -> str:
-    if sys.version_info >= (3, 14):
-        caret = "                     ^^^^^^^^^^^^^^^\n"
-    elif sys.version_info >= (3, 11):
-        caret = "                   ^^^^^^^^^^^^^^^\n"
+    if sys.version_info >= (3, 11):
+        caret = "^^^^^^^^^^^^^^^\n"
     else:
         caret = ""
     return (
@@ -90,7 +83,7 @@ def _reconstruction_failure_gb_stack_source_attribution() -> str:
             "  LazyVariableTracker(realized: SkipFunctionVariable()) originated from:\n"
             '  File "test_error_messages.py", line N\n'
             "                torch._dynamo.graph_break()\n"
-            "                ^^^^^^^^^^^^^^^^^^^^^^^^^\n"
+            "^^^^^^^^^^^^^^^^^^^^^^^^^\n"
             "\n"
         )
 
@@ -113,7 +106,7 @@ def _graph_break_in_loop_stack_source_attribution() -> str:
             "  RangeIteratorVariable() originated from:\n"
             '  File "test_error_messages.py", line N\n'
             "                for i in range(2):\n"
-            "                         ^^^^^^^^\n"
+            "^^^^^^^^\n"
             "\n"
         )
 
@@ -136,11 +129,11 @@ def _skip_frame_in_loop_message_stack_source_attribution() -> str:
             "  RangeIteratorVariable() originated from:\n"
             '  File "test_error_messages.py", line N\n'
             "                for i in range(2):\n"
-            "                         ^^^^^^^^\n"
+            "^^^^^^^^\n"
             "  WithExitFunctionVariable() originated from:\n"
             '  File "test_error_messages.py", line N\n'
             "                    with GenericCtxMgr():\n"
-            "                         ^^^^^^^^^^^^^^^\n"
+            "^^^^^^^^^^^^^^^\n"
             "\n"
         )
 
