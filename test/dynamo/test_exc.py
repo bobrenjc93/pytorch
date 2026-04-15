@@ -484,9 +484,7 @@ Failed Source Expressions:
         source_location = _source_location_capture.get("source_location")
         self.assertIsNotNone(source_location)
         source_location = cast(SourceLocation, source_location)
-        self.assertEqual(
-            source_location.filename, __file__.replace(".pyc", ".py")
-        )
+        self.assertEqual(source_location.filename, __file__.replace(".pyc", ".py"))
         self.assertIsNotNone(source_location.lineno)
 
     @make_logging_test(graph_breaks=True)
