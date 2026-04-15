@@ -319,7 +319,7 @@ class VariableTracker(metaclass=VariableTrackerMeta):
         "value",
         "guards",
         "source",
-        "source_loc",
+        "source_location",
         "mutation_type",
         "parents_tracker",
         "user_code_variable_name",
@@ -902,8 +902,8 @@ class VariableTracker(metaclass=VariableTrackerMeta):
     def set_name_hint(self, name: str) -> None:
         pass
 
-    def set_source_loc(self, source_loc: SourceLocation) -> None:
-        self.source_loc = source_loc
+    def set_source_location(self, source_location: SourceLocation) -> None:
+        self.source_location = source_location
 
     def realize(self) -> VariableTracker:
         """Used by LazyVariableTracker to build the real VariableTracker"""
@@ -1077,11 +1077,11 @@ class VariableTracker(metaclass=VariableTrackerMeta):
         *,
         source: Source | None = None,
         mutation_type: MutationType | None = None,
-        source_loc: SourceLocation | None = None,
+        source_location: SourceLocation | None = None,
     ) -> None:
         super().__init__()
         self.source = source
-        self.source_loc = source_loc
+        self.source_location = source_location
         self.mutation_type = mutation_type
 
         # NOTE sometimes mutation_type is set afterwards for implementation

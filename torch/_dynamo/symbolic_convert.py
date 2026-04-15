@@ -1886,10 +1886,10 @@ class InstructionTranslatorBase(
         assert isinstance(val, VariableTracker), (
             f"push expects VariableTracker, got {typestr(val)}"
         )
-        if val.source_loc is None:
+        if val.source_location is None:
             inst = self.current_instruction
             if inst.positions is not None and inst.positions.lineno is not None:
-                val.set_source_loc(
+                val.set_source_location(
                     SourceLocation(
                         filename=self.f_code.co_filename,
                         lineno=inst.positions.lineno,
@@ -1899,7 +1899,7 @@ class InstructionTranslatorBase(
                     )
                 )
             elif inst.starts_line is not None:
-                val.set_source_loc(
+                val.set_source_location(
                     SourceLocation(
                         filename=self.f_code.co_filename,
                         lineno=inst.starts_line,
@@ -4626,13 +4626,15 @@ class InstructionTranslatorBase(
         seen: set[SourceLocation] = set()
         parts: list[str] = []
         for vt in self.stack:
-            loc = vt.source_loc
-            if loc is None:
+            source_location = vt.source_location
+            if source_location is None:
                 continue
-            if loc in seen:
+            if source_location in seen:
                 continue
-            seen.add(loc)
-            parts.append(f"  {vt!r} originated from:\n{loc.format().rstrip()}")
+            seen.add(source_location)
+            parts.append(
+                f"  {vt!r} originated from:\n{source_location.format().rstrip()}"
+            )
 
         if not parts:
             return ""

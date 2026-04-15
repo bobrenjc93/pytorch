@@ -25,7 +25,7 @@ class LazyCache:
         self.value = value
         self.source = source
         self.name_hint: str | None = None
-        self.source_loc: SourceLocation | None = None
+        self.source_location: SourceLocation | None = None
         self.vt: VariableTracker | None = None
 
     def realize(self) -> None:
@@ -48,13 +48,13 @@ class LazyCache:
         if self.name_hint is not None:
             self.vt.set_name_hint(self.name_hint)
 
-        if self.source_loc is not None and self.vt.source_loc is None:
-            self.vt.set_source_loc(self.source_loc)
+        if self.source_location is not None and self.vt.source_location is None:
+            self.vt.set_source_location(self.source_location)
 
         del self.value
         del self.source
         del self.name_hint
-        del self.source_loc
+        del self.source_location
 
 
 class LazyVariableTracker(VariableTracker, metaclass=VariableTrackerMeta):
@@ -142,12 +142,12 @@ class LazyVariableTracker(VariableTracker, metaclass=VariableTrackerMeta):
         else:
             self._cache.name_hint = name
 
-    def set_source_loc(self, source_loc: SourceLocation) -> None:
-        self.source_loc = source_loc
+    def set_source_location(self, source_location: SourceLocation) -> None:
+        self.source_location = source_location
         if self.is_realized():
-            self._cache.vt.set_source_loc(source_loc)  # type: ignore[union-attr]
+            self._cache.vt.set_source_location(source_location)  # type: ignore[union-attr]
         else:
-            self._cache.source_loc = source_loc
+            self._cache.source_location = source_location
 
     def __str__(self) -> str:
         variable_info = "LazyVariableTracker("

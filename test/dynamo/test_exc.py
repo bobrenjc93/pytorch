@@ -27,14 +27,14 @@ from torch.testing._internal.logging_utils import LoggingTestCase, make_logging_
 
 
 # Module-level storage avoids free-variable issues when capturing comptime state.
-_source_loc_capture: dict[str, SourceLocation] = {}
+_source_location_capture: dict[str, SourceLocation] = {}
 
 
-def _capture_y_source_loc(ctx) -> None:
+def _capture_y_source_location(ctx) -> None:
     tx = ctx._i_will_not_complain_if_bc_breaks_InstructionTranslator()
     y_vt = tx.symbolic_locals.get("y")
-    if y_vt is not None and y_vt.source_loc is not None:
-        _source_loc_capture["source_loc"] = y_vt.source_loc
+    if y_vt is not None and y_vt.source_location is not None:
+        _source_location_capture["source_location"] = y_vt.source_location
 
 
 def _unsupported_error_source_attribution() -> str:
@@ -443,49 +443,51 @@ Failed Source Expressions:
         )
 
     def test_source_location_format_no_col_info(self):
-        loc = SourceLocation(filename=__file__, lineno=1)
-        result = loc.format()
+        source_location = SourceLocation(filename=__file__, lineno=1)
+        result = source_location.format()
         self.assertIn(f'File "{__file__}", line 1', result)
         self.assertNotIn("^", result)
 
     def test_source_location_format_with_col_info(self):
-        loc = SourceLocation(
+        source_location = SourceLocation(
             filename=__file__,
             lineno=1,
             end_lineno=1,
             col_offset=0,
             end_col_offset=10,
         )
-        result = loc.format()
+        result = source_location.format()
         self.assertIn(f'File "{__file__}", line 1', result)
         self.assertIn("^" * 10, result)
 
     def test_source_location_format_without_source_line(self):
-        loc = SourceLocation(
+        source_location = SourceLocation(
             filename="<string>",
             lineno=1,
             end_lineno=1,
             col_offset=0,
             end_col_offset=10,
         )
-        result = loc.format()
+        result = source_location.format()
         self.assertEqual(result, '  File "<string>", line 1\n')
 
-    def test_vt_source_loc_set_during_tracing(self):
-        _source_loc_capture.clear()
+    def test_vt_source_location_set_during_tracing(self):
+        _source_location_capture.clear()
 
         def fn(x):
             y = x + 1
-            comptime(_capture_y_source_loc)
+            comptime(_capture_y_source_location)
             return y
 
         torch.compile(fn, backend="eager")(torch.ones(3))
 
-        loc = _source_loc_capture.get("source_loc")
-        self.assertIsNotNone(loc)
-        loc = cast(SourceLocation, loc)
-        self.assertEqual(loc.filename, __file__.replace(".pyc", ".py"))
-        self.assertIsNotNone(loc.lineno)
+        source_location = _source_location_capture.get("source_location")
+        self.assertIsNotNone(source_location)
+        source_location = cast(SourceLocation, source_location)
+        self.assertEqual(
+            source_location.filename, __file__.replace(".pyc", ".py")
+        )
+        self.assertIsNotNone(source_location.lineno)
 
     @make_logging_test(graph_breaks=True)
     def test_graph_break_source_attribution_on_stack(self, records):
