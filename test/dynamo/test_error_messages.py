@@ -1,5 +1,6 @@
 # Owner(s): ["module: dynamo"]
 
+import dis
 import logging
 import re
 import sys
@@ -42,6 +43,20 @@ class GenericCtxMgr:
 
     def __exit__(self, exc_type, exc_value, traceback):
         pass
+
+
+def _get_iter_has_positions() -> bool:
+    """Whether GET_ITER bytecodes have position info on this Python build.
+
+    This varies across Python 3.12 point releases / platforms — some builds
+    include positions for GET_ITER and some don't, which affects whether
+    RangeIteratorVariable gets source attribution.
+    """
+    code = compile("for x in range(1): pass", "<test>", "exec")
+    for inst in dis.get_instructions(code):
+        if inst.opname == "GET_ITER":
+            return inst.positions is not None and inst.positions.lineno is not None
+    return False
 
 
 def _generic_ctx_mgr_stack_source_attribution() -> str:
@@ -100,7 +115,7 @@ def _reconstruction_failure_gb_stack_source_attribution() -> str:
 
 
 def _graph_break_in_loop_stack_source_attribution() -> str:
-    if sys.version_info >= (3, 14):
+    if sys.version_info >= (3, 11) and _get_iter_has_positions():
         return (
             "Stack variable source attribution:\n"
             "  RangeIteratorVariable() originated from:\n"
@@ -123,7 +138,7 @@ def _graph_break_in_loop_stack_source_attribution() -> str:
 
 
 def _skip_frame_in_loop_message_stack_source_attribution() -> str:
-    if sys.version_info >= (3, 14):
+    if sys.version_info >= (3, 11) and _get_iter_has_positions():
         return (
             "Stack variable source attribution:\n"
             "  RangeIteratorVariable() originated from:\n"
