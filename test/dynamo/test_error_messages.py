@@ -91,11 +91,40 @@ def _assert_failure_stack_source_attribution() -> str:
     )
 
 
+def _load_global_has_positions() -> bool:
+    """Whether LOAD_GLOBAL bytecodes have position info on this Python build.
+
+    This varies across Python 3.12 point releases / platforms — some builds
+    include positions for LOAD_GLOBAL and some don't, which affects whether
+    NullVariable (pushed as part of LOAD_GLOBAL's call convention) gets
+    source attribution.
+    """
+    code = compile("def f(): x()", "<test>", "exec")
+    for const in code.co_consts:
+        if hasattr(const, "co_code"):
+            for inst in dis.get_instructions(const):
+                if inst.opname == "LOAD_GLOBAL":
+                    return (
+                        inst.positions is not None and inst.positions.lineno is not None
+                    )
+    return False
+
+
 def _reconstruction_failure_gb_stack_source_attribution() -> str:
     if sys.version_info >= (3, 14):
         return (
             "Stack variable source attribution:\n"
             "  LazyVariableTracker(realized: SkipFunctionVariable()) originated from:\n"
+            '  File "test_error_messages.py", line N\n'
+            "                torch._dynamo.graph_break()\n"
+            "^^^^^^^^^^^^^^^^^^^^^^^^^\n"
+            "\n"
+        )
+
+    if sys.version_info >= (3, 11) and _load_global_has_positions():
+        return (
+            "Stack variable source attribution:\n"
+            "  NullVariable originated from:\n"
             '  File "test_error_messages.py", line N\n'
             "                torch._dynamo.graph_break()\n"
             "^^^^^^^^^^^^^^^^^^^^^^^^^\n"
