@@ -9,31 +9,8 @@ import torch
 from torch.fx.immutable_collections import immutable_dict, immutable_list
 
 
-__all__ = [
-    "Block",
-    "Branch",
-    "DictSpec",
-    "Graph",
-    "Instruction",
-    "Jump",
-    "ListSpec",
-    "Literal",
-    "Location",
-    "ObjectSpec",
-    "OptionalSpec",
-    "Return",
-    "ScalarSpec",
-    "Spec",
-    "Successor",
-    "TensorSpec",
-    "TupleSpec",
-    "ValidationError",
-    "Value",
-    "literal",
-]
-
-
 Dimension: TypeAlias = int | torch.SymInt
+NestedSize: TypeAlias = tuple[tuple[Dimension, ...], ...]
 _SCALAR_TYPES = (
     bool,
     int,
@@ -91,31 +68,54 @@ class Spec(ABC):
 
 @dataclass(frozen=True, slots=True)
 class TensorSpec(Spec):
-    shape: tuple[Dimension, ...]
+    shape: tuple[Dimension, ...] | None
     dtype: torch.dtype
     device: torch.device
     stride: tuple[Dimension, ...] | None = None
+    nested_size: NestedSize | None = None
     requires_grad: bool = False
 
     @classmethod
     def from_tensor(cls, tensor: torch.Tensor) -> "TensorSpec":
+        shape: tuple[Dimension, ...] | None
+        nested_size: NestedSize | None = None
+        if tensor.is_nested:
+            try:
+                shape = tuple(tensor.shape)
+            except RuntimeError:
+                shape = None
+                nested_size = tuple(
+                    tuple(int(dim) for dim in size)
+                    for size in tensor._nested_tensor_size().tolist()
+                )
+        else:
+            shape = tuple(tensor.shape)
+
         stride = (
             None
             if tensor.is_sparse or tensor.is_nested
             else tuple(tensor.stride())
         )
         return cls(
-            shape=tuple(tensor.shape),
+            shape=shape,
             dtype=tensor.dtype,
             device=tensor.device,
             stride=stride,
+            nested_size=nested_size,
             requires_grad=tensor.requires_grad,
         )
 
     def format(self) -> str:
-        shape = ", ".join(str(dim) for dim in self.shape)
         dtype = str(self.dtype).removeprefix("torch.")
-        pieces = [f"dtype={dtype}", f"shape=({shape})", f"device={self.device}"]
+        pieces = [f"dtype={dtype}"]
+        if self.shape is not None:
+            shape = ", ".join(str(dim) for dim in self.shape)
+            pieces.append(f"shape=({shape})")
+        elif self.nested_size is not None:
+            pieces.append(f"nested_size={self.nested_size}")
+        else:
+            pieces.append("shape=<unknown>")
+        pieces.append(f"device={self.device}")
         if self.requires_grad:
             pieces.append("requires_grad=True")
         return f"Tensor[{', '.join(pieces)}]"

@@ -30,7 +30,9 @@ def from_fx(graph: FxGraph | GraphModule, *, name: str | None = None) -> Graph:
 
     The adapter normalizes FX's metadata conventions into a single ``Value.spec``
     field, so downstream code never needs to branch on ``node.meta["val"]``
-    versus ``node.meta["example_value"]``.
+    versus ``node.meta["example_value"]``. It intentionally preserves FX
+    operations verbatim inside one block; higher-order control-flow operators
+    remain opaque instructions until a dedicated structured lowering is added.
     """
 
     fx_graph = graph.graph if isinstance(graph, GraphModule) else graph
