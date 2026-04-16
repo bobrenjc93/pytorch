@@ -121,10 +121,6 @@ prim = torch.ops.prim
 log = logging.getLogger(__name__)
 not_implemented_log = torch._logging.getArtifactLogger(__name__, "not_implemented")
 
-CURRENT_DECOMPOSITION_TABLE: contextvars.ContextVar[
-    Mapping[OpOverload, Callable[..., Any]]
-] = contextvars.ContextVar("CURRENT_DECOMPOSITION_TABLE")
-
 CONSTANT_NUMEL_LIMIT = 1
 
 T = TypeVar("T")
@@ -164,13 +160,13 @@ def fake_signature(fn: Callable[_P, R], nargs: int) -> Callable[_P, R]:
 @contextmanager
 def decompose(
     decomposition_table: Mapping[OpOverload, Callable[..., Any]] | None,
+    proxy_mode: ProxyTorchDispatchMode | None = None,
 ) -> Generator[Mapping[OpOverload, Callable[..., Any]], None, None]:
-    table = decomposition_table or {}
-    token = CURRENT_DECOMPOSITION_TABLE.set(table)
-    try:
+    mode = proxy_mode or get_proxy_mode()
+    if mode is None:
+        raise AssertionError("Expected proxy mode to be set")
+    with mode.enable_decompositions(decomposition_table) as table:
         yield table
-    finally:
-        CURRENT_DECOMPOSITION_TABLE.reset(token)
 
 
 # ensure we cannot collide with other properties
@@ -1932,6 +1928,7 @@ class ProxyTorchDispatchMode(TorchDispatchMode):
         self,
         tracer: _ProxyTracer,
         tracing_mode: _TracingMode,
+        decomposition_table: Mapping[OpOverload, Callable[..., Any]] | None = None,
         pre_dispatch: bool = False,
         _allow_fake_constant: bool = False,
         _error_on_data_dependent_ops: bool = True,
@@ -1950,6 +1947,12 @@ class ProxyTorchDispatchMode(TorchDispatchMode):
         # ProxyTorchDispatchMode state was (if there was any).
         # This lets us properly reset the state on exit.
         self.enter_stack: list[ProxyTorchDispatchMode | None] = []
+        self.decomposition_table: Mapping[OpOverload, Callable[..., Any]] = (
+            decomposition_table or {}
+        )
+        self._decomposition_table_stack: list[
+            Mapping[OpOverload, Callable[..., Any]]
+        ] = []
         self.decomp_layers: int = 0
         # See invoke_subgraph
         self._invoke_subgraph_names: set[str] = set()
@@ -2000,6 +2003,19 @@ class ProxyTorchDispatchMode(TorchDispatchMode):
     @classmethod
     def is_infra_mode(cls) -> bool:
         return True
+
+    @contextmanager
+    def enable_decompositions(
+        self,
+        decomposition_table: Mapping[OpOverload, Callable[..., Any]] | None,
+    ) -> Generator[Mapping[OpOverload, Callable[..., Any]], None, None]:
+        table = decomposition_table or {}
+        self._decomposition_table_stack.append(self.decomposition_table)
+        self.decomposition_table = table
+        try:
+            yield table
+        finally:
+            self.decomposition_table = self._decomposition_table_stack.pop()
 
     def __sym_dispatch__(
         self,
@@ -2107,7 +2123,11 @@ class DecompositionInterpreter(fx.Interpreter):
         self.tracer = _GraphAppendingTracerEx(self.new_graph)
         # Blegh
         self.decomposition_table = decomposition_table or {}
-        self.mode = ProxyTorchDispatchMode(self.tracer, tracing_mode="real")
+        self.mode = ProxyTorchDispatchMode(
+            self.tracer,
+            tracing_mode="real",
+            decomposition_table=self.decomposition_table,
+        )
 
     # pyrefly: ignore [bad-override]
     def placeholder(
@@ -2157,7 +2177,7 @@ class DecompositionInterpreter(fx.Interpreter):
     def run(self, *args: object, **kwargs: object) -> object:
         # Should enter the mode at least once for being able to restore it later
         # See: https://github.com/pytorch/pytorch/pull/82549#discussion_r934782025
-        with decompose(self.decomposition_table), self.mode:
+        with self.mode:
             return super().run(*args, **kwargs)  # type: ignore[arg-type]
 
 
@@ -2214,7 +2234,10 @@ class _SelectiveDecomposeInterpreter(fx.Interpreter):
 
     def run_node(self, n: fx.Node) -> Any:
         if self.should_decompose(n):
-            with decompose(self.decomposition_table):
+            mode = get_proxy_mode()
+            if mode is None:
+                raise AssertionError("Expected proxy mode to be set")
+            with decompose(self.decomposition_table, proxy_mode=mode):
                 result = super().run_node(n)
         else:
             result = super().run_node(n)
@@ -2734,6 +2757,7 @@ class _MakefxTracer:
         self.proxy_mode = ProxyTorchDispatchMode(
             fx_tracer,
             self.tracing_mode,
+            decomposition_table=self.decomposition_table,
             pre_dispatch=self.pre_dispatch,
             _allow_fake_constant=self._allow_fake_constant,
             _error_on_data_dependent_ops=self._error_on_data_dependent_ops,
@@ -2860,7 +2884,6 @@ class _MakefxTracer:
             ProxyTorchDispatchMode, self.proxy_mode
         )
         with ExitStack() as stack:
-            stack.enter_context(decompose(self.decomposition_table))
             if self.fake_tensor_mode:
                 stack.enter_context(self.fake_tensor_mode)
             stack.enter_context(self.python_dispatcher_mode)
@@ -3074,7 +3097,7 @@ def maybe_handle_decomp(
 ) -> object:
     from torch._inductor.compiler_bisector import CompilerBisector
 
-    decomp_table = CURRENT_DECOMPOSITION_TABLE.get({})
+    decomp_table = proxy_mode.decomposition_table
     if op in decomp_table:
         if CompilerBisector.disable_subsystem(
             "aot_eager_decomp_partition", "decomposition", lambda: repr(op)
