@@ -4,6 +4,8 @@ Typed control-flow graphs for PyTorch.
 ``torch.cfg`` is a small, principled IR for analyses and transforms that need
 explicit basic blocks and typed values. Unlike FX nodes, semantic metadata lives
 in a single ``Value.spec`` field instead of an open-ended ``meta`` dictionary.
+Value names are globally unique across a graph, even across blocks, so textual
+rendering and validation can use them as stable identifiers.
 
 Example:
 
@@ -62,6 +64,7 @@ Example:
 
 from .fx import from_fx
 from .ir import (
+    _IR_PUBLIC_API as _IR_PUBLIC_API,
     Block,
     Branch,
     DictSpec,
@@ -85,26 +88,4 @@ from .ir import (
 )
 
 
-__all__ = [
-    "Block",
-    "Branch",
-    "DictSpec",
-    "Graph",
-    "Instruction",
-    "Jump",
-    "ListSpec",
-    "Literal",
-    "Location",
-    "ObjectSpec",
-    "OptionalSpec",
-    "Return",
-    "ScalarSpec",
-    "Spec",
-    "Successor",
-    "TensorSpec",
-    "TupleSpec",
-    "ValidationError",
-    "Value",
-    "from_fx",
-    "literal",
-]
+__all__ = [*_IR_PUBLIC_API, "from_fx"]

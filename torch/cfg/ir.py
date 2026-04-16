@@ -1,9 +1,8 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
-from typing import Any, TypeAlias
+from typing import Any, Iterable, Mapping, TypeAlias
 
 import torch
 from torch.fx.immutable_collections import immutable_dict, immutable_list
@@ -27,6 +26,30 @@ _SCALAR_TYPES = (
     torch.memory_format,
 )
 
+_IR_PUBLIC_API = (
+    "Block",
+    "Branch",
+    "DictSpec",
+    "Graph",
+    "Instruction",
+    "Jump",
+    "ListSpec",
+    "Literal",
+    "Location",
+    "ObjectSpec",
+    "OptionalSpec",
+    "Return",
+    "ScalarSpec",
+    "Spec",
+    "Successor",
+    "TensorSpec",
+    "TupleSpec",
+    "ValidationError",
+    "Value",
+    "literal",
+)
+__all__ = list(_IR_PUBLIC_API)
+
 
 class ValidationError(ValueError):
     """Raised when a :class:`Graph` violates CFG invariants."""
@@ -41,7 +64,7 @@ class Spec(ABC):
     """
 
     @staticmethod
-    def from_value(value: object) -> "Spec":
+    def from_value(value: object) -> Spec:
         if isinstance(value, torch.Tensor):
             return TensorSpec.from_tensor(value)
         if value is None:
@@ -76,7 +99,7 @@ class TensorSpec(Spec):
     requires_grad: bool = False
 
     @classmethod
-    def from_tensor(cls, tensor: torch.Tensor) -> "TensorSpec":
+    def from_tensor(cls, tensor: torch.Tensor) -> TensorSpec:
         shape: tuple[Dimension, ...] | None
         nested_size: NestedSize | None = None
         if tensor.is_nested:
@@ -84,6 +107,8 @@ class TensorSpec(Spec):
                 shape = tuple(tensor.shape)
             except RuntimeError:
                 shape = None
+                # Nested tensor sizes are still exposed through a private API
+                # until nested tensor metadata is fully stabilized.
                 nested_size = tuple(
                     tuple(int(dim) for dim in size)
                     for size in tensor._nested_tensor_size().tolist()
@@ -189,6 +214,7 @@ class Literal:
 
 def literal(value: object, spec: Spec | None = None) -> Literal:
     return Literal(value=value, spec=spec)
+
 
 @dataclass(frozen=True, slots=True)
 class Value:
@@ -380,6 +406,13 @@ class Block:
 
 @dataclass(frozen=True, slots=True)
 class Graph:
+    """
+    Immutable block-based CFG.
+
+    Value names are globally unique across the whole graph, even across blocks,
+    so textual rendering and validation can use them as stable identifiers.
+    """
+
     name: str
     entry: str
     blocks: tuple[Block, ...]
@@ -567,7 +600,7 @@ def _iter_values(argument: Argument) -> Iterable[Value]:
         return
     if isinstance(argument, Literal) or argument is None:
         return
-    if isinstance(argument, tuple) or isinstance(argument, list):
+    if isinstance(argument, (tuple, list)):
         for elem in argument:
             yield from _iter_values(elem)
         return
