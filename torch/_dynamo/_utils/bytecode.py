@@ -26,7 +26,7 @@ def _fix_offset(str: str, offset: int) -> int:
     return len(as_utf8[:offset].decode("utf-8", errors="replace"))
 
 
-@dataclasses.dataclass
+@dataclasses.dataclass(frozen=True)
 class _Anchors:
     # inclusive
     left_end_lineno: int
