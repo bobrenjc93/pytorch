@@ -8,6 +8,10 @@ and users can easily apply any of these hooks to optimize communication.
 Besides, the hook interface can also support user-defined communication
 strategies for more advanced use cases.
 
+For a design-oriented example of packaging chunk-overlapped
+compute/communication work as a custom operator, see
+[Custom Compute/Communication Overlap Kernels](distributed.custom_compute_comm_overlap).
+
 ## How to Use a Communication Hook?
 
 To use a communication hook, the user just needs to let the DDP model register

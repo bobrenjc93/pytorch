@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1150" height="390" viewBox="0 0 1150 390" role="img" aria-labelledby="title desc">
+  <title id="title">Integration boundaries for overlap work</title>
+  <desc id="desc">Three side-by-side boxes compare using a Python communication hook, a custom operator, or a backend extension.</desc>
+  <style>
+    .bg { fill: #fcfcfb; }
+    .title { font: 700 24px sans-serif; fill: #1f2328; }
+    .card { fill: #ffffff; stroke: #c7d0d9; stroke-width: 1.4; rx: 16; ry: 16; }
+    .head { font: 700 18px sans-serif; fill: #1f2328; }
+    .text { font: 500 13px sans-serif; fill: #434a54; }
+    .accent1 { fill: #2f80ed; }
+    .accent2 { fill: #ef8d32; }
+    .accent3 { fill: #3aa675; }
+    .arrow { stroke: #7c8791; stroke-width: 2; fill: none; }
+  </style>
+
+  <rect class="bg" width="1150" height="390" rx="18" ry="18"/>
+  <text class="title" x="48" y="44">Where to own the overlap logic</text>
+
+  <rect class="card" x="48" y="90" width="320" height="250"/>
+  <rect class="accent1" x="48" y="90" width="320" height="16" rx="16" ry="16"/>
+  <text class="head" x="74" y="138">Python comm hook</text>
+  <text class="text" x="74" y="176">Use when you want the lowest-barrier prototype</text>
+  <text class="text" x="74" y="200">and you can keep using existing collectives.</text>
+  <text class="text" x="74" y="236">Best for:</text>
+  <text class="text" x="94" y="260">bucket ordering</text>
+  <text class="text" x="94" y="282">callback orchestration</text>
+  <text class="text" x="94" y="304">quick experiments</text>
+
+  <rect class="card" x="415" y="90" width="320" height="250"/>
+  <rect class="accent2" x="415" y="90" width="320" height="16" rx="16" ry="16"/>
+  <text class="head" x="441" y="138">Custom operator</text>
+  <text class="text" x="441" y="176">Use when one fused launcher should own</text>
+  <text class="text" x="441" y="200">chunking, streams, events, and launch order.</text>
+  <text class="text" x="441" y="236">Best for:</text>
+  <text class="text" x="461" y="260">stream orchestration</text>
+  <text class="text" x="461" y="282">event dependencies</text>
+  <text class="text" x="461" y="304">opaque compiler boundary</text>
+
+  <rect class="card" x="782" y="90" width="320" height="250"/>
+  <rect class="accent3" x="782" y="90" width="320" height="16" rx="16" ry="16"/>
+  <text class="head" x="808" y="138">Backend extension</text>
+  <text class="text" x="808" y="176">Use when you need to own communicator state,</text>
+  <text class="text" x="808" y="200">transport, or backend lifecycle.</text>
+  <text class="text" x="808" y="236">Best for:</text>
+  <text class="text" x="828" y="260">custom collective transport</text>
+  <text class="text" x="828" y="282">communicator lookup</text>
+  <text class="text" x="828" y="304">backend-specific runtime state</text>
+
+  <line class="arrow" x1="368" y1="215" x2="415" y2="215"/>
+  <polygon points="415,215 401,208 401,222" fill="#7c8791"/>
+  <line class="arrow" x1="735" y1="215" x2="782" y2="215"/>
+  <polygon points="782,215 768,208 768,222" fill="#7c8791"/>
+</svg>
