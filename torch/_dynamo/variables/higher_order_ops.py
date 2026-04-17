@@ -614,6 +614,88 @@ def collect_intermediate_outputs(
     return extra_outputs
 
 
+def _collect_proxyable_output_vts(
+    output: VariableTracker,
+    side_effects: Any,
+) -> tuple[VariableTracker, ...]:
+    graph_output_vt_list = []
+
+    def visit(vt: VariableTracker) -> None:
+        if vt.is_tensor() or isinstance(
+            vt, (SymNodeVariable, TorchScriptObjectVariable)
+        ):
+            graph_output_vt_list.append(vt)
+
+    VariableTracker.visit(visit, output, side_effects=side_effects)
+    return tuple(graph_output_vt_list)
+
+
+def _maybe_get_tensor_storages(
+    vt: VariableTracker,
+) -> set[StorageWeakRef] | None:
+    if not vt.is_tensor():
+        return None
+
+    example_value = vt.as_proxy().node.meta.get("example_value")
+    if not isinstance(example_value, torch.Tensor):
+        return None
+
+    try:
+        return get_tensor_storages(example_value)
+    except NotImplementedError:
+        return None
+
+
+def _rewrite_graph_outputs(
+    graph: torch.fx.Graph,
+    graph_output_vts: Sequence[VariableTracker],
+) -> None:
+    output_node = next(node for node in graph.nodes if node.op == "output")
+    output_node.args = (tuple(vt.as_proxy().node for vt in graph_output_vts),)
+    graph.lint()
+
+
+def _prune_aliased_extra_outputs(
+    graph: torch.fx.Graph,
+    user_output_vts: Sequence[VariableTracker],
+    graph_output_vts: Sequence[VariableTracker],
+) -> tuple[VariableTracker, ...]:
+    if len(graph_output_vts) <= len(user_output_vts):
+        return tuple(graph_output_vts)
+
+    deduped_graph_output_vts = list(user_output_vts)
+    tracked_storages: list[tuple[set[StorageWeakRef], VariableTracker]] = []
+
+    for vt in user_output_vts:
+        storages = _maybe_get_tensor_storages(vt)
+        if storages is not None:
+            tracked_storages.append((storages, vt))
+
+    pruned_any = False
+    for vt in graph_output_vts[len(user_output_vts) :]:
+        storages = _maybe_get_tensor_storages(vt)
+        replacement = None
+        if storages is not None:
+            for existing_storages, existing_vt in tracked_storages:
+                if storages & existing_storages:
+                    replacement = existing_vt
+                    break
+
+        if replacement is not None:
+            vt.proxy = replacement.proxy  # type: ignore[attr-defined]
+            pruned_any = True
+            continue
+
+        deduped_graph_output_vts.append(vt)
+        if storages is not None:
+            tracked_storages.append((storages, vt))
+
+    if pruned_any:
+        _rewrite_graph_outputs(graph, deduped_graph_output_vts)
+
+    return tuple(deduped_graph_output_vts)
+
+
 def _check_all_tensorvariable(args: Sequence[VariableTracker]) -> None:
     if not all(type(a.realize()) is TensorVariable for a in args):
         unimplemented(
@@ -1708,16 +1790,9 @@ def speculate_subgraph_with_auto_output_flattening(
             # be actual FX graph outputs.
             # Collect only tensor and symint VTs that should be graph outputs.
             # We walk the output structure and extract proxyable VTs.
-            graph_output_vt_list = []
-
-            def visit(vt: VariableTracker) -> None:
-                if vt.is_tensor() or isinstance(
-                    vt, (SymNodeVariable, TorchScriptObjectVariable)
-                ):
-                    graph_output_vt_list.append(vt)
-
-            VariableTracker.visit(visit, output, side_effects=tx.output.side_effects)
-            graph_output_vts = tuple(graph_output_vt_list)
+            graph_output_vts = _collect_proxyable_output_vts(
+                output, tx.output.side_effects
+            )
 
             # NOTE - [Return subgraph intermediates as subgraph outputs]
             # This helps HOPs which allow side effects. Consider the
@@ -4767,6 +4842,14 @@ class AutogradFunctionApplyVariable(VariableTracker):
                 allow_side_effects=True,
                 tracer=fwd_tracer,
             )
+        )
+        fwd_user_output_vts = _collect_proxyable_output_vts(
+            fwd_out, tx.output.side_effects
+        )
+        fwd_graph_output_vts = _prune_aliased_extra_outputs(
+            fwd_graph,
+            fwd_user_output_vts,
+            cast(tuple[VariableTracker, ...], fwd_graph_output_vts),
         )
 
         # There could be unused inputs in the forward, and Dynamo might not

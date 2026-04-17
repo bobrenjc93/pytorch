@@ -1972,6 +1972,31 @@ class GraphModule(torch.nn.Module):
 """,
         )
 
+    def test_inplace_forward_mutation_keeps_correct_grad(self):
+        class Foo(torch.autograd.Function):
+            @staticmethod
+            def forward(ctx, x):
+                loss = torch.tensor(0.0, device=x.device)
+                loss += x.sum()
+                return loss
+
+            @staticmethod
+            def backward(ctx, grad):
+                return grad.expand(8)
+
+        def fn(x):
+            return Foo.apply(x)
+
+        x = torch.randn(8, requires_grad=True)
+
+        x_ref = x.detach().clone().requires_grad_(True)
+        fn(x_ref).backward()
+
+        x_compiled = x.detach().clone().requires_grad_(True)
+        torch.compile(fn, backend="eager", fullgraph=True)(x_compiled).backward()
+
+        self.assertEqual(x_ref.grad, x_compiled.grad)
+
     def test_nn_module_dataclasses_as_inputs(self):
         @dataclass
         class InputData:
