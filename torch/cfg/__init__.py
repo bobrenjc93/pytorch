@@ -7,8 +7,12 @@ in a single ``Value.spec`` field instead of an open-ended ``meta`` dictionary.
 Value names are globally unique across a graph, even across blocks, so textual
 rendering and validation can use them as stable identifiers.
 
-Example:
+Example
+-------
 
+.. code-block:: python
+
+    import torch
     import torch.cfg as cfg
 
     x = cfg.Value("x", cfg.TensorSpec.from_tensor(torch.randn(2, 3)))
@@ -64,7 +68,6 @@ Example:
 
 from .fx import from_fx
 from .ir import (
-    _IR_PUBLIC_API as _IR_PUBLIC_API,
     Block,
     Branch,
     DictSpec,
@@ -87,5 +90,26 @@ from .ir import (
     literal,
 )
 
-
-__all__ = [*_IR_PUBLIC_API, "from_fx"]
+__all__ = [
+    "Block",
+    "Branch",
+    "DictSpec",
+    "Graph",
+    "Instruction",
+    "Jump",
+    "ListSpec",
+    "Literal",
+    "Location",
+    "ObjectSpec",
+    "OptionalSpec",
+    "Return",
+    "ScalarSpec",
+    "Spec",
+    "Successor",
+    "TensorSpec",
+    "TupleSpec",
+    "ValidationError",
+    "Value",
+    "literal",
+    "from_fx",
+]

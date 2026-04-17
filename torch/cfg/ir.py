@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any, Iterable, Mapping, TypeAlias
+from typing import TYPE_CHECKING, Any, TypeAlias
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable, Mapping
 
 import torch
 from torch.fx.immutable_collections import immutable_dict, immutable_list
@@ -117,9 +120,7 @@ class TensorSpec(Spec):
             shape = tuple(tensor.shape)
 
         stride = (
-            None
-            if tensor.is_sparse or tensor.is_nested
-            else tuple(tensor.stride())
+            None if tensor.is_sparse or tensor.is_nested else tuple(tensor.stride())
         )
         return cls(
             shape=shape,

@@ -98,7 +98,10 @@ def _convert_argument(argument: Any, values: dict[Node, Value]) -> Any:
     if isinstance(argument, list):
         return [_convert_argument(elem, values) for elem in argument]
     if isinstance(argument, dict):
-        return {str(key): _convert_argument(value, values) for key, value in argument.items()}
+        return {
+            str(key): _convert_argument(value, values)
+            for key, value in argument.items()
+        }
     if isinstance(argument, slice):
         return slice(
             _convert_argument(argument.start, values),
