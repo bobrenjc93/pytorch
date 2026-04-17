@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1240" height="540" viewBox="0 0 1240 540" role="img" aria-labelledby="title desc">
+  <title id="title">Dynamo bytecode arrangement for FlexAttention</title>
+  <desc id="desc">Representative original and rewritten bytecode around a FlexAttention compiled region.</desc>
+  <style>
+    .bg { fill: #fffdf7; }
+    .card { fill: #ffffff; stroke: #1f2937; stroke-width: 2; rx: 20; ry: 20; }
+    .title { font: 700 30px DejaVu Sans, Arial, sans-serif; fill: #111827; }
+    .subtitle { font: 700 20px DejaVu Sans, Arial, sans-serif; fill: #111827; }
+    .body { font: 16px DejaVu Sans, Arial, sans-serif; fill: #334155; }
+    .codebox { fill: #0f172a; stroke: #1e293b; stroke-width: 2; rx: 16; ry: 16; }
+    .code { font: 16px DejaVu Sans Mono, monospace; fill: #e5eefc; }
+    .accent { fill: #dbeafe; stroke: #2563eb; stroke-width: 1.5; rx: 12; ry: 12; }
+    .muted { fill: #64748b; }
+  </style>
+
+  <rect class="bg" x="0" y="0" width="1240" height="540"/>
+  <text class="title" x="40" y="48">Dynamo rewrites the outer Python frame around the compiled FlexAttention region</text>
+
+  <rect class="card" x="40" y="82" width="540" height="354" rx="20" ry="20"/>
+  <text class="subtitle" x="64" y="118">Representative original frame</text>
+  <rect class="codebox" x="64" y="146" width="492" height="248" rx="16" ry="16"/>
+  <text class="code" x="88" y="186">LOAD_FAST        q</text>
+  <text class="code" x="88" y="216">LOAD_FAST        k</text>
+  <text class="code" x="88" y="246">LOAD_FAST        v</text>
+  <text class="code" x="88" y="276">LOAD_FAST        block_mask</text>
+  <text class="code" x="88" y="306">LOAD_GLOBAL      flex_attention</text>
+  <text class="code" x="88" y="336">CALL_FUNCTION    4</text>
+  <text class="code" x="88" y="366">RETURN_VALUE</text>
+  <text class="body muted" x="64" y="416">Before tracing, the function still looks like a plain Python call site.</text>
+
+  <rect class="card" x="660" y="82" width="540" height="354" rx="20" ry="20"/>
+  <text class="subtitle" x="684" y="118">Representative rewritten frame</text>
+  <rect class="codebox" x="684" y="146" width="492" height="248" rx="16" ry="16"/>
+  <text class="code" x="708" y="186">LOAD_GLOBAL      __compiled_fn_0</text>
+  <text class="code" x="708" y="216">LOAD_FAST        q</text>
+  <text class="code" x="708" y="246">LOAD_FAST        k</text>
+  <text class="code" x="708" y="276">LOAD_FAST        v</text>
+  <text class="code" x="708" y="306">LOAD_FAST        block_mask</text>
+  <text class="code" x="708" y="336">CALL_FUNCTION    4</text>
+  <text class="code" x="708" y="366">UNPACK_SEQUENCE  1  ; then return</text>
+
+  <rect class="accent" x="884" y="184" width="264" height="84" rx="12" ry="12"/>
+  <text class="body" x="902" y="214">Captured subgraphs travel next to</text>
+  <text class="body" x="902" y="238">the compiled callable as attributes</text>
+  <text class="code" x="902" y="258">sdpa_score0, sdpa_mask0</text>
+
+  <text class="body muted" x="684" y="416">The rewritten frame jumps through a compiled callable and leaves room</text>
+  <text class="body muted" x="684" y="438">for guard checks, cached code objects, and continuation helpers.</text>
+
+  <rect class="accent" x="40" y="458" width="1160" height="54" rx="12" ry="12"/>
+  <text class="body" x="64" y="490">If the function contains graph breaks, Dynamo also emits `__resume_at_&lt;offset&gt;` helpers that restart tracing from the next Python frame boundary.</text>
+</svg>
