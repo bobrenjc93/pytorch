@@ -2,6 +2,7 @@
 
 import linecache
 import os
+import re
 import sys
 import tempfile
 import unittest
@@ -60,6 +61,17 @@ Stack variable source attribution:
                 return {1, 2}
 ^
 """
+
+
+def _munge_with_normalized_markers(message: str) -> str:
+    munged = munge_exc(message, suppress_suffix=True, skip=0)
+    # CPython 3.13+ can use mixed `~`/`^` marker lines for the same source span.
+    return re.sub(
+        r"^[ ]+([~^]+)$",
+        lambda match: "^" * len(match.group(1)),
+        munged,
+        flags=re.MULTILINE,
+    )
 
 
 class ExcTests(LoggingTestCase):
@@ -215,7 +227,7 @@ from user code:
             "    return {1, 2}\n"
         )
 
-        self.assertEqual(munge_exc(record.getMessage()), expected)
+        self.assertEqual(_munge_with_normalized_markers(record.getMessage()), expected)
 
     @torch._dynamo.config.patch(suppress_errors=False)
     def test_internal_error_no_suppress(self):
@@ -492,11 +504,31 @@ Failed Source Expressions:
             os.unlink(source_path)
             linecache.clearcache()
 
-        self.assertIn(f'File "{source_path}", line 1', result)
-        self.assertIn("value = (", result)
-        self.assertIn("foo", result)
-        self.assertIn("+ bar", result)
-        self.assertIn("^", result)
+        if sys.version_info >= (3, 13):
+            expected = (
+                f'  File "{source_path}", line 1\n'
+                "    value = (\n"
+                "            ~\n"
+                "        foo\n"
+                "        ~~~\n"
+                "        + bar\n"
+                "        ^~~~~\n"
+                "    )\n"
+                "    ~\n"
+            )
+        else:
+            expected = (
+                f'  File "{source_path}", line 1\n'
+                "    value = (\n"
+                "            ^\n"
+                "        foo\n"
+                "        ^^^\n"
+                "        + bar\n"
+                "        ^^^^^\n"
+                "    )\n"
+                "    ^\n"
+            )
+        self.assertEqual(result, expected)
 
     def test_vt_source_location_set_during_tracing(self):
         _source_location_capture.clear()
