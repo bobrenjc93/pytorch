@@ -5,7 +5,7 @@ import linecache
 import sys
 import textwrap
 import traceback
-from typing import TYPE_CHECKING, Any, cast
+from typing import Any, cast, TYPE_CHECKING
 
 
 if TYPE_CHECKING:
@@ -262,9 +262,13 @@ def get_instruction_source_311(code: types.CodeType, inst: Instruction) -> str:
 
         # anchor positions do not take start_offset into account
         if anchors.left_end_lineno == 0:
-            anchors.left_end_offset += start_offset
+            anchors = dataclasses.replace(
+                anchors, left_end_offset=anchors.left_end_offset + start_offset
+            )
         if anchors.right_start_lineno == 0:
-            anchors.right_start_offset += start_offset
+            anchors = dataclasses.replace(
+                anchors, right_start_offset=anchors.right_start_offset + start_offset
+            )
 
         # Turn `~`` markers between anchors to `^`
         for lineno in range(len(markers)):

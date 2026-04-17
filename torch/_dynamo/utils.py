@@ -90,8 +90,6 @@ from ._utils.bytecode import (  # noqa: F401
     get_instruction_source_311,
 )
 from ._utils.nn_module import (  # noqa: F401
-    GmWrapper,
-    TensorStaticReason,
     all_hook_names,
     backward_hook_names,
     class_has_getattribute,
@@ -102,6 +100,7 @@ from ._utils.nn_module import (  # noqa: F401
     fqn,
     get_custom_getattr,
     get_locals_to_steal,
+    GmWrapper,
     import_submodule,
     invalid_removeable_handle,
     lazy_format_graph_tabular,
@@ -115,6 +114,7 @@ from ._utils.nn_module import (  # noqa: F401
     state_dict_hook_names,
     tensor_always_has_static_shape,
     tensor_static_reason_to_message,
+    TensorStaticReason,
 )
 from ._utils.tensor import (  # noqa: F401
     _copy_dynamo_attr,

@@ -9,12 +9,12 @@ import logging
 import re
 import time
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Any, Generic, TypeVar, overload
+from typing import Any, Generic, overload, TYPE_CHECKING, TypeVar
+from typing_extensions import TypeIs
 
 import torch
 from torch._subclasses.meta_utils import is_sparse_compressed
 from torch.utils._python_dispatch import is_traceable_wrapper_subclass
-from typing_extensions import TypeIs
 
 
 if TYPE_CHECKING:

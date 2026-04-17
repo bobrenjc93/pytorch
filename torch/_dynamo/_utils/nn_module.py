@@ -8,12 +8,12 @@ import inspect
 import os
 import types
 from collections import OrderedDict
-from typing import TYPE_CHECKING, Any, cast
+from typing import Any, cast, TYPE_CHECKING
 
 import torch
 import torch.utils._pytree as pytree
-from torch.fx._utils import _format_graph_code, lazy_format_graph_code
 from torch._logging import LazyString
+from torch.fx._utils import _format_graph_code, lazy_format_graph_code
 from torch.utils.hooks import RemovableHandle
 
 
