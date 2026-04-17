@@ -27,12 +27,10 @@ class TestUtils(TestCase):
     def test_numpy_type_helpers_require_exact_numpy_types(self):
         if np is None:
             self.skipTest("requires numpy")
-        int_subclass = type("IntSubclass", (np.int32,), {})
-        float_subclass = type("FloatSubclass", (np.float32,), {})
         self.assertTrue(utils.is_numpy_int_type(np.int32(1)))
-        self.assertFalse(utils.is_numpy_int_type(int_subclass(1)))
+        self.assertFalse(utils.is_numpy_int_type(type("I", (np.int32,), {})(1)))
         self.assertTrue(utils.is_numpy_float_type(np.float32(1)))
-        self.assertFalse(utils.is_numpy_float_type(float_subclass(1)))
+        self.assertFalse(utils.is_numpy_float_type(type("F", (np.single,), {})(1)))
 
     def test_nan(self):
         a = torch.Tensor([float("nan")])
