@@ -1,5 +1,6 @@
 # Owner(s): ["module: dynamo"]
 
+import linecache
 import os
 import sys
 import tempfile
@@ -482,12 +483,14 @@ Failed Source Expressions:
                 filename=source_path,
                 lineno=1,
                 end_lineno=4,
+                # Span covers the parenthesized expression `( ... )`.
                 col_offset=8,
                 end_col_offset=1,
             )
             result = source_location.format()
         finally:
             os.unlink(source_path)
+            linecache.clearcache()
 
         self.assertIn(f'File "{source_path}", line 1', result)
         self.assertIn("value = (", result)

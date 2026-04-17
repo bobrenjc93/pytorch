@@ -4713,9 +4713,14 @@ def format_source_range(
     if (
         sys.version_info >= (3, 13)
         and end_lineno is not None
+        and end_lineno != lineno
         and col_offset is not None
         and end_col_offset is not None
     ):
+        # Keep single-line ranges on Dynamo's manual path. The stdlib traceback
+        # formatter is useful for multiline spans on 3.13+, but for single-line
+        # spans it can emit version-specific mixed `~`/`^` markers or omit the
+        # marker line entirely for comments.
         frame_summary = traceback.FrameSummary(
             filename,
             lineno,
