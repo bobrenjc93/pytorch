@@ -1,0 +1,166 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="620" viewBox="0 0 1200 620" role="img" aria-labelledby="title desc">
+  <title id="title">FlexAttention BlockMask metadata</title>
+  <desc id="desc">Illustration of kv_num_blocks, kv_indices, full_kv metadata, and generated q metadata.</desc>
+  <style>
+    .bg { fill: #fffdf7; }
+    .card { fill: #ffffff; stroke: #1f2937; stroke-width: 2; rx: 20; ry: 20; }
+    .title { font: 700 30px DejaVu Sans, Arial, sans-serif; fill: #111827; }
+    .subtitle { font: 700 20px DejaVu Sans, Arial, sans-serif; fill: #111827; }
+    .body { font: 16px DejaVu Sans, Arial, sans-serif; fill: #334155; }
+    .code { font: 15px DejaVu Sans Mono, monospace; fill: #0f172a; }
+    .small { font: 14px DejaVu Sans, Arial, sans-serif; fill: #475569; }
+    .table { fill: #f8fafc; stroke: #94a3b8; stroke-width: 2; }
+    .grid { stroke: #cbd5e1; stroke-width: 1; }
+    .full { fill: #5b9b73; }
+    .partial { fill: #ebb44e; }
+    .pill { stroke: #1f2937; stroke-width: 1.2; rx: 10; ry: 10; }
+    .arrow { stroke: #2563eb; stroke-width: 4; fill: none; stroke-linecap: round; stroke-linejoin: round; }
+  </style>
+
+  <rect class="bg" x="0" y="0" width="1200" height="620"/>
+  <text class="title" x="40" y="48">`BlockMask` keeps a sparse schedule for forward and its transpose for backward</text>
+
+  <rect class="card" x="38" y="78" width="420" height="500" rx="20" ry="20"/>
+  <text class="subtitle" x="64" y="118">Per-row active block columns</text>
+  <text class="body" x="64" y="150">Forward walks block rows in Q order and stores only the active KV columns.</text>
+
+  <text class="code" x="70" y="212">q block 0</text>
+  <rect class="pill partial" x="180" y="192" width="74" height="28"/>
+  <text class="code" x="206" y="211">0</text>
+  <text class="small" x="266" y="211">partial</text>
+
+  <text class="code" x="70" y="274">q block 1</text>
+  <rect class="pill full" x="180" y="254" width="74" height="28"/>
+  <text class="code" x="206" y="273">0</text>
+  <text class="small" x="266" y="273">full</text>
+  <rect class="pill partial" x="330" y="254" width="74" height="28"/>
+  <text class="code" x="356" y="273">1</text>
+  <text class="small" x="416" y="273">partial</text>
+
+  <text class="code" x="70" y="336">q block 2</text>
+  <rect class="pill full" x="180" y="316" width="74" height="28"/>
+  <text class="code" x="206" y="335">0</text>
+  <rect class="pill full" x="258" y="316" width="74" height="28"/>
+  <text class="code" x="284" y="335">1</text>
+  <rect class="pill partial" x="336" y="316" width="74" height="28"/>
+  <text class="code" x="362" y="335">2</text>
+  <text class="small" x="180" y="362">full, full, partial</text>
+
+  <text class="code" x="70" y="398">q block 3</text>
+  <rect class="pill full" x="180" y="378" width="74" height="28"/>
+  <text class="code" x="206" y="397">0</text>
+  <rect class="pill full" x="258" y="378" width="74" height="28"/>
+  <text class="code" x="284" y="397">1</text>
+  <rect class="pill full" x="336" y="378" width="74" height="28"/>
+  <text class="code" x="362" y="397">2</text>
+  <rect class="pill partial" x="180" y="418" width="74" height="28"/>
+  <text class="code" x="206" y="437">3</text>
+  <text class="small" x="266" y="437">partial tail block</text>
+
+  <text class="body" x="64" y="510">`full_kv_*` is optional metadata. It marks tiles that do not need</text>
+  <text class="body" x="64" y="534">the per-element `mask_mod` check in the kernel.</text>
+
+  <path class="arrow" d="M 476 328 L 534 328"/>
+  <path class="arrow" d="M 520 314 L 540 328 L 520 342"/>
+
+  <rect class="card" x="558" y="78" width="604" height="500" rx="20" ry="20"/>
+  <text class="subtitle" x="584" y="118">Representative tensor layout inside `BlockMask`</text>
+
+  <rect class="table" x="584" y="150" width="220" height="116"/>
+  <text class="code" x="602" y="178">kv_num_blocks</text>
+  <line class="grid" x1="584" y1="194" x2="804" y2="194"/>
+  <line class="grid" x1="639" y1="194" x2="639" y2="266"/>
+  <line class="grid" x1="694" y1="194" x2="694" y2="266"/>
+  <line class="grid" x1="749" y1="194" x2="749" y2="266"/>
+  <text class="code" x="607" y="235">1</text>
+  <text class="code" x="662" y="235">2</text>
+  <text class="code" x="717" y="235">3</text>
+  <text class="code" x="772" y="235">4</text>
+
+  <rect class="table" x="824" y="150" width="314" height="202"/>
+  <text class="code" x="842" y="178">kv_indices</text>
+  <line class="grid" x1="824" y1="194" x2="1138" y2="194"/>
+  <line class="grid" x1="882" y1="194" x2="882" y2="352"/>
+  <line class="grid" x1="940" y1="194" x2="940" y2="352"/>
+  <line class="grid" x1="998" y1="194" x2="998" y2="352"/>
+  <line class="grid" x1="1056" y1="194" x2="1056" y2="352"/>
+  <line class="grid" x1="824" y1="226" x2="1138" y2="226"/>
+  <line class="grid" x1="824" y1="258" x2="1138" y2="258"/>
+  <line class="grid" x1="824" y1="290" x2="1138" y2="290"/>
+  <line class="grid" x1="824" y1="322" x2="1138" y2="322"/>
+  <text class="code" x="844" y="216">row</text>
+  <text class="code" x="899" y="216">0</text>
+  <text class="code" x="957" y="216">1</text>
+  <text class="code" x="1015" y="216">2</text>
+  <text class="code" x="1073" y="216">3</text>
+  <text class="code" x="845" y="248">0</text>
+  <text class="code" x="899" y="248">0</text>
+  <text class="code" x="957" y="248">-</text>
+  <text class="code" x="1015" y="248">-</text>
+  <text class="code" x="1073" y="248">-</text>
+  <text class="code" x="845" y="280">1</text>
+  <text class="code" x="899" y="280">0</text>
+  <text class="code" x="957" y="280">1</text>
+  <text class="code" x="1015" y="280">-</text>
+  <text class="code" x="1073" y="280">-</text>
+  <text class="code" x="845" y="312">2</text>
+  <text class="code" x="899" y="312">0</text>
+  <text class="code" x="957" y="312">1</text>
+  <text class="code" x="1015" y="312">2</text>
+  <text class="code" x="1073" y="312">-</text>
+  <text class="code" x="845" y="344">3</text>
+  <text class="code" x="899" y="344">0</text>
+  <text class="code" x="957" y="344">1</text>
+  <text class="code" x="1015" y="344">2</text>
+  <text class="code" x="1073" y="344">3</text>
+
+  <rect class="table" x="584" y="350" width="220" height="116"/>
+  <text class="code" x="602" y="378">full_kv_num_blocks</text>
+  <line class="grid" x1="584" y1="394" x2="804" y2="394"/>
+  <line class="grid" x1="639" y1="394" x2="639" y2="466"/>
+  <line class="grid" x1="694" y1="394" x2="694" y2="466"/>
+  <line class="grid" x1="749" y1="394" x2="749" y2="466"/>
+  <text class="code" x="607" y="435">0</text>
+  <text class="code" x="662" y="435">1</text>
+  <text class="code" x="717" y="435">2</text>
+  <text class="code" x="772" y="435">3</text>
+
+  <rect class="table" x="824" y="350" width="314" height="202"/>
+  <text class="code" x="842" y="378">full_kv_indices</text>
+  <line class="grid" x1="824" y1="394" x2="1138" y2="394"/>
+  <line class="grid" x1="882" y1="394" x2="882" y2="552"/>
+  <line class="grid" x1="940" y1="394" x2="940" y2="552"/>
+  <line class="grid" x1="998" y1="394" x2="998" y2="552"/>
+  <line class="grid" x1="1056" y1="394" x2="1056" y2="552"/>
+  <line class="grid" x1="824" y1="426" x2="1138" y2="426"/>
+  <line class="grid" x1="824" y1="458" x2="1138" y2="458"/>
+  <line class="grid" x1="824" y1="490" x2="1138" y2="490"/>
+  <line class="grid" x1="824" y1="522" x2="1138" y2="522"/>
+  <text class="code" x="844" y="416">row</text>
+  <text class="code" x="899" y="416">0</text>
+  <text class="code" x="957" y="416">1</text>
+  <text class="code" x="1015" y="416">2</text>
+  <text class="code" x="1073" y="416">3</text>
+  <text class="code" x="845" y="448">0</text>
+  <text class="code" x="899" y="448">-</text>
+  <text class="code" x="957" y="448">-</text>
+  <text class="code" x="1015" y="448">-</text>
+  <text class="code" x="1073" y="448">-</text>
+  <text class="code" x="845" y="480">1</text>
+  <text class="code" x="899" y="480">0</text>
+  <text class="code" x="957" y="480">-</text>
+  <text class="code" x="1015" y="480">-</text>
+  <text class="code" x="1073" y="480">-</text>
+  <text class="code" x="845" y="512">2</text>
+  <text class="code" x="899" y="512">0</text>
+  <text class="code" x="957" y="512">1</text>
+  <text class="code" x="1015" y="512">-</text>
+  <text class="code" x="1073" y="512">-</text>
+  <text class="code" x="845" y="544">3</text>
+  <text class="code" x="899" y="544">0</text>
+  <text class="code" x="957" y="544">1</text>
+  <text class="code" x="1015" y="544">2</text>
+  <text class="code" x="1073" y="544">-</text>
+
+  <text class="small" x="584" y="572">Backward also stores the transposed `q_*` and `full_q_*` traversal so gradient kernels can walk Q efficiently.</text>
+</svg>

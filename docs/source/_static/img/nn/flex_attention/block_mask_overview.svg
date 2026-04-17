@@ -1,0 +1,141 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="560" viewBox="0 0 1200 560" role="img" aria-labelledby="title desc">
+  <title id="title">FlexAttention block mask overview</title>
+  <desc id="desc">A dense causal mask is tiled into full, partial, and skipped block-mask tiles.</desc>
+  <style>
+    .bg { fill: #fffdf7; }
+    .card { fill: #ffffff; stroke: #1f2937; stroke-width: 2; rx: 20; ry: 20; }
+    .title { font: 700 30px DejaVu Sans, Arial, sans-serif; fill: #111827; }
+    .subtitle { font: 700 20px DejaVu Sans, Arial, sans-serif; fill: #111827; }
+    .body { font: 16px DejaVu Sans, Arial, sans-serif; fill: #334155; }
+    .code { font: 15px DejaVu Sans Mono, monospace; fill: #0f172a; }
+    .muted { fill: #64748b; }
+    .grid { stroke: #cbd5e1; stroke-width: 1; }
+    .blockline { stroke: #475569; stroke-width: 3; }
+    .arrow { stroke: #2563eb; stroke-width: 5; fill: none; stroke-linecap: round; stroke-linejoin: round; }
+    .full { fill: #5b9b73; }
+    .partial { fill: #ebb44e; }
+    .skip { fill: #e2e8f0; }
+    .legend { stroke: #1f2937; stroke-width: 1.5; }
+  </style>
+
+  <rect class="bg" x="0" y="0" width="1200" height="560"/>
+  <text class="title" x="40" y="48">FlexAttention turns elementwise mask rules into a sparse block schedule</text>
+
+  <rect class="card" x="38" y="78" width="388" height="438" rx="20" ry="20"/>
+  <text class="subtitle" x="64" y="118">Elementwise mask from</text>
+  <text class="code" x="64" y="145">mask_mod(batch, head, q_idx, kv_idx)</text>
+  <text class="body muted" x="86" y="190">kv index</text>
+  <text class="body muted" x="48" y="252" transform="rotate(-90 48 252)">q index</text>
+
+  <rect x="92" y="202" width="256" height="256" fill="#f8fafc" stroke="#94a3b8" stroke-width="2"/>
+  <line class="grid" x1="124" y1="202" x2="124" y2="458"/>
+  <line class="grid" x1="156" y1="202" x2="156" y2="458"/>
+  <line class="grid" x1="188" y1="202" x2="188" y2="458"/>
+  <line class="grid" x1="220" y1="202" x2="220" y2="458"/>
+  <line class="grid" x1="252" y1="202" x2="252" y2="458"/>
+  <line class="grid" x1="284" y1="202" x2="284" y2="458"/>
+  <line class="grid" x1="316" y1="202" x2="316" y2="458"/>
+  <line class="grid" x1="348" y1="202" x2="348" y2="458"/>
+  <line class="grid" x1="92" y1="234" x2="348" y2="234"/>
+  <line class="grid" x1="92" y1="266" x2="348" y2="266"/>
+  <line class="grid" x1="92" y1="298" x2="348" y2="298"/>
+  <line class="grid" x1="92" y1="330" x2="348" y2="330"/>
+  <line class="grid" x1="92" y1="362" x2="348" y2="362"/>
+  <line class="grid" x1="92" y1="394" x2="348" y2="394"/>
+  <line class="grid" x1="92" y1="426" x2="348" y2="426"/>
+  <line class="blockline" x1="156" y1="202" x2="156" y2="458"/>
+  <line class="blockline" x1="220" y1="202" x2="220" y2="458"/>
+  <line class="blockline" x1="284" y1="202" x2="284" y2="458"/>
+  <line class="blockline" x1="92" y1="266" x2="348" y2="266"/>
+  <line class="blockline" x1="92" y1="330" x2="348" y2="330"/>
+  <line class="blockline" x1="92" y1="394" x2="348" y2="394"/>
+
+  <circle cx="108" cy="218" r="8" class="partial"/>
+  <circle cx="108" cy="250" r="8" class="full"/>
+  <circle cx="140" cy="250" r="8" class="partial"/>
+  <circle cx="108" cy="282" r="8" class="full"/>
+  <circle cx="140" cy="282" r="8" class="full"/>
+  <circle cx="172" cy="282" r="8" class="partial"/>
+  <circle cx="108" cy="314" r="8" class="full"/>
+  <circle cx="140" cy="314" r="8" class="full"/>
+  <circle cx="172" cy="314" r="8" class="full"/>
+  <circle cx="204" cy="314" r="8" class="partial"/>
+  <circle cx="108" cy="346" r="8" class="full"/>
+  <circle cx="140" cy="346" r="8" class="full"/>
+  <circle cx="172" cy="346" r="8" class="full"/>
+  <circle cx="204" cy="346" r="8" class="full"/>
+  <circle cx="236" cy="346" r="8" class="partial"/>
+  <circle cx="108" cy="378" r="8" class="full"/>
+  <circle cx="140" cy="378" r="8" class="full"/>
+  <circle cx="172" cy="378" r="8" class="full"/>
+  <circle cx="204" cy="378" r="8" class="full"/>
+  <circle cx="236" cy="378" r="8" class="full"/>
+  <circle cx="268" cy="378" r="8" class="partial"/>
+  <circle cx="108" cy="410" r="8" class="full"/>
+  <circle cx="140" cy="410" r="8" class="full"/>
+  <circle cx="172" cy="410" r="8" class="full"/>
+  <circle cx="204" cy="410" r="8" class="full"/>
+  <circle cx="236" cy="410" r="8" class="full"/>
+  <circle cx="268" cy="410" r="8" class="full"/>
+  <circle cx="300" cy="410" r="8" class="partial"/>
+  <circle cx="108" cy="442" r="8" class="full"/>
+  <circle cx="140" cy="442" r="8" class="full"/>
+  <circle cx="172" cy="442" r="8" class="full"/>
+  <circle cx="204" cy="442" r="8" class="full"/>
+  <circle cx="236" cy="442" r="8" class="full"/>
+  <circle cx="268" cy="442" r="8" class="full"/>
+  <circle cx="300" cy="442" r="8" class="full"/>
+  <circle cx="332" cy="442" r="8" class="partial"/>
+
+  <path class="arrow" d="M 456 282 L 534 282"/>
+  <path class="arrow" d="M 518 266 L 540 282 L 518 298"/>
+  <text class="subtitle" x="434" y="242">Tile and classify</text>
+  <text class="body" x="446" y="320">2 x 2 blocks</text>
+
+  <rect class="card" x="558" y="78" width="604" height="438" rx="20" ry="20"/>
+  <text class="subtitle" x="584" y="118">BlockMask schedule seen by the kernel</text>
+  <text class="body muted" x="614" y="162">kv block</text>
+  <text class="body muted" x="578" y="246" transform="rotate(-90 578 246)">q block</text>
+
+  <rect x="620" y="176" width="320" height="320" fill="#f8fafc" stroke="#94a3b8" stroke-width="2"/>
+  <rect x="620" y="176" width="80" height="80" class="partial"/>
+  <rect x="700" y="176" width="80" height="80" class="skip"/>
+  <rect x="780" y="176" width="80" height="80" class="skip"/>
+  <rect x="860" y="176" width="80" height="80" class="skip"/>
+
+  <rect x="620" y="256" width="80" height="80" class="full"/>
+  <rect x="700" y="256" width="80" height="80" class="partial"/>
+  <rect x="780" y="256" width="80" height="80" class="skip"/>
+  <rect x="860" y="256" width="80" height="80" class="skip"/>
+
+  <rect x="620" y="336" width="80" height="80" class="full"/>
+  <rect x="700" y="336" width="80" height="80" class="full"/>
+  <rect x="780" y="336" width="80" height="80" class="partial"/>
+  <rect x="860" y="336" width="80" height="80" class="skip"/>
+
+  <rect x="620" y="416" width="80" height="80" class="full"/>
+  <rect x="700" y="416" width="80" height="80" class="full"/>
+  <rect x="780" y="416" width="80" height="80" class="full"/>
+  <rect x="860" y="416" width="80" height="80" class="partial"/>
+
+  <line class="blockline" x1="700" y1="176" x2="700" y2="496"/>
+  <line class="blockline" x1="780" y1="176" x2="780" y2="496"/>
+  <line class="blockline" x1="860" y1="176" x2="860" y2="496"/>
+  <line class="blockline" x1="620" y1="256" x2="940" y2="256"/>
+  <line class="blockline" x1="620" y1="336" x2="940" y2="336"/>
+  <line class="blockline" x1="620" y1="416" x2="940" y2="416"/>
+
+  <text class="body" x="976" y="220">Legend</text>
+  <rect class="legend full" x="976" y="238" width="24" height="24"/>
+  <text class="body" x="1014" y="256">full tile</text>
+  <text class="body muted" x="1014" y="276">no per-element mask check</text>
+  <rect class="legend partial" x="976" y="304" width="24" height="24"/>
+  <text class="body" x="1014" y="322">partial tile</text>
+  <text class="body muted" x="1014" y="342">run mask_graph inside the tile</text>
+  <rect class="legend skip" x="976" y="370" width="24" height="24"/>
+  <text class="body" x="1014" y="388">skipped tile</text>
+  <text class="body muted" x="1014" y="408">never launched by the kernel</text>
+
+  <text class="body" x="976" y="458">Only active block columns are stored</text>
+  <text class="body" x="976" y="480">in `kv_indices` and `full_kv_indices`.</text>
+</svg>

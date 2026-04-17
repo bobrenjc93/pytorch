@@ -1,0 +1,86 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="460" viewBox="0 0 1400 460" role="img" aria-labelledby="title desc">
+  <title id="title">FlexAttention compiler path</title>
+  <desc id="desc">Pipeline from user Python callables to the flex_attention higher-order operator and backend kernels.</desc>
+  <style>
+    .bg { fill: #fffdf7; }
+    .card { fill: #ffffff; stroke: #1f2937; stroke-width: 2; rx: 20; ry: 20; }
+    .title { font: 700 30px DejaVu Sans, Arial, sans-serif; fill: #111827; }
+    .subtitle { font: 700 18px DejaVu Sans, Arial, sans-serif; fill: #111827; }
+    .body { font: 16px DejaVu Sans, Arial, sans-serif; fill: #334155; }
+    .code { font: 14px DejaVu Sans Mono, monospace; fill: #0f172a; }
+    .muted { fill: #64748b; }
+    .arrow { stroke: #2563eb; stroke-width: 4.5; fill: none; stroke-linecap: round; stroke-linejoin: round; }
+    .accent { fill: #dbeafe; stroke: #2563eb; stroke-width: 1.5; rx: 12; ry: 12; }
+    .backend { fill: #f8fafc; stroke: #475569; stroke-width: 1.5; rx: 14; ry: 14; }
+  </style>
+
+  <rect class="bg" x="0" y="0" width="1400" height="460"/>
+  <text class="title" x="40" y="48">Compiled FlexAttention path from Python callables to backend kernels</text>
+
+  <rect class="card" x="40" y="82" width="240" height="320" rx="20" ry="20"/>
+  <text class="subtitle" x="62" y="118">1. User authoring</text>
+  <text class="code" x="62" y="156">def score_mod(...):</text>
+  <text class="code" x="84" y="178">...</text>
+  <text class="code" x="62" y="212">def mask_mod(...):</text>
+  <text class="code" x="84" y="234">...</text>
+  <text class="code" x="62" y="268">block_mask = create_block_mask(...)</text>
+  <text class="code" x="62" y="302">torch.compile(flex_attention)(</text>
+  <text class="code" x="84" y="324">q, k, v, score_mod=...,</text>
+  <text class="code" x="84" y="346">block_mask=block_mask)</text>
+  <text class="body muted" x="62" y="382">User code still looks like a normal</text>
+  <text class="body muted" x="62" y="402">Python call to `flex_attention`.</text>
+
+  <path class="arrow" d="M 286 242 L 344 242"/>
+  <path class="arrow" d="M 330 228 L 350 242 L 330 256"/>
+
+  <rect class="card" x="360" y="82" width="260" height="320" rx="20" ry="20"/>
+  <text class="subtitle" x="382" y="118">2. Dynamo capture</text>
+  <rect class="accent" x="382" y="148" width="216" height="44"/>
+  <text class="code" x="398" y="176">score_mod -&gt; sdpa_score0</text>
+  <rect class="accent" x="382" y="206" width="216" height="44"/>
+  <text class="code" x="401" y="234">mask_mod -&gt; sdpa_mask0</text>
+  <rect class="accent" x="382" y="264" width="216" height="56"/>
+  <text class="code" x="398" y="292">lift captured tensors / scalars</text>
+  <text class="code" x="398" y="312">into explicit HOP inputs</text>
+  <text class="body muted" x="382" y="360">Dynamo traces the callable bodies as</text>
+  <text class="body muted" x="382" y="380">small FX subgraphs instead of inlining</text>
+  <text class="body muted" x="382" y="400">arbitrary Python into the kernel.</text>
+
+  <path class="arrow" d="M 626 242 L 684 242"/>
+  <path class="arrow" d="M 670 228 L 690 242 L 670 256"/>
+
+  <rect class="card" x="700" y="82" width="300" height="320" rx="20" ry="20"/>
+  <text class="subtitle" x="722" y="118">3. Higher-order operator</text>
+  <text class="code" x="722" y="164">torch.ops.higher_order.flex_attention(</text>
+  <text class="code" x="746" y="188">query, key, value,</text>
+  <text class="code" x="746" y="212">sdpa_score0,</text>
+  <text class="code" x="746" y="236">( ..., sdpa_mask0 ),</text>
+  <text class="code" x="746" y="260">scale, kernel_options,</text>
+  <text class="code" x="746" y="284">score_mod_buffers,</text>
+  <text class="code" x="746" y="308">mask_mod_buffers)</text>
+  <text class="body muted" x="722" y="360">The HOP keeps the attention call and its</text>
+  <text class="body muted" x="722" y="380">captured subgraphs as one compiler-visible</text>
+  <text class="body muted" x="722" y="400">unit of lowering.</text>
+
+  <path class="arrow" d="M 1006 242 L 1064 242"/>
+  <path class="arrow" d="M 1050 228 L 1070 242 L 1050 256"/>
+
+  <rect class="card" x="1080" y="82" width="280" height="190" rx="20" ry="20"/>
+  <text class="subtitle" x="1102" y="118">4. Inductor lowering</text>
+  <text class="body" x="1102" y="156">Build score and mask subgraph buffers</text>
+  <text class="body" x="1102" y="184">Guard kernel options and symbolic sizes</text>
+  <text class="body" x="1102" y="212">Pick a backend for the current shape</text>
+  <text class="body" x="1102" y="240">and block schedule</text>
+
+  <rect class="backend" x="1080" y="294" width="128" height="72"/>
+  <text class="subtitle" x="1102" y="324">Triton</text>
+  <text class="body muted" x="1102" y="346">flex_attention</text>
+
+  <rect class="backend" x="1216" y="294" width="128" height="72"/>
+  <text class="subtitle" x="1230" y="324">Triton</text>
+  <text class="body muted" x="1227" y="346">flex_decoding</text>
+
+  <rect class="backend" x="1148" y="376" width="128" height="72"/>
+  <text class="subtitle" x="1186" y="406">CPU</text>
+  <text class="body muted" x="1172" y="428">C++ template</text>
+</svg>

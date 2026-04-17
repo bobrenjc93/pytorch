@@ -1,0 +1,94 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="560" viewBox="0 0 1400 560" role="img" aria-labelledby="title desc">
+  <title id="title">Triton FlexAttention launch structure</title>
+  <desc id="desc">Launch grid and active-block iteration used by the Triton FlexAttention kernel.</desc>
+  <style>
+    .bg { fill: #fffdf7; }
+    .card { fill: #ffffff; stroke: #1f2937; stroke-width: 2; rx: 20; ry: 20; }
+    .title { font: 700 30px DejaVu Sans, Arial, sans-serif; fill: #111827; }
+    .subtitle { font: 700 20px DejaVu Sans, Arial, sans-serif; fill: #111827; }
+    .body { font: 16px DejaVu Sans, Arial, sans-serif; fill: #334155; }
+    .code { font: 15px DejaVu Sans Mono, monospace; fill: #0f172a; }
+    .muted { fill: #64748b; }
+    .tile { fill: #dbeafe; stroke: #2563eb; stroke-width: 1.5; rx: 14; ry: 14; }
+    .full { fill: #5b9b73; stroke: #1f2937; stroke-width: 1.2; rx: 12; ry: 12; }
+    .partial { fill: #ebb44e; stroke: #1f2937; stroke-width: 1.2; rx: 12; ry: 12; }
+    .skip { fill: #e2e8f0; stroke: #94a3b8; stroke-width: 1.2; rx: 12; ry: 12; }
+    .arrow { stroke: #2563eb; stroke-width: 4; fill: none; stroke-linecap: round; stroke-linejoin: round; }
+  </style>
+
+  <rect class="bg" x="0" y="0" width="1400" height="560"/>
+  <text class="title" x="40" y="48">Triton launches one program per query tile and loops only over active KV blocks</text>
+
+  <rect class="card" x="40" y="82" width="292" height="430" rx="20" ry="20"/>
+  <text class="subtitle" x="64" y="118">1. Launch grid</text>
+  <text class="code" x="64" y="156">grid = (ceil_div(num_queries, BLOCK_M),</text>
+  <text class="code" x="106" y="180">batch_size,</text>
+  <text class="code" x="106" y="204">q_heads)</text>
+  <rect class="tile" x="72" y="238" width="70" height="70"/>
+  <rect class="tile" x="154" y="238" width="70" height="70"/>
+  <rect class="tile" x="236" y="238" width="70" height="70"/>
+  <rect class="tile" x="72" y="320" width="70" height="70"/>
+  <rect class="tile" x="154" y="320" width="70" height="70"/>
+  <rect class="tile" x="236" y="320" width="70" height="70"/>
+  <text class="body" x="72" y="426">Each program instance owns one</text>
+  <text class="body" x="72" y="448">`BLOCK_M` slice of queries for a</text>
+  <text class="body" x="72" y="470">single batch/head pair.</text>
+
+  <path class="arrow" d="M 344 296 L 402 296"/>
+  <path class="arrow" d="M 388 282 L 408 296 L 388 310"/>
+
+  <rect class="card" x="420" y="82" width="420" height="430" rx="20" ry="20"/>
+  <text class="subtitle" x="444" y="118">2. One program instance</text>
+  <rect class="tile" x="456" y="154" width="140" height="86"/>
+  <text class="subtitle" x="484" y="188">Q tile</text>
+  <text class="code" x="476" y="214">BLOCK_M x D</text>
+
+  <rect class="tile" x="644" y="154" width="160" height="86"/>
+  <text class="subtitle" x="660" y="188">Active schedule</text>
+  <text class="code" x="660" y="214">kv_indices[row] = [0, 1, 2, 3]</text>
+
+  <path class="arrow" d="M 598 198 L 638 198"/>
+  <path class="arrow" d="M 624 184 L 644 198 L 624 212"/>
+
+  <rect class="full" x="456" y="282" width="116" height="54"/>
+  <text class="code" x="485" y="314">full 0</text>
+  <rect class="full" x="584" y="282" width="116" height="54"/>
+  <text class="code" x="613" y="314">full 1</text>
+  <rect class="full" x="712" y="282" width="116" height="54"/>
+  <text class="code" x="741" y="314">full 2</text>
+  <rect class="partial" x="456" y="352" width="116" height="54"/>
+  <text class="code" x="473" y="384">partial 3</text>
+  <rect class="skip" x="584" y="352" width="116" height="54"/>
+  <text class="code" x="617" y="384">skip</text>
+  <rect class="skip" x="712" y="352" width="116" height="54"/>
+  <text class="code" x="745" y="384">skip</text>
+
+  <text class="body" x="456" y="448">Only the active columns are visited. The skipped tiles above</text>
+  <text class="body" x="456" y="470">the sparsity boundary are absent from the schedule.</text>
+
+  <path class="arrow" d="M 852 296 L 910 296"/>
+  <path class="arrow" d="M 896 282 L 916 296 L 896 310"/>
+
+  <rect class="card" x="928" y="82" width="432" height="430" rx="20" ry="20"/>
+  <text class="subtitle" x="952" y="118">3. Inner loop over each active block</text>
+
+  <rect class="full" x="952" y="154" width="178" height="118"/>
+  <text class="subtitle" x="978" y="188">Full block fast path</text>
+  <text class="body" x="972" y="218">Load K/V tile (`BLOCK_N x D`)</text>
+  <text class="body" x="972" y="242">Apply `score_mod`</text>
+  <text class="body" x="972" y="266">Update softmax + output</text>
+
+  <rect class="partial" x="1148" y="154" width="188" height="118"/>
+  <text class="subtitle" x="1174" y="188">Partial block path</text>
+  <text class="body" x="1168" y="218">Load K/V tile (`BLOCK_N x D`)</text>
+  <text class="body" x="1168" y="242">Apply `score_mod`</text>
+  <text class="body" x="1168" y="266">Run `mask_graph` inside tile</text>
+
+  <rect class="tile" x="952" y="316" width="384" height="110"/>
+  <text class="subtitle" x="972" y="350">Shared accumulation state</text>
+  <text class="body" x="972" y="380">Track row max / logsumexp and accumulate the output vector.</text>
+  <text class="body" x="972" y="404">The kernel keeps Q resident while it streams over only the active KV tiles.</text>
+
+  <text class="body muted" x="952" y="460">`BLOCK_M` decides query tile height. `BLOCK_N` decides how many KV positions</text>
+  <text class="body muted" x="952" y="482">are consumed per loop iteration.</text>
+</svg>
