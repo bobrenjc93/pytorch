@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="560" viewBox="0 0 1100 560" role="img" aria-labelledby="title desc">
+  <title id="title">Custom operator stack for overlap kernels</title>
+  <desc id="desc">Stacked boxes show model code calling a torch ops custom operator, which dispatches to a C++ launcher that coordinates communication and compute streams.</desc>
+  <style>
+    .bg { fill: #fcfcfb; }
+    .title { font: 700 24px sans-serif; fill: #1f2328; }
+    .box { stroke: #c7d0d9; stroke-width: 1.4; rx: 16; ry: 16; }
+    .box1 { fill: #fff4e8; }
+    .box2 { fill: #edf4ff; }
+    .box3 { fill: #eef8f2; }
+    .box4 { fill: #f6effa; }
+    .head { font: 700 18px sans-serif; fill: #1f2328; }
+    .text { font: 500 13px sans-serif; fill: #434a54; }
+    .arrow { stroke: #7c8791; stroke-width: 2.2; fill: none; }
+    .note { fill: #fffde7; stroke: #d6c37a; stroke-width: 1.2; rx: 12; ry: 12; }
+  </style>
+
+  <rect class="bg" width="1100" height="560" rx="18" ry="18"/>
+  <text class="title" x="48" y="44">Custom-op stack for an overlap kernel</text>
+
+  <rect class="box box1" x="340" y="84" width="420" height="74"/>
+  <text class="head" x="372" y="118">Model / comm hook / optimizer step</text>
+  <text class="text" x="372" y="142">The call site stays in Python, but the heavy scheduling logic does not.</text>
+
+  <line class="arrow" x1="550" y1="158" x2="550" y2="198"/>
+  <polygon points="550,198 543,184 557,184" fill="#7c8791"/>
+
+  <rect class="box box2" x="270" y="206" width="560" height="84"/>
+  <text class="head" x="302" y="240">torch.ops.overlap_demo.reduce_scatter_matmul(...)</text>
+  <text class="text" x="302" y="264">Stable dispatcher entry point and compiler-visible op boundary.</text>
+
+  <rect class="note" x="860" y="210" width="190" height="76"/>
+  <text class="head" x="884" y="240">Python metadata</text>
+  <text class="text" x="884" y="262">register_fake</text>
+  <text class="text" x="884" y="280">register_autograd</text>
+
+  <line class="arrow" x1="550" y1="290" x2="550" y2="330"/>
+  <polygon points="550,330 543,316 557,316" fill="#7c8791"/>
+
+  <rect class="box box3" x="250" y="338" width="600" height="92"/>
+  <text class="head" x="282" y="372">Dispatcher schema and CUDA implementation</text>
+  <text class="text" x="282" y="396">`TORCH_LIBRARY` defines the schema; `TORCH_LIBRARY_IMPL(..., CUDA, ...)` binds the launcher.</text>
+  <text class="text" x="282" y="418">The shared library can be JIT-built with `load()` or shipped AOT as a normal `.so`.</text>
+
+  <line class="arrow" x1="550" y1="430" x2="550" y2="470"/>
+  <polygon points="550,470 543,456 557,456" fill="#7c8791"/>
+
+  <rect class="box box4" x="132" y="478" width="836" height="58"/>
+  <text class="head" x="164" y="513">C++ launcher owns chunking, streams, events, and the handoff between communication and compute</text>
+
+  <rect class="note" x="58" y="214" width="176" height="70"/>
+  <text class="head" x="82" y="243">Compiler behavior</text>
+  <text class="text" x="82" y="265">Opaque to `torch.compile`</text>
+  <text class="text" x="82" y="283">unless you add lowerings</text>
+</svg>

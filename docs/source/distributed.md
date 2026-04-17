@@ -1563,4 +1563,5 @@ If you are running single node training, it may be convenient to interactively b
 :hidden:
 
 distributed._dist2
+distributed.custom_compute_comm_overlap
 ```
