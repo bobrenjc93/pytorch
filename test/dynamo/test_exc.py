@@ -1,6 +1,8 @@
 # Owner(s): ["module: dynamo"]
 
+import os
 import sys
+import tempfile
 import unittest
 from typing import cast
 
@@ -212,10 +214,7 @@ from user code:
             "    return {1, 2}\n"
         )
 
-        self.assertExpectedInline(
-            munge_exc(record.getMessage()),
-            expected,
-        )
+        self.assertEqual(munge_exc(record.getMessage()), expected)
 
     @torch._dynamo.config.patch(suppress_errors=False)
     def test_internal_error_no_suppress(self):
@@ -470,6 +469,31 @@ Failed Source Expressions:
         )
         result = source_location.format()
         self.assertEqual(result, '  File "<string>", line 1\n')
+
+    def test_source_location_format_multiline(self):
+        with tempfile.NamedTemporaryFile(
+            "w", suffix=".py", delete=False
+        ) as source_file:
+            source_file.write("value = (\n    foo\n    + bar\n)\n")
+            source_path = source_file.name
+
+        try:
+            source_location = SourceLocation(
+                filename=source_path,
+                lineno=1,
+                end_lineno=4,
+                col_offset=8,
+                end_col_offset=1,
+            )
+            result = source_location.format()
+        finally:
+            os.unlink(source_path)
+
+        self.assertIn(f'File "{source_path}", line 1', result)
+        self.assertIn("value = (", result)
+        self.assertIn("foo", result)
+        self.assertIn("+ bar", result)
+        self.assertIn("^", result)
 
     def test_vt_source_location_set_during_tracing(self):
         _source_location_capture.clear()
