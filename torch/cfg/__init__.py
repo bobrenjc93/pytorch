@@ -76,6 +76,7 @@ from .ir import (
     Jump,
     ListSpec,
     Literal,
+    literal,
     Location,
     ObjectSpec,
     OptionalSpec,
@@ -87,8 +88,8 @@ from .ir import (
     TupleSpec,
     ValidationError,
     Value,
-    literal,
 )
+
 
 __all__ = [
     "Block",
