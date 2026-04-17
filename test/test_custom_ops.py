@@ -3061,6 +3061,7 @@ class TestCustomOpAPI(TestCase):
                 continue
             self.assertGreater(after, prev)
 
+    @skipIfTorchDynamo("Expected to fail due to no FakeTensor support; not a bug")
     def test_mutated_optional_arg_default_none(self):
         @torch.library.custom_op(
             "_torch_testing::copy_optional_out", mutates_args={"out"}
