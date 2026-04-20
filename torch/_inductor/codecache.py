@@ -1342,10 +1342,10 @@ class GuardEvaluator(Protocol):
         evaluate_guards: Callable[[str, list[int] | list[torch.SymInt]], bool] | None,
     ) -> Callable[[str, list[int] | list[torch.SymInt]], bool]: ...
 
-    def guards_expression(self, example_inputs: Sequence[InputType]) -> str: ...
+    def guards_expression(self, example_inputs: Sequence[InputType]) -> str | None: ...
 
 
-class FxGraphGuardEvaluator:
+class FxGraphGuardEvaluator(GuardEvaluator):
     def __init__(self, shape_env: ShapeEnv | None = None) -> None:
         self._shape_env = shape_env
 
@@ -1375,7 +1375,7 @@ class FxGraphGuardEvaluator:
         assert shape_env is not None
         return shape_env.evaluate_guards_expression
 
-    def guards_expression(self, example_inputs: Sequence[InputType]) -> str:
+    def guards_expression(self, example_inputs: Sequence[InputType]) -> str | None:
         shape_env = self.get_shape_env()
         assert shape_env is not None
         symints = self.backed_symints(example_inputs)
@@ -1407,8 +1407,7 @@ class FxGraphCacheStore:
     @classmethod
     def write_local(cls, key: str, content: bytes) -> None:
         subdir = cls.local_dir_for_key(key)
-        if not os.path.exists(subdir):
-            os.makedirs(subdir, exist_ok=True)
+        os.makedirs(subdir, exist_ok=True)
 
         # Use a hash of the serialized CompiledFxGraph to get a unique file
         # name. The specific name doesn't matter since a lookup involves
@@ -1866,10 +1865,10 @@ class FxGraphCache(GuardedCache[CompiledFxGraph]):
 
     _guard_evaluator = FxGraphGuardEvaluator()
     _key_generator = FxGraphCacheKeyGenerator(_guard_evaluator)
-    _store = FxGraphCacheStore()
+    _store = FxGraphCacheStore
     _serializer = FxGraphCacheSerializer(_guard_evaluator)
-    _artifacts = FxGraphCacheArtifactHandler()
-    _event_logger = FxGraphCacheEventLogger()
+    _artifacts = FxGraphCacheArtifactHandler
+    _event_logger = FxGraphCacheEventLogger
 
     # TODO(masnesral): Investigate whether it's beneficial to store compiled graphs
     # in an in-memory cache after loading from disk.

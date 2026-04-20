@@ -2547,7 +2547,7 @@ class TestCustomPartitionerFn(CustomPartitionerFn):
 
 class TestFxGraphCacheDecomposition(TestCase):
     def test_store_writes_local_entries_under_key_directory(self):
-        store = FxGraphCacheStore()
+        store = FxGraphCacheStore
         key = "fabcdef"
         content = b"serialized graph"
 
@@ -2556,7 +2556,7 @@ class TestFxGraphCacheDecomposition(TestCase):
                 store.write_local(key, content)
                 subdir = os.path.join(tmpdir, "fxgraph", key[1:3], key)
 
-                self.assertEqual(FxGraphCache._get_tmp_dir_for_key(key), subdir)
+                self.assertEqual(store.local_dir_for_key(key), subdir)
                 self.assertTrue(os.path.isdir(subdir))
                 entries = os.listdir(subdir)
                 self.assertEqual(len(entries), 1)
