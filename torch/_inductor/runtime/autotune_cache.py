@@ -114,6 +114,8 @@ class AutotuneCacheArtifact(CacheArtifact):
 
 @dataclasses.dataclass
 class CachedConfig:
+    """Serialize and validate a single autotune cache entry."""
+
     config: Config
     configs_hash: str
     found_by_coordesc: bool = False
