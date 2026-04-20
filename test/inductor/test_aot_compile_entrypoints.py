@@ -52,6 +52,8 @@ class TestAOTCompileEntrypoints(TestCase):
             package_path = os.path.join(temp_dir, "model.pt2")
             so_path = os.path.join(temp_dir, "model.so")
             options = {"max_autotune": False}
+            expected_exported_program = exported_program
+            expected_package_path = package_path
             compile_aot_core_calls = []
             package_aoti_calls = []
 
@@ -66,6 +68,9 @@ class TestAOTCompileEntrypoints(TestCase):
                 inductor_configs,
                 package_path=None,
             ):
+                self.assertIs(exported_program, expected_exported_program)
+                self.assertIs(inductor_configs, options)
+                self.assertEqual(package_path, expected_package_path)
                 gm = exported_program.module(check_guards=False)
                 args, kwargs = exported_program.example_inputs
                 return func(
@@ -87,6 +92,8 @@ class TestAOTCompileEntrypoints(TestCase):
                 ),
                 patch(
                     "torch._inductor.aot_compile",
+                    # Tripwire: the package entry point should use the shared
+                    # core directly instead of recursing through aot_compile().
                     side_effect=AssertionError(
                         "package entry point called aot_compile"
                     ),
