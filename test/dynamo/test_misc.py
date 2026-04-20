@@ -189,3 +189,9 @@ class UserDefineSetAttr:
             return self.__dict__[f"pfx_{key}"]
         else:
             return None
+
+
+if __name__ == "__main__":
+    from torch._dynamo.test_case import run_tests
+
+    run_tests()

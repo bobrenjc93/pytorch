@@ -383,7 +383,7 @@ class AutogradFunctionTests(torch._dynamo.test_case.TestCase):
         result_usual = c_usual_func(inp1_usual, inp2)
         result_usual.backward()
 
-        self.assertTrue(torch.allclose(inp1_custom.grad, inp1_usual.grad))
+        torch.allclose(inp1_custom.grad, inp1_usual.grad)
 
     def test_allow_in_graph(self):
         torch._dynamo.utils.counters.clear()

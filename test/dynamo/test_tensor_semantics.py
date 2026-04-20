@@ -380,6 +380,7 @@ class TensorSemanticsTests(torch._inductor.test_case.TestCase):
         self.assertEqual(cnts.frame_count, 1)
 
     @torch._dynamo.config.patch(capture_scalar_outputs=True)
+    # Translation validation changes the exception type, don't run with it
     @torch.fx.experimental._config.patch(translation_validation=False)
     def test_torch_check_nonnegative(self):
         cnts = torch._dynamo.testing.CompileCounter()
@@ -1541,6 +1542,7 @@ class TensorSemanticsTests(torch._inductor.test_case.TestCase):
 
         self.assertTrue(same(ref, res))
 
+    @torch._dynamo.config.patch(nested_graph_breaks=False)
     def test_cast_no_recompile_after_graph_break(self):
         # In FSDP, cast(nn.Module, self) can be called after a
         # graph break. Without the polyfill + skip_code fix, PEP 523 compiles

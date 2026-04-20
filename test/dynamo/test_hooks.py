@@ -48,7 +48,7 @@ class HooksTests(torch._dynamo.test_case.TestCase):
         x = torch.randn(4, requires_grad=True)
         y = torch.cos(x)
         opt_fn(x, y).sum().backward()
-        self.assertIsNotNone(y.grad)
+        self.assertTrue(y.grad is not None)
 
     def test_tensor_only_register_hook_in_graph_lambda(self):
         def fn(x):

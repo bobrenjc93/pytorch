@@ -17,6 +17,7 @@ requires_cuda = unittest.skipUnless(torch.cuda.is_available(), "requires cuda")
 class MiscTestsDevice(torch._inductor.test_case.TestCase):
     def test_rand(self, device):
         cnts = torch._dynamo.testing.CompileCounter()
+        device = device  # noqa: PLW0127
 
         def fn():
             return torch.randn(10, device=device)
@@ -79,14 +80,14 @@ class MiscTestsDevice(torch._inductor.test_case.TestCase):
         ):
             x1 = torch.rand(4).to(device)
             opt_fn1 = torch.compile(fn1, backend="eager", fullgraph=True)
-            opt_fn1(x1)
+            res1 = opt_fn1(x1)  # noqa: F841
 
         with self.assertRaisesRegex(
             AssertionError, "Expect 1 input to cudnn.is_acceptable"
         ):
             x2 = torch.rand(4).to(device)
             opt_fn2 = torch.compile(fn2, backend="eager", fullgraph=True)
-            opt_fn2(x2)
+            res = opt_fn2(x2)  # noqa: F841
 
     @unittest.skipIf(not torch.cuda.is_available(), "requires cuda")
     @torch._dynamo.config.patch(recompile_limit=999)
@@ -136,10 +137,10 @@ class MiscTestsDevice(torch._inductor.test_case.TestCase):
         self.assertEqual(out, opt_out)
 
     def test_torch_device_python_type(self, device):
-        default_device_type = torch.device(device).type
-        for current_device, current_device_type, index in [
+        device_type = torch.device(device).type
+        for device, device_type, index in [  # noqa: B020
             ("cpu", "cpu", None),
-            (device, default_device_type, 0),
+            (device, device_type, 0),
         ]:
 
             def fn(target):
@@ -147,7 +148,7 @@ class MiscTestsDevice(torch._inductor.test_case.TestCase):
                 a = torch.zeros(2, 3, device=target_device)
                 # Constant assert at trace time
                 assert isinstance(target_device, torch.device)  # noqa: S101
-                assert target_device.type == current_device_type  # noqa: S101
+                assert target_device.type == device_type  # noqa: S101
                 assert target_device.index == index  # noqa: S101
                 b = torch.zeros(2, 3, device=target_device)
                 c = torch.zeros(2, 3, device=target_device)
@@ -155,12 +156,12 @@ class MiscTestsDevice(torch._inductor.test_case.TestCase):
 
             from torch._dynamo.variables import ConstantVariable
 
-            current_device = torch.device(current_device)
-            expected_variable = ConstantVariable(current_device)
-            self.assertEqual(expected_variable.python_type(), type(current_device))
+            device = torch.device(device)
+            expected_variable = ConstantVariable(device)
+            self.assertEqual(expected_variable.python_type(), type(device))
 
             opt_func = torch.compile(fn, backend="eager", fullgraph=True)
-            a = torch.tensor([2, 3], device=current_device)
+            a = torch.tensor([2, 3], device=device)
             res = opt_func(a)
             self.assertIsInstance(res, torch.Tensor)
 
@@ -252,10 +253,11 @@ class MiscTestsDevice(torch._inductor.test_case.TestCase):
 
         foo = Foo()
         inputs = torch.randn(3, 4)
-        foo.forward(inputs)
+        result = foo.forward(inputs)  # noqa: F841
 
+        original_pad_val = foo.config.pad_val  # noqa: F841
         foo.config.pad_val += 1.0
-        foo.forward(inputs)
+        result2 = foo.forward(inputs)  # noqa: F841
 
 
 class ReproDeviceRuntimeTests(torch._inductor.test_case.TestCase):

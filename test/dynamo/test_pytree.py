@@ -145,6 +145,7 @@ class MiscTestsPyTree(torch._inductor.test_case.TestCase):
         from torch.utils.checkpoint import checkpoint
 
         def fn(xs):
+            nested_xs = [[xs]]  # noqa: F841
             flat_xs, spec = pytree.tree_flatten(xs)
             return flat_xs[0].clone()
 

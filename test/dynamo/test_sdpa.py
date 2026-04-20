@@ -269,6 +269,7 @@ class TestSDPADevice(torch._dynamo.test_case.TestCase):
                 out = F.scaled_dot_product_attention(query, key, value, None, scale=8)
                 return out
 
+        device = device  # noqa: PLW0127
         dtype = torch.float16
         seq_len_q = 1
         seq_len_k = 1

@@ -227,10 +227,13 @@ graph():
 
         x = torch.ones(5)
         with YoloMode():
-            out = torch.compile(torch.add, backend=backend, fullgraph=True)(x, x)
-
+            out = torch.compile(torch.add, backend=backend, fullgraph=False)(x, x)
         self.assertEqual(out.sum().item(), 5.0)
         self.assertEqual(len(backend.graphs), 0)
+
+        with YoloMode():
+            with self.assertRaisesRegex(RuntimeError, "found no compiled frames"):
+                torch.compile(torch.add, backend=backend, fullgraph=True)(x, x)
 
     def test_compile_non_infra_empty_with_disalloed_dispatch_mode(self):
         from torch.utils._python_dispatch import TorchDispatchMode
@@ -390,7 +393,7 @@ graph():
                 return False
 
             def __torch_dispatch__(self, func, types, args=(), kwargs=None):
-                out = torch.compile(func, backend=backend, fullgraph=True)(
+                out = torch.compile(func, backend=backend, fullgraph=False)(
                     *args, **kwargs
                 )
                 return out
@@ -1328,7 +1331,10 @@ graph():
 
         @torch.compile(backend="eager")
         def f1(a, b):
-            f2(a, b)
+            try:
+                f2(a, b)
+            finally:
+                pass
 
         def f2(a, b):
             c = a + b
@@ -1337,7 +1343,10 @@ graph():
 
         @torch.compile(backend="eager")
         def g1(a, b):
-            g2(a, b)
+            try:
+                g2(a, b)
+            finally:
+                pass
 
         def g2(a, b):
             c = a + b
@@ -2255,6 +2264,7 @@ fn
 
         cnt = torch._dynamo.testing.CompileCounter()
 
+        # int subclass
         @torch.compile(backend=cnt)
         def f(x, y):
             return x + y
@@ -2271,6 +2281,7 @@ fn
         self.assertEqual(r3.item(), 6)
         self.assertEqual(cnt.frame_count, 2)
 
+        # float subclass
         cnt.clear()
 
         @torch.compile(backend=cnt)
@@ -2289,6 +2300,7 @@ fn
         self.assertEqual(r6.item(), 3.5)
         self.assertEqual(cnt.frame_count, 2)
 
+        # str subclass
         cnt.clear()
 
         @torch.compile(backend=cnt, fullgraph=True)

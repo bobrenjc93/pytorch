@@ -1355,6 +1355,7 @@ not ___dict_contains('cccccccc', G['sys'].modules)""",
         res = opt_fn(x, mod)
         self.assertTrue(same(ref, res))
 
+    @torch._dynamo.config.patch(nested_graph_breaks=False)
     def test_module_deepcopy(self):
         m1 = torch.nn.Sequential(
             torch.nn.Linear(10, 10),
@@ -1461,6 +1462,7 @@ not ___dict_contains('cccccccc', G['sys'].modules)""",
         correct = fn(x, cfg)
         result = torch.compile(fn, fullgraph=True, backend="eager")(x, cfg)
         self.assertEqual(result, correct)
+        # Verify deepcopy didn't mutate original
         self.assertEqual(cfg.sizes[0], 1)
         self.assertEqual(cfg.mapping["a"], 10)
 
@@ -1532,6 +1534,7 @@ not ___dict_contains('cccccccc', G['sys'].modules)""",
         correct = fn(x, cfg)
         result = torch.compile(fn, fullgraph=True, backend="eager")(x, cfg)
         self.assertEqual(result, correct)
+        # Verify deepcopy didn't mutate original
         self.assertEqual(cfg.inner.scale, 2.0)
 
     def test_deepcopy_with_getattribute_override(self):
