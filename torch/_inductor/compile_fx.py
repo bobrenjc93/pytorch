@@ -786,7 +786,9 @@ class _CompileFxCallable(Protocol):
 
 def _maybe_aot_mode_kwargs(aot_mode: bool) -> _CompileFxKwargs:
     # Keep the default False value out of graph_kwargs so non-AOT cache keys
-    # match the pre-existing representation.
+    # match the pre-existing representation. Use this only when forwarding
+    # graph_kwargs to inner_compile; direct aot_mode parameters are ordinary
+    # function arguments and do not affect that cache key shape.
     return {"aot_mode": True} if aot_mode else {}
 
 

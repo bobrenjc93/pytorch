@@ -71,8 +71,10 @@ def freezing_passes(
     constant_fold(gm)
     fake_tensor_prop(gm, aot_example_inputs, True)
 
-    # Freezing weight-pack patterns run before GraphLowering exists, so use
-    # graph-scoped metadata to expose AOT mode only while those patterns run.
+    # Freezing weight-pack patterns run before GraphLowering exists, so
+    # GraphModule metadata is the only graph-scoped carrier available to
+    # expose AOT mode during this pass. Restore the previous value below to
+    # avoid leaking the temporary metadata to later passes.
     sentinel = object()
     old_aot_mode = gm.meta.get("_inductor_aot_mode", sentinel)
     gm.meta["_inductor_aot_mode"] = aot_mode
