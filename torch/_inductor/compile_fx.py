@@ -784,6 +784,12 @@ class _CompileFxCallable(Protocol):
     ) -> OutputCode: ...
 
 
+def _maybe_aot_mode_kwargs(aot_mode: bool) -> _CompileFxKwargs:
+    # Keep the default False value out of graph_kwargs so non-AOT cache keys
+    # match the pre-existing representation.
+    return {"aot_mode": True} if aot_mode else {}
+
+
 def compile_fx_inner(
     gm: GraphModule,
     example_inputs: Sequence[InputType],
@@ -1208,8 +1214,8 @@ def _compile_fx_inner(
     _step_logger()(
         logging.INFO,
         "torchinductor done compiling "
-        f"{'BACKWARDS' if graph_kwargs['is_backward'] else 'FORWARDS'} "
-        f"graph {graph_kwargs['graph_id']}",
+        f"{'BACKWARDS' if graph_kwargs.get('is_backward', False) else 'FORWARDS'} "
+        f"graph {graph_kwargs.get('graph_id')}",
     )
     return compiled_graph
 
@@ -2195,7 +2201,6 @@ def fw_compiler_freezing(
             static_input_idxs = tracing_context.fw_metadata.static_input_indices
 
     with mock.patch.object(fake_mode, "allow_non_fake_inputs", True):
-        aot_mode_kwargs = {"aot_mode": True} if aot_mode else {}
         optimized_function = inner_compile(
             opt_model,
             aot_example_inputs,
@@ -2205,7 +2210,7 @@ def fw_compiler_freezing(
             is_inference=True,
             boxed_forward_device_index=forward_device,
             layout_opt=layout_opt,
-            **aot_mode_kwargs,
+            **_maybe_aot_mode_kwargs(aot_mode),
         )
 
     # aot_inductor codegens a call that takes in just the inputs, so we don't return a wrapper
@@ -2246,9 +2251,7 @@ def get_cpp_wrapper_config(
         "triton.autotune_at_compile_time": autotune_at_compile_time,
         "triton.autotune_cublasLt": not autotune_at_compile_time,
         "triton.cudagraphs": (
-            config.triton.cudagraphs
-            and not aot_mode
-            and not config.graph_partition
+            config.triton.cudagraphs and not aot_mode and not config.graph_partition
         ),
         "triton.store_cubin": True,
     }
@@ -2524,9 +2527,6 @@ def compile_fx_forward(
     _recursive_record_user_visible_output_idxs(gm)
 
     with cudagraph_annotation_context(compiler_config_extra.cudagraphs):
-        aot_mode_kwargs = (
-            {"aot_mode": True} if compiler_config_extra.aot_mode else {}
-        )
         result = inner_compile(
             gm,
             example_inputs,
@@ -2535,7 +2535,7 @@ def compile_fx_forward(
             graph_id=compiler_config_extra.graph_id,
             is_inference=is_inference,
             boxed_forward_device_index=compiler_config_extra.forward_device,
-            **aot_mode_kwargs,
+            **_maybe_aot_mode_kwargs(compiler_config_extra.aot_mode),
         )
 
         if (
@@ -2602,9 +2602,6 @@ def compile_fx_backward(
             ),
             cudagraph_annotation_context(cudagraphs),
         ):
-            aot_mode_kwargs = (
-                {"aot_mode": True} if compiler_config_extra.aot_mode else {}
-            )
             return inner_compile(
                 gm,
                 example_inputs,
@@ -2613,7 +2610,7 @@ def compile_fx_backward(
                 is_backward=True,
                 graph_id=compiler_config_extra.graph_id,
                 boxed_forward_device_index=compiler_config_extra.forward_device,
-                **aot_mode_kwargs,
+                **_maybe_aot_mode_kwargs(compiler_config_extra.aot_mode),
             )
 
 

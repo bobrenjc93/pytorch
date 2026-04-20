@@ -4,10 +4,7 @@ from unittest import mock
 
 import torch
 from torch._inductor import config
-from torch._inductor.compile_fx import (
-    _compile_fx_inner,
-    get_cpp_wrapper_config,
-)
+from torch._inductor.compile_fx import _compile_fx_inner, get_cpp_wrapper_config
 from torch._inductor.test_case import TestCase as InductorTestCase
 
 
