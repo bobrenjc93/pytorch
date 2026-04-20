@@ -24,7 +24,6 @@ from torch._inductor import config, metrics
 from torch._inductor.codecache import (
     BypassFxGraphCache,
     CUDACodeCache,
-    FxGraphCache,
     FxGraphCacheKeyGenerator,
     FxGraphCachePickler,
     FxGraphCacheStore,

@@ -1365,6 +1365,7 @@ class FxGraphGuardEvaluator(GuardEvaluator):
         evaluate_guards: Callable[[str, list[int] | list[torch.SymInt]], bool] | None,
     ) -> Callable[[str, list[int] | list[torch.SymInt]], bool]:
         # If this config is turned on, everything is a guard hit and we check nothing.
+        # This also means cache hits do not add dynamic guards to the shape env.
         if config.unsafe_skip_cache_dynamic_shape_guards:
             return lambda x, y: True
 
@@ -1827,7 +1828,7 @@ class FxGraphCacheArtifactHandler:
 class InductorCacheArtifact(CacheArtifact):
     @override
     def populate_cache(self) -> None:
-        FxGraphCache._write_to_local_cache(self.key, self.content)
+        FxGraphCacheStore.write_local(self.key, self.content)
 
     @override
     @staticmethod
@@ -1863,6 +1864,8 @@ class FxGraphCache(GuardedCache[CompiledFxGraph]):
       have been created during compilation are added to the current context.
     """
 
+    # Stateful helpers are instances so they can share the guard evaluator.
+    # Stateless helpers are class references used as namespaces.
     _guard_evaluator = FxGraphGuardEvaluator()
     _key_generator = FxGraphCacheKeyGenerator(_guard_evaluator)
     _store = FxGraphCacheStore
