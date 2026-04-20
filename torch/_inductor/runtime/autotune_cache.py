@@ -62,10 +62,6 @@ log = logging.getLogger(__name__)
 _InductorMetaTy = dict[str, object]
 
 
-class InvalidCachedConfig(ValueError):
-    pass
-
-
 def inductor_meta_from_config() -> _InductorMetaTy:
     from torch._inductor import config
 
@@ -124,22 +120,8 @@ class CachedConfig:
     time_taken_ms: int | None = None
     triton_cache_hash: str | None = None
 
-    @classmethod
-    def from_config(
-        cls,
-        config: Config,
-        configs_hash: str,
-        time_taken_ns: int,
-        found_by_coordesc: bool = False,
-        triton_cache_hash: str | None = None,
-    ) -> CachedConfig:
-        return cls(
-            config=config,
-            configs_hash=configs_hash,
-            found_by_coordesc=found_by_coordesc,
-            time_taken_ms=time_taken_ns // 1000000,  # Convert from NS to MS
-            triton_cache_hash=triton_cache_hash,
-        )
+    class Invalid(ValueError):
+        pass
 
     def to_dict(self) -> dict[str, JsonDataTy]:
         data: dict[str, JsonDataTy] = {
@@ -191,7 +173,7 @@ class CachedConfig:
 
         try:
             return cls._from_dict(data, expected_configs_hash, configs, inductor_meta)
-        except InvalidCachedConfig as exc:
+        except CachedConfig.Invalid as exc:
             log.warning(
                 "Ignoring corrupt autotune cache entry for configs_hash %s: %s",
                 expected_configs_hash,
@@ -239,9 +221,7 @@ class CachedConfig:
             # pyrefly: ignore [missing-attribute]
             triton_config.found_by_coordesc = True
         else:
-            triton_config = cls._match_config(
-                configs, remaining, num_warps, num_stages
-            )
+            triton_config = cls._match_config(configs, remaining, num_warps, num_stages)
 
         # Restore extra_options (may be None if not used by backend).
         # pyrefly: ignore [missing-attribute]
@@ -276,8 +256,8 @@ class CachedConfig:
         if len(matching_configs) == 1:
             return matching_configs[0]
         if not matching_configs:
-            raise InvalidCachedConfig("cached config did not match any config")
-        raise InvalidCachedConfig("cached config matched multiple configs")
+            raise CachedConfig.Invalid("cached config did not match any config")
+        raise CachedConfig.Invalid("cached config matched multiple configs")
 
     @staticmethod
     def _pop_int(
@@ -288,21 +268,19 @@ class CachedConfig:
         elif default is not None:
             return default
         else:
-            raise InvalidCachedConfig(f"missing {key}")
+            raise CachedConfig.Invalid(f"missing {key}")
         if isinstance(value, bool) or not isinstance(value, int):
-            raise InvalidCachedConfig(f"{key} must be an int")
+            raise CachedConfig.Invalid(f"{key} must be an int")
         return value
 
     @staticmethod
-    def _pop_bool(
-        data: dict[str, JsonDataTy], key: str, default: bool = False
-    ) -> bool:
+    def _pop_bool(data: dict[str, JsonDataTy], key: str, default: bool = False) -> bool:
         if key in data:
             value = data.pop(key)
         else:
             return default
         if not isinstance(value, bool):
-            raise InvalidCachedConfig(f"{key} must be a bool")
+            raise CachedConfig.Invalid(f"{key} must be a bool")
         return value
 
 
@@ -468,12 +446,12 @@ class AutotuneCache:
         found_by_coordesc: bool = False,
         triton_cache_hash: str | None = None,
     ) -> None:
-        data = CachedConfig.from_config(
-            config,
-            self.configs_hash,
-            time_taken_ns,
-            found_by_coordesc,
-            triton_cache_hash,
+        data = CachedConfig(
+            config=config,
+            configs_hash=self.configs_hash,
+            found_by_coordesc=found_by_coordesc,
+            time_taken_ms=time_taken_ns // 1000000,  # Convert from NS to MS
+            triton_cache_hash=triton_cache_hash,
         ).to_dict()
 
         if local_cache := self.local_cache:
@@ -718,7 +696,7 @@ def _should_use_remote_autotune_cache(inductor_meta: _InductorMetaTy) -> bool:
 
 
 def _load_cached_autotuning(
-    best_config: dict[str, JsonDataTy],
+    best_config: dict[str, JsonDataTy] | None,
     configs_hash: str,
     configs: list[Config],
     inductor_meta: _InductorMetaTy,

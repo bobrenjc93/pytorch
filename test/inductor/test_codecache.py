@@ -3766,6 +3766,7 @@ class TestAutotuneCacheExtraOptions(TestCase):
     """
 
     class FakeConfig:
+        # Minimal Config-like object for CPU-only cache validation tests.
         def __init__(self, kwargs, num_warps, num_stages):
             self.kwargs = kwargs
             self.num_warps = num_warps
@@ -3931,6 +3932,59 @@ class TestAutotuneCacheExtraOptions(TestCase):
 
         self.assertIsNone(result)
         self.assertIn("missing num_warps", "\n".join(log.output))
+
+    def test_load_cached_autotuning_reports_invalid_found_by_coordesc(self):
+        from torch._inductor.runtime.autotune_cache import _load_cached_autotuning
+
+        configs = [self.FakeConfig({"BLOCK_M": 64, "BLOCK_N": 64}, 4, 2)]
+        best_config = {
+            "BLOCK_M": 64,
+            "BLOCK_N": 64,
+            "num_warps": 4,
+            "num_stages": 2,
+            "configs_hash": "test_hash",
+            "found_by_coordesc": "yes",
+        }
+
+        with self.assertLogs(
+            "torch._inductor.runtime.autotune_cache", level="WARNING"
+        ) as log:
+            result = _load_cached_autotuning(
+                best_config.copy(),
+                "test_hash",
+                configs,
+                {"coordinate_descent_tuning": False},
+            )
+
+        self.assertIsNone(result)
+        self.assertIn("found_by_coordesc must be a bool", "\n".join(log.output))
+
+    def test_cached_config_round_trips_with_extra_options(self):
+        from torch._inductor.runtime.autotune_cache import CachedConfig
+
+        original_config = self.FakeConfig({"BLOCK_M": 64, "BLOCK_N": 64}, 4, 2)
+        original_config.extra_options = {"backend_specific": "option"}
+        cached_config = CachedConfig(
+            config=original_config,
+            configs_hash="test_hash",
+            found_by_coordesc=False,
+            time_taken_ms=7,
+            triton_cache_hash="triton_hash",
+        )
+
+        data = cached_config.to_dict()
+        loaded = CachedConfig.from_dict(
+            data.copy(),
+            "test_hash",
+            [original_config],
+            {"coordinate_descent_tuning": False},
+        )
+
+        self.assertIsNotNone(loaded)
+        self.assertIs(loaded.config, original_config)
+        self.assertEqual(loaded.config.extra_options, {"backend_specific": "option"})
+        self.assertEqual(loaded.time_taken_ms, 7)
+        self.assertEqual(loaded.triton_cache_hash, "triton_hash")
 
     @requires_triton()
     def test_autotune_cache_save_includes_extra_options(self):
