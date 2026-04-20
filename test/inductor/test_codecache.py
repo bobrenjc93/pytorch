@@ -2698,6 +2698,19 @@ class TestFxGraphCacheHashing(TestCase):
         with self.assertRaisesRegex(BypassFxGraphCache, "mkldnn tensors unpickleable"):
             CacheabilityValidator(gm, require_shape_env=False).validate()
 
+    def test_check_for_hop_skips_constants(self):
+        if not torch.backends.mkldnn.is_available():
+            raise unittest.SkipTest("requires MKLDNN")
+
+        graph = torch.fx.Graph()
+        output = graph.get_attr("mkldnn_weight")
+        graph.output(output)
+        gm = torch.fx.GraphModule(
+            {"mkldnn_weight": torch.randn(2, 2).to_mkldnn()}, graph
+        )
+
+        FxGraphCache._check_for_hop(gm)
+
     def test_check_can_cache_checks_backward_state_example_inputs(self):
         gm = torch.fx.GraphModule({}, torch.fx.Graph())
 
@@ -2726,7 +2739,9 @@ class TestFxGraphCacheHashing(TestCase):
 
     def test_bypass_for_pickle_error_logs_traceback(self):
         with self.assertLogs("torch._inductor.codecache", level="WARNING") as logs:
-            with self.assertRaisesRegex(BypassFxGraphCache, "Failed to pickle cache key"):
+            with self.assertRaisesRegex(
+                BypassFxGraphCache, "Failed to pickle cache key"
+            ):
                 try:
                     raise RuntimeError("pickle failed")
                 except RuntimeError as e:

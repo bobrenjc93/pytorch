@@ -884,7 +884,10 @@ class CacheabilityValidator:
 
     @staticmethod
     def bypass_for_pickle_error(e: Exception) -> NoReturn:
-        log.warning("Failed to pickle cache key", exc_info=True)
+        log.warning(
+            "Failed to pickle cache key",
+            exc_info=(type(e), e, e.__traceback__),
+        )
         raise BypassFxGraphCache("Failed to pickle cache key") from e
 
     @staticmethod
@@ -949,10 +952,12 @@ class CacheabilityValidator:
             self.bypass("No shape env")
 
     def _check_cache_key_object(
-        self, obj: Any, seen: OrderedSet[int] | None = None
+        self,
+        obj: Any,
+        seen: set[int] | None = None,  # noqa: set_linter
     ) -> None:
         if seen is None:
-            seen = OrderedSet()
+            seen = set()  # noqa: set_linter
 
         obj_id = id(obj)
         if obj_id in seen:
