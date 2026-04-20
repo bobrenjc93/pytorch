@@ -813,7 +813,12 @@ def compile_fx_inner(
         # Suppress cudagraph skip logging here; compile_fx already logged it.
         if kwargs["cpp_wrapper"]:
             stack.enter_context(
-                config.patch(get_cpp_wrapper_config(log_cudagraph_skip=False))
+                config.patch(
+                    get_cpp_wrapper_config(
+                        log_cudagraph_skip=False,
+                        aot_mode=kwargs.get("aot_mode", False),
+                    )
+                )
             )
         stack.enter_context(torch.utils._python_dispatch._disable_current_modes())
         stack.enter_context(_use_lazy_graph_module(dynamo_config.use_lazy_graph_module))
@@ -854,7 +859,7 @@ def _compile_fx_inner(
     If you change the argument list for this function, make sure you
     also update the call to save_args_for_compile_fx_inner below accordingly.
     """
-    aot_mode: bool = V.aot_compilation
+    aot_mode: bool = graph_kwargs.get("aot_mode", False)
 
     from torch._inductor.autotune_process import use_pipelined_autotuning
 
@@ -1268,7 +1273,7 @@ class _InProcessFxCompile(FxCompile):
         graph_id: int | None = graph_kwargs.get("graph_id", None)
         cpp_wrapper: bool = graph_kwargs.get("cpp_wrapper", False)
         fx_wrapper: bool = graph_kwargs.get("fx_wrapper", False)
-        aot_mode: bool = V.aot_compilation
+        aot_mode: bool = graph_kwargs.get("aot_mode", False)
         is_inference: bool = graph_kwargs.get("is_inference", False)
         extern_node_serializer: Callable[[list[ExternKernelNode]], Any] | None = (
             graph_kwargs.get("extern_node_serializer", None)
@@ -1715,7 +1720,7 @@ class _InProcessFxCompile(FxCompile):
                             V.graph.disable_cudagraphs_reason = disable
 
                     # pyrefly: ignore [unbound-name]
-                    if V.aot_compilation:
+                    if graph.aot_mode:
                         assert isinstance(
                             compiled_fn,
                             # pyrefly: ignore [unbound-name]
@@ -1725,7 +1730,7 @@ class _InProcessFxCompile(FxCompile):
                             filename=compiled_fn, device_type=graph.device_type
                         )
 
-                    # TODO: Hoist this above V.aot_compilation
+                    # TODO: Hoist this above the AOT mode return.
                     # pyrefly: ignore [unbound-name]
                     if cudagraphs and not V.graph.disable_cudagraphs_reason:
                         from torch._inductor.cudagraph_utils import (
@@ -2083,7 +2088,6 @@ def compile_fx_aot(
     saved_compile_id = model_.meta.get("dynamo_compile_id", None)
     saved_compile_context = torch._guards.CompileContext(saved_compile_id)
     with (
-        V.set_aot_compilation(True),
         torch._guards.compile_context(saved_compile_context),
         chromium_event_timed(
             "compile_fx_aot",
@@ -2100,6 +2104,7 @@ def compile_fx_aot(
                 extern_node_serializer=extern_node_serializer,
             ),
             config_patches=config_patches,
+            aot_mode=True,
         )
 
         assert isinstance(compiled_artifacts, CompiledAOTI)
@@ -2120,6 +2125,7 @@ def fw_compiler_freezing(
     cudagraphs: BoxedBool,
     graph_id: int,
     forward_device: BoxedDeviceIndex,
+    aot_mode: bool,
 ) -> Callable[[list[object]], Sequence[torch.Tensor]]:
     from torch._inductor.freezing import convert_conv_weights_to_channels_last, freeze
 
@@ -2140,6 +2146,7 @@ def fw_compiler_freezing(
         dynamo_model,
         aot_autograd_model,
         aot_example_inputs,  # type: ignore[arg-type]
+        aot_mode=aot_mode,
     )
 
     aot_example_inputs = [aot_example_inputs[ind] for ind in preserved_arg_indices]
@@ -2188,6 +2195,7 @@ def fw_compiler_freezing(
             static_input_idxs = tracing_context.fw_metadata.static_input_indices
 
     with mock.patch.object(fake_mode, "allow_non_fake_inputs", True):
+        aot_mode_kwargs = {"aot_mode": True} if aot_mode else {}
         optimized_function = inner_compile(
             opt_model,
             aot_example_inputs,
@@ -2197,11 +2205,12 @@ def fw_compiler_freezing(
             is_inference=True,
             boxed_forward_device_index=forward_device,
             layout_opt=layout_opt,
+            **aot_mode_kwargs,
         )
 
     # aot_inductor codegens a call that takes in just the inputs, so we don't return a wrapper
     # that drops constant-ified params
-    if V.aot_compilation:
+    if aot_mode:
         return optimized_function
 
     def wrapper(args: list[object]) -> Sequence[torch.Tensor]:
@@ -2217,7 +2226,9 @@ def fw_compiler_freezing(
     return wrapper
 
 
-def get_cpp_wrapper_config(log_cudagraph_skip: bool = True) -> dict[str, object]:
+def get_cpp_wrapper_config(
+    log_cudagraph_skip: bool = True, *, aot_mode: bool = False
+) -> dict[str, object]:
     if log_cudagraph_skip and config.triton.cudagraphs and config.graph_partition:
         log_cudagraph_skip_and_bump_counter(
             format_default_skip_message(
@@ -2229,14 +2240,14 @@ def get_cpp_wrapper_config(log_cudagraph_skip: bool = True) -> dict[str, object]
         config.triton.autotune_at_compile_time
         if config.triton.autotune_at_compile_time is not None
         # Default to True for AOTI. Subject to change in future.
-        else has_triton() and V.aot_compilation
+        else has_triton() and aot_mode
     )
     return {
         "triton.autotune_at_compile_time": autotune_at_compile_time,
         "triton.autotune_cublasLt": not autotune_at_compile_time,
         "triton.cudagraphs": (
             config.triton.cudagraphs
-            and not V.aot_compilation
+            and not aot_mode
             and not config.graph_partition
         ),
         "triton.store_cubin": True,
@@ -2332,11 +2343,13 @@ class CompilerConfigExtra:
     graph_id: int
     forward_device: BoxedDeviceIndex
     forward_is_partitioned: BoxedBool
+    aot_mode: bool
     cudagraphs_bwd_override: bool | None = None
 
 
 def create_compiler_config_extra(
     gm: GraphModule | GmWrapper,
+    aot_mode: bool = False,
 ) -> CompilerConfigExtra:
     gm_meta = gm.meta if isinstance(gm, GraphModule) else None
 
@@ -2392,6 +2405,7 @@ def create_compiler_config_extra(
         cudagraphs=cudagraphs,
         graph_id=graph_id,
         forward_device=forward_device,
+        aot_mode=aot_mode,
         cudagraphs_bwd_override=cudagraphs_bwd_override,
         forward_is_partitioned=forward_is_partitioned,
     )
@@ -2510,6 +2524,9 @@ def compile_fx_forward(
     _recursive_record_user_visible_output_idxs(gm)
 
     with cudagraph_annotation_context(compiler_config_extra.cudagraphs):
+        aot_mode_kwargs = (
+            {"aot_mode": True} if compiler_config_extra.aot_mode else {}
+        )
         result = inner_compile(
             gm,
             example_inputs,
@@ -2518,6 +2535,7 @@ def compile_fx_forward(
             graph_id=compiler_config_extra.graph_id,
             is_inference=is_inference,
             boxed_forward_device_index=compiler_config_extra.forward_device,
+            **aot_mode_kwargs,
         )
 
         if (
@@ -2576,12 +2594,17 @@ def compile_fx_backward(
             static_input_idxs = list(range(fixed))
         with (
             (
-                config.patch(get_cpp_wrapper_config())
+                config.patch(
+                    get_cpp_wrapper_config(aot_mode=compiler_config_extra.aot_mode)
+                )
                 if config.cpp_wrapper
                 else contextlib.nullcontext()
             ),
             cudagraph_annotation_context(cudagraphs),
         ):
+            aot_mode_kwargs = (
+                {"aot_mode": True} if compiler_config_extra.aot_mode else {}
+            )
             return inner_compile(
                 gm,
                 example_inputs,
@@ -2590,6 +2613,7 @@ def compile_fx_backward(
                 is_backward=True,
                 graph_id=compiler_config_extra.graph_id,
                 boxed_forward_device_index=compiler_config_extra.forward_device,
+                **aot_mode_kwargs,
             )
 
 
@@ -2651,6 +2675,7 @@ def compile_fx(
     decompositions: dict[OpOverload, Callable[..., Any]] | None = None,
     ignore_shape_env: bool = False,
     compile_region_name: str | None = None,
+    aot_mode: bool = False,
 ) -> CompileFxOutput:
     """
     Main entry point for compiling given FX graph.  Despite the fact that this
@@ -2689,6 +2714,7 @@ def compile_fx(
                 decompositions=decompositions,
                 ignore_shape_env=ignore_shape_env,
                 compile_region_name=compile_region_name,
+                aot_mode=aot_mode,
             )
 
     # Keep region names out of graph_kwargs so they don't perturb FX cache keys.
@@ -2711,7 +2737,7 @@ def compile_fx(
         fx_wrapper_config = config.fx_wrapper
 
         with (
-            config.patch(get_cpp_wrapper_config()),
+            config.patch(get_cpp_wrapper_config(aot_mode=aot_mode)),
             V.set_real_inputs(example_inputs_),
         ):
             inputs_: Sequence[InputType] = (
@@ -2736,6 +2762,7 @@ def compile_fx(
                         fx_wrapper=fx_wrapper_config,
                     ),
                     ignore_shape_env=ignore_shape_env,
+                    aot_mode=aot_mode,
                     get_decomp_fn=get_decomp_fn,
                     compile_region_name=compile_region_name,
                 )
@@ -2745,6 +2772,7 @@ def compile_fx(
         example_inputs_,
         inner_compile,
         ignore_shape_env,
+        aot_mode=aot_mode,
         get_decomp_fn=get_decomp_fn,
         compile_region_name=compile_region_name,
     )
@@ -2787,6 +2815,7 @@ def _maybe_wrap_and_compile_fx_main(
     inner_compile: Callable[..., OutputCode],
     ignore_shape_env: bool,
     *,
+    aot_mode: bool = False,
     get_decomp_fn: Callable[..., dict[Any, Callable[..., Any]]] = select_decomp_table,
     compile_region_name: str | None = None,
 ) -> CompileFxOutput:
@@ -2803,6 +2832,7 @@ def _maybe_wrap_and_compile_fx_main(
         _maybe_wrap_and_compile_fx_main,
         inner_compile=inner_compile,
         ignore_shape_env=ignore_shape_env,
+        aot_mode=aot_mode,
         get_decomp_fn=get_decomp_fn,
         compile_region_name=compile_region_name,
     )
@@ -2826,6 +2856,7 @@ def _maybe_wrap_and_compile_fx_main(
         example_inputs_,
         inner_compile,
         ignore_shape_env,
+        aot_mode=aot_mode,
         get_decomp_fn=get_decomp_fn,
         compile_region_name=compile_region_name,
     )
@@ -2837,6 +2868,7 @@ def _compile_fx_main(
     inner_compile: Callable[..., OutputCode],
     ignore_shape_env: bool,
     *,
+    aot_mode: bool = False,
     get_decomp_fn: Callable[..., dict[Any, Callable[..., Any]]] = select_decomp_table,
     compile_region_name: str | None = None,
 ) -> CompileFxOutput:
@@ -2867,7 +2899,7 @@ def _compile_fx_main(
 
         num_example_inputs = len(example_inputs_)
 
-        compiler_config_extra = create_compiler_config_extra(model_)
+        compiler_config_extra = create_compiler_config_extra(model_, aot_mode=aot_mode)
 
         decompositions = get_decomp_fn()
         inner_compile = functools.partial(inner_compile, get_decomp_fn=get_decomp_fn)
@@ -2906,6 +2938,7 @@ def _compile_fx_main(
                 cudagraphs=compiler_config_extra.cudagraphs,
                 graph_id=compiler_config_extra.graph_id,
                 forward_device=compiler_config_extra.forward_device,
+                aot_mode=aot_mode,
             )
         else:
             inference_compiler = functools.partial(fw_compiler_base, is_inference=True)
@@ -2937,7 +2970,7 @@ def _compile_fx_main(
             or torch._guards.TracingContext(fake_mode)
         )
 
-        if V.aot_compilation and not config.enable_autograd_for_aot:
+        if aot_mode and not config.enable_autograd_for_aot:
             from .utils import is_valid_aoti_model_name
 
             is_valid_aoti_model_name()

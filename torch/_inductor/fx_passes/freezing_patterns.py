@@ -34,7 +34,9 @@ pass_patterns = [
 binary_folding_pass = PatternMatcherPass()
 
 
-def freezing_passes(gm: torch.fx.GraphModule, aot_example_inputs):
+def freezing_passes(
+    gm: torch.fx.GraphModule, aot_example_inputs, *, aot_mode: bool = False
+):
     """
     Passes that are applied to the graph to freeze pass.
     """
@@ -69,8 +71,17 @@ def freezing_passes(gm: torch.fx.GraphModule, aot_example_inputs):
     constant_fold(gm)
     fake_tensor_prop(gm, aot_example_inputs, True)
 
-    for pattern in pass_patterns:
-        pattern.apply(gm.graph)  # type: ignore[arg-type]
+    sentinel = object()
+    old_aot_mode = gm.meta.get("_inductor_aot_mode", sentinel)
+    gm.meta["_inductor_aot_mode"] = aot_mode
+    try:
+        for pattern in pass_patterns:
+            pattern.apply(gm.graph)  # type: ignore[arg-type]
+    finally:
+        if old_aot_mode is sentinel:
+            gm.meta.pop("_inductor_aot_mode", None)
+        else:
+            gm.meta["_inductor_aot_mode"] = old_aot_mode
 
     # The CPU weight packing always assume the conv's weight is channels last,
     # So make sure the layout_optimization is on when doing it.
