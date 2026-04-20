@@ -3765,6 +3765,12 @@ class TestAutotuneCacheExtraOptions(TestCase):
     extra_options is correctly preserved when saving and loading from cache.
     """
 
+    class FakeConfig:
+        def __init__(self, kwargs, num_warps, num_stages):
+            self.kwargs = kwargs
+            self.num_warps = num_warps
+            self.num_stages = num_stages
+
     @requires_triton()
     def test_load_cached_autotuning_preserves_extra_options_with_coordesc(self):
         """
@@ -3873,6 +3879,58 @@ class TestAutotuneCacheExtraOptions(TestCase):
         self.assertIsNotNone(result)
         # extra_options should be None when not in cache
         self.assertIsNone(result.extra_options)
+
+    def test_load_cached_autotuning_reports_corrupt_unmatched_config(self):
+        from torch._inductor.runtime.autotune_cache import _load_cached_autotuning
+
+        configs = [self.FakeConfig({"BLOCK_M": 32, "BLOCK_N": 32}, 4, 2)]
+        best_config = {
+            "BLOCK_M": 64,
+            "BLOCK_N": 64,
+            "num_warps": 4,
+            "num_stages": 2,
+            "configs_hash": "test_hash",
+        }
+
+        with self.assertLogs(
+            "torch._inductor.runtime.autotune_cache", level="WARNING"
+        ) as log:
+            result = _load_cached_autotuning(
+                best_config.copy(),
+                "test_hash",
+                configs,
+                {"coordinate_descent_tuning": False},
+            )
+
+        self.assertIsNone(result)
+        self.assertIn(
+            "cached config did not match any config",
+            "\n".join(log.output),
+        )
+
+    def test_load_cached_autotuning_reports_missing_required_field(self):
+        from torch._inductor.runtime.autotune_cache import _load_cached_autotuning
+
+        configs = [self.FakeConfig({"BLOCK_M": 64, "BLOCK_N": 64}, 4, 2)]
+        best_config = {
+            "BLOCK_M": 64,
+            "BLOCK_N": 64,
+            "num_stages": 2,
+            "configs_hash": "test_hash",
+        }
+
+        with self.assertLogs(
+            "torch._inductor.runtime.autotune_cache", level="WARNING"
+        ) as log:
+            result = _load_cached_autotuning(
+                best_config.copy(),
+                "test_hash",
+                configs,
+                {"coordinate_descent_tuning": False},
+            )
+
+        self.assertIsNone(result)
+        self.assertIn("missing num_warps", "\n".join(log.output))
 
     @requires_triton()
     def test_autotune_cache_save_includes_extra_options(self):
