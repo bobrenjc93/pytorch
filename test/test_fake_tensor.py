@@ -2392,8 +2392,17 @@ class FakeTensorDispatchCache(TestCase):
         else:
             self.assertNotIn(reason, info.bypasses)
 
-    def test_dispatch_cache_instances_are_isolated(self):
+    def test_tensor_metadata_flatten_keeps_default_cache(self):
         with FakeTensorMode() as fm:
+            x = torch.randn(4, 3)
+            metadata = extract_tensor_metadata(x)
+            result: list[object] = []
+
+            metadata._flatten_into(result, fm, _CacheKeyState(fm.shape_env))
+            self.assertGreater(len(result), 0)
+
+    def test_dispatch_cache_instances_are_isolated(self):
+        with FakeTensorMode(allow_non_fake_inputs=True) as fm:
             x = torch.randn(4, 3)
             y = torch.randn(4, 3)
             cache1 = DispatchCache()
@@ -2407,6 +2416,11 @@ class FakeTensorDispatchCache(TestCase):
                 cache1.dispatch(fm, aten.add.Tensor, (), (x, y), {})
                 self.assertEqual(cache1.info().hits, 1)
                 self.assertEqual(cache2.info().hits, 0)
+
+                real = torch.randn(4, 3)
+                cache1.dispatch(fm, aten.neg.default, (), (real,), {})
+                self.assertEqual(cache1.info().bypasses["non-fake tensor"], 1)
+                self.assertNotIn("non-fake tensor", cache2.info().bypasses)
 
     def test_cache_hit(self):
         """

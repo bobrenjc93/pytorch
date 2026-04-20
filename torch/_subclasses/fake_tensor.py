@@ -1126,11 +1126,13 @@ class TensorMetadata:
         self,
         result: list[object],
         fake_mode: FakeTensorMode,
-        dispatch_cache: DispatchCache,
         state: _CacheKeyState,
+        dispatch_cache: DispatchCache | None = None,
     ) -> None:
         # Flatten the TensorMetadata out into `result`.  Make sure to call
         # state.convert_sym_int() on any SymInts.
+        if dispatch_cache is None:
+            dispatch_cache = type(fake_mode).dispatch_cache
         for field in dataclasses.fields(self):
             value = getattr(self, field.name)
             if isinstance(value, (tuple, list, torch.Size)):
@@ -1443,7 +1445,7 @@ class DispatchCache:
         for any situation that precludes caching.
         """
         is_tracing = torch.fx.experimental.proxy_tensor.get_proxy_mode() is not None
-        key_values = [
+        key_values: list[object] = [
             func,
             # Capture the default_dtype mode since that can affect the output tensor,
             # e.g., when operating on constant float values.
@@ -1599,7 +1601,7 @@ class DispatchCache:
                 if is_sparse_any(arg):
                     raise _BypassDispatchCache(f"{arg.layout} tensor")
                 metadata = extract_tensor_metadata(arg)
-                metadata._flatten_into(result, fake_mode, self, state)
+                metadata._flatten_into(result, fake_mode, state, self)
             elif isinstance(arg, Tensor):
                 raise _BypassDispatchCache("non-fake tensor")
             elif isinstance(arg, SymInt):
@@ -3534,10 +3536,6 @@ from torch._subclasses.fake_impls import (  # noqa: F401
     op_implementations_checks,
     stride_incorrect_op,
 )
-
-
-def evict_fake_tensor_cache_key(key: _DispatchCacheKey) -> None:
-    FakeTensorMode.dispatch_cache.evict_cache_key(key)
 
 
 @atexit.register
