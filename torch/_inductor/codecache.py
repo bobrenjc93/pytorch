@@ -26,6 +26,7 @@ import textwrap
 import threading
 import warnings
 from bisect import bisect_right
+from collections.abc import Set as AbstractSet
 from copy import copy
 from ctypes import c_void_p, CDLL, cdll
 from datetime import timedelta
@@ -831,6 +832,7 @@ class CacheabilityValidator:
     example_inputs: Sequence[InputType] = ()
     fx_kwargs: _CompileFxKwargs | None = None
     require_shape_env: bool = True
+    shape_env: ShapeEnv | None = None
 
     def validate(self) -> None:
         self._check_custom_passes()
@@ -882,7 +884,7 @@ class CacheabilityValidator:
 
     @staticmethod
     def bypass_for_pickle_error(e: Exception) -> NoReturn:
-        log.warning("Failed to pickle cache key", exc_info=True)
+        log.warning("Failed to pickle cache key: %s", e)
         raise BypassFxGraphCache("Failed to pickle cache key") from e
 
     @staticmethod
@@ -897,10 +899,11 @@ class CacheabilityValidator:
         # When timing is EARLY, pre-grad passes already ran before the cache
         # lookup so there's nothing to validate here.
         if resolve_pre_grad_pass_timing() != "early":
-            assert not config.pre_grad_custom_pass or (
-                isinstance(config.pre_grad_custom_pass, CustomGraphPass)
-                and config.pre_grad_custom_pass.uuid()
-            ), "Unsupported pre grad custom pass"
+            if config.pre_grad_custom_pass and (
+                not isinstance(config.pre_grad_custom_pass, CustomGraphPass)
+                or not config.pre_grad_custom_pass.uuid()
+            ):
+                self.bypass("Unsupported pre grad custom pass")
         for p in (config.post_grad_custom_pre_pass, config.post_grad_custom_post_pass):
             if p and (not isinstance(p, CustomGraphPass) or not p.uuid()):
                 self.bypass("Unsupported post grad custom pass")
@@ -936,18 +939,20 @@ class CacheabilityValidator:
 
         if CompilerBisector.bisection_enabled:
             log.debug("dont cache graph when bisect enabled")
-            self.bypass("")
+            self.bypass("compiler bisector enabled")
 
     def _check_shape_env(self) -> None:
         # The treatment of guards in the caching implementation requires that
         # we have a shape env.
-        if self.require_shape_env and FxGraphCache._get_shape_env() is None:
+        if self.require_shape_env and self.shape_env is None:
             log.debug("fx graph cache no shape env")
             self.bypass("No shape env")
 
-    def _check_cache_key_object(self, obj: Any, seen: set[int] | None = None) -> None:
+    def _check_cache_key_object(
+        self, obj: Any, seen: OrderedSet[int] | None = None
+    ) -> None:
         if seen is None:
-            seen = set()
+            seen = OrderedSet()
 
         obj_id = id(obj)
         if obj_id in seen:
@@ -957,13 +962,13 @@ class CacheabilityValidator:
         if isinstance(obj, torch.Tensor):
             self.check_tensor(obj)
             return
-        if isinstance(obj, torch.fx.experimental._backward_state.BackwardState):
+        elif isinstance(obj, torch.fx.experimental._backward_state.BackwardState):
             self.bypass("Reduce unsupported")
-        if isinstance(obj, dict):
+        elif isinstance(obj, dict):
             for key, value in obj.items():
                 self._check_cache_key_object(key, seen)
                 self._check_cache_key_object(value, seen)
-        elif isinstance(obj, (list, tuple, set, frozenset, OrderedSet)):
+        elif isinstance(obj, (list, tuple, AbstractSet)):
             for item in obj:
                 self._check_cache_key_object(item, seen)
 
@@ -1841,11 +1846,13 @@ class FxGraphCache(GuardedCache[CompiledFxGraph]):
         Check some conditions that would preclude caching and raise BypassFxGraphCache
         to bypass in case caching is not possible.
         """
+        shape_env = FxGraphCache._get_shape_env() if require_shape_env else None
         CacheabilityValidator(
             gm,
             example_inputs=example_inputs,
             fx_kwargs=fx_kwargs,
             require_shape_env=require_shape_env,
+            shape_env=shape_env,
         ).validate()
 
     @staticmethod
