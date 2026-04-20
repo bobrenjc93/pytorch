@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import functools
+import threading
 from typing import Any, TYPE_CHECKING, TypeVar
 from typing_extensions import ParamSpec
 
@@ -25,6 +26,7 @@ op_implementations_checks = []
 
 _fake_impls_loaded = False
 _fake_impls_loading = False
+_fake_impls_lock = threading.RLock()
 
 
 def ordered_set(*items: _T) -> dict[_T, bool]:
@@ -34,21 +36,33 @@ def ordered_set(*items: _T) -> dict[_T, bool]:
 def ensure_fake_impls_loaded() -> None:
     global _fake_impls_loaded, _fake_impls_loading
 
-    if _fake_impls_loaded or _fake_impls_loading:
+    if _fake_impls_loaded:
         return
 
-    # Python's import lock serializes concurrent imports of fake_impls. This
-    # flag only prevents re-entering the loader through the intentional
-    # fake_tensor -> registry -> fake_impls -> fake_tensor import cycle. If the
-    # import fails, leave _fake_impls_loaded false so future calls retry instead
-    # of caching a partially initialized registry.
-    _fake_impls_loading = True
-    try:
-        import torch._subclasses.fake_impls  # noqa: F401
-    finally:
-        _fake_impls_loading = False
+    with _fake_impls_lock:
+        if _fake_impls_loaded:
+            return
+        if _fake_impls_loading:
+            return
 
-    _fake_impls_loaded = True
+        # The lock keeps concurrent callers from observing partially registered
+        # fake impls while Python's import lock serializes module execution.
+        # _fake_impls_loading only handles same-thread reentry through the
+        # fake_tensor -> registry -> fake_impls -> fake_tensor import cycle.
+        dict_snapshot = op_implementations_dict.copy()
+        checks_snapshot = list(op_implementations_checks)
+        _fake_impls_loading = True
+        try:
+            import torch._subclasses.fake_impls  # noqa: F401
+        except Exception:
+            op_implementations_dict.clear()
+            op_implementations_dict.update(dict_snapshot)
+            op_implementations_checks[:] = checks_snapshot
+            raise
+        else:
+            _fake_impls_loaded = True
+        finally:
+            _fake_impls_loading = False
 
 
 def get_op_implementations_checks() -> list[tuple[Callable[[OpOverload], bool], Any]]:
