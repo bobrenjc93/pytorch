@@ -1,5 +1,8 @@
 # Owner(s): ["module: inductor"]
+import base64
 import functools
+import hashlib
+import json
 import logging
 import os
 import pickle
@@ -21,6 +24,14 @@ from torch._dynamo.utils import counters
 from torch._functorch import config as functorch_config
 from torch._functorch._aot_autograd.autograd_cache import AOTAutogradCache
 from torch._inductor import config, metrics
+from torch._inductor.cache_key import (
+    AUTOTUNE_CACHE_KEY_STRATEGY,
+    CacheKeyStrategy,
+    CODE_CACHE_KEY_STRATEGY,
+    COMPACT_CACHE_KEY_STRATEGY,
+    FX_GRAPH_CACHE_KEY_STRATEGY,
+    SYSTEM_CACHE_KEY_STRATEGY,
+)
 from torch._inductor.codecache import (
     BypassFxGraphCache,
     CUDACodeCache,
@@ -94,6 +105,87 @@ torch._dynamo.config.fake_tensor_cache_crosscheck_enabled = True
 
 
 STATIC_LAUNCHER_DEVICES = ("cuda", "xpu")
+
+
+class TestCacheKeyStrategy(TestCase):
+    def _compact_sha256(self, data: bytes) -> str:
+        return (
+            base64.b32encode(hashlib.sha256(data).digest())[:51].decode("utf-8").lower()
+        )
+
+    def test_strategy_formats_existing_key_shapes(self):
+        self.assertEqual(
+            COMPACT_CACHE_KEY_STRATEGY.key(b"kernel"),
+            self._compact_sha256(b"kernel"),
+        )
+        self.assertEqual(
+            CODE_CACHE_KEY_STRATEGY.key("kernel", "extra"),
+            "c" + self._compact_sha256(b"kernel||extra"),
+        )
+        self.assertEqual(
+            FX_GRAPH_CACHE_KEY_STRATEGY.key(b"graph"),
+            "f" + self._compact_sha256(b"graph"),
+        )
+        self.assertEqual(
+            AUTOTUNE_CACHE_KEY_STRATEGY.key("kernel", b"torch"),
+            hashlib.sha256(b"kerneltorch").hexdigest(),
+        )
+
+    def test_custom_strategy_composes_components(self):
+        strategy = CacheKeyStrategy(
+            name="test",
+            digest_format="hex",
+            prefix="x",
+            separator=b":",
+        )
+
+        self.assertEqual(
+            strategy.key("left", b"right"),
+            "x" + hashlib.sha256(b"left:right").hexdigest(),
+        )
+
+    def test_code_hash_uses_code_strategy(self):
+        from torch._inductor.codecache import code_hash, sha256_hash
+
+        self.assertEqual(
+            sha256_hash(b"kernel"), COMPACT_CACHE_KEY_STRATEGY.key(b"kernel")
+        )
+        self.assertEqual(
+            code_hash("kernel", extra="extra"),
+            CODE_CACHE_KEY_STRATEGY.key("kernel", "extra"),
+        )
+
+    def test_system_strategy_hashes_sorted_json(self):
+        system = {"version": {"triton": "abc"}, "device": {"name": "gpu"}}
+
+        self.assertEqual(
+            SYSTEM_CACHE_KEY_STRATEGY.key_from_json(system),
+            hashlib.sha256(
+                json.dumps(system, sort_keys=True).encode("utf-8")
+            ).hexdigest(),
+        )
+
+    def test_autotune_prepare_key_uses_strategy(self):
+        from torch._inductor.runtime.autotune_cache import AutotuneCache
+
+        class FakeStrategy:
+            components = None
+
+            def key(self, *components):
+                self.components = components
+                return "sentinel"
+
+        fake_strategy = FakeStrategy()
+        with (
+            mock.patch(
+                "torch._inductor.runtime.autotune_cache.AUTOTUNE_CACHE_KEY_STRATEGY",
+                fake_strategy,
+            ),
+            torch.compiler.config.patch({"cache_key_tag": "tag"}),
+        ):
+            self.assertEqual(AutotuneCache._prepare_key("/tmp/cabcdef.py"), "sentinel")
+
+        self.assertEqual(fake_strategy.components, ("cabcdef.py:tag",))
 
 
 class LogCaptureHandler(logging.Handler):
