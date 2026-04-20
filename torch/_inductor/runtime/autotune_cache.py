@@ -33,6 +33,7 @@ from typing import Any
 from typing_extensions import override
 
 import torch
+from torch._guards import CompileContext
 from torch._inductor.runtime.runtime_utils import cache_dir
 from torch.compiler._cache import (
     CacheArtifact,
@@ -456,10 +457,30 @@ class _AutotuneCacheBundlerImpl:
 
 
 class AutotuneCacheBundler:
-    _bundler: _AutotuneCacheBundlerImpl | None = None
-
     def __init__(self) -> None:
-        pass
+        self._bundler: _AutotuneCacheBundlerImpl | None = None
+
+    @classmethod
+    def _get_context_bundler(
+        cls,
+        compile_context: CompileContext | None = None,
+        *,
+        create: bool,
+    ) -> AutotuneCacheBundler | None:
+        if compile_context is None:
+            return None
+
+        bundler = compile_context.autotune_cache_bundler
+        if bundler is None and create:
+            bundler = cls()
+            compile_context.autotune_cache_bundler = bundler
+        assert bundler is None or isinstance(bundler, cls)
+        return bundler
+
+    @classmethod
+    def has_active_compile(cls, compile_context: CompileContext | None) -> bool:
+        context_bundler = cls._get_context_bundler(compile_context, create=False)
+        return context_bundler is not None and context_bundler._bundler is not None
 
     # Call this before we start any autotune computation for an inductor python
     # file. On a cache hit it copies the individual results into the local
@@ -472,8 +493,6 @@ class AutotuneCacheBundler:
         code: str | None = None,
         code_hash: str | None = None,
     ) -> None:
-        assert cls._bundler is None
-
         if code is not None:
             assert code_hash is None, "Cannot specify both code and code_hash"
             code_hash = _comment_stripped_hash(code)
@@ -483,6 +502,16 @@ class AutotuneCacheBundler:
             inductor_meta
         ):
             return
+
+        context_bundler = cls._get_context_bundler(
+            CompileContext.try_get(), create=True
+        )
+        if context_bundler is None:
+            log.debug(
+                "Skipping bundled autotune cache because compile_context is not set"
+            )
+            return
+        assert context_bundler._bundler is None
 
         cache = create_cache(
             "bundled-autotune-v1",
@@ -512,7 +541,7 @@ class AutotuneCacheBundler:
         if not bundler._load_cache():
             # We couldn't load from the cache - so save the data so we can store
             # the saved autotunes.
-            cls._bundler = bundler
+            context_bundler._bundler = bundler
 
         # If we get a cache hit don't bother saving any of the individual
         # autotune results.
@@ -522,18 +551,36 @@ class AutotuneCacheBundler:
     # those and put it into the cache.
     @classmethod
     def end_compile(cls) -> None:
-        if bundler := cls._bundler:
-            cls._bundler = None
+        if not (
+            context_bundler := cls._get_context_bundler(
+                CompileContext.try_get(), create=False
+            )
+        ):
+            return
+        if bundler := context_bundler._bundler:
+            context_bundler._bundler = None
             bundler.end_compile()
 
     @classmethod
     def sync(cls) -> None:
-        if bundler := cls._bundler:
+        if not (
+            context_bundler := cls._get_context_bundler(
+                CompileContext.try_get(), create=False
+            )
+        ):
+            return
+        if bundler := context_bundler._bundler:
             bundler.sync()
 
     @classmethod
     def put(cls, filename: str, data: JsonDataTy) -> None:
-        if bundler := cls._bundler:
+        if not (
+            context_bundler := cls._get_context_bundler(
+                CompileContext.try_get(), create=False
+            )
+        ):
+            return
+        if bundler := context_bundler._bundler:
             # The filename comes in as something like
             # "/tmp/tmp{random}/{aa}/{basename}.py" (where aa is
             # basename[1:3]). Strip it down and make sure that it looks like a path

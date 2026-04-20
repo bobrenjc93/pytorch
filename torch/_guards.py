@@ -1019,6 +1019,7 @@ class CompileContext:
         self.attempt = 0
         # Verbose ShapeEnv guards produced.
         self.shape_env_guards: list[str] = []
+        self.autotune_cache_bundler: Any | None = None
 
     @staticmethod
     def current_compile_id() -> CompileId | None:
