@@ -37,6 +37,11 @@ def ensure_fake_impls_loaded() -> None:
     if _fake_impls_loaded or _fake_impls_loading:
         return
 
+    # Python's import lock serializes concurrent imports of fake_impls. This
+    # flag only prevents re-entering the loader through the intentional
+    # fake_tensor -> registry -> fake_impls -> fake_tensor import cycle. If the
+    # import fails, leave _fake_impls_loaded false so future calls retry instead
+    # of caching a partially initialized registry.
     _fake_impls_loading = True
     try:
         import torch._subclasses.fake_impls  # noqa: F401
@@ -53,6 +58,9 @@ def get_op_implementations_checks() -> list[tuple[Callable[[OpOverload], bool], 
 
 def get_fast_op_impls() -> dict[OpOverload, Callable[..., Any]]:
     ensure_fake_impls_loaded()
+    # The fast implementations depend on FakeTensor helpers and still live in
+    # fake_impls; after ensure_fake_impls_loaded(), this import is a sys.modules
+    # lookup that preserves the lazy-loading boundary for fake_tensor.py.
     from torch._subclasses.fake_impls import get_fast_op_impls as _get_fast_op_impls
 
     return _get_fast_op_impls()

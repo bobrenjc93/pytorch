@@ -1570,6 +1570,8 @@ def fast_detach(
 
 @functools.cache
 def get_fast_op_impls() -> dict[OpOverload, Callable[..., Any]]:
+    # fake_impls_registry.get_fast_op_impls delegates here after lazy-loading
+    # this module; keep the fast-op table construction local to fake_impls.
     import torch._refs
 
     register_fast_op_impl(torch.ops.aten.add.Tensor)(
