@@ -2724,6 +2724,18 @@ class TestFxGraphCacheHashing(TestCase):
                 require_shape_env=False,
             )
 
+    def test_bypass_for_pickle_error_logs_traceback(self):
+        with self.assertLogs("torch._inductor.codecache", level="WARNING") as logs:
+            with self.assertRaisesRegex(BypassFxGraphCache, "Failed to pickle cache key"):
+                try:
+                    raise RuntimeError("pickle failed")
+                except RuntimeError as e:
+                    CacheabilityValidator.bypass_for_pickle_error(e)
+
+        self.assertEqual(len(logs.records), 1)
+        self.assertIn("Failed to pickle cache key", logs.records[0].getMessage())
+        self.assertIsNotNone(logs.records[0].exc_info)
+
     def test_parameter_constants(self):
         """
         Test the hashing of parameter constants.

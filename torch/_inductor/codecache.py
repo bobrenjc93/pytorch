@@ -884,7 +884,7 @@ class CacheabilityValidator:
 
     @staticmethod
     def bypass_for_pickle_error(e: Exception) -> NoReturn:
-        log.warning("Failed to pickle cache key: %s", e)
+        log.warning("Failed to pickle cache key", exc_info=True)
         raise BypassFxGraphCache("Failed to pickle cache key") from e
 
     @staticmethod
