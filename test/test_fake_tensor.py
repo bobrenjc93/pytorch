@@ -1241,6 +1241,35 @@ class FakeTensorTest(TestCase):
         y = fast_div(mode, x, 2)
         self.assertEqual(y.dtype, torch.float32)
 
+    def test_fake_tensor_import_does_not_import_fake_impls(self):
+        script = """\
+import sys
+import torch
+from torch._subclasses.fake_tensor import FakeTensor, FakeTensorMode
+
+if "torch._subclasses.fake_impls" in sys.modules:
+    raise AssertionError("fake_impls imported with fake_tensor")
+
+with FakeTensorMode():
+    x = torch.empty(2, 2)
+
+if not isinstance(x, FakeTensor):
+    raise AssertionError(type(x))
+
+if "torch._subclasses.fake_impls" not in sys.modules:
+    raise AssertionError("fake_impls were not loaded for dispatch")
+"""
+        result = subprocess.run(
+            [sys.executable, "-c", script],
+            capture_output=True,
+            timeout=60,
+        )
+        self.assertEqual(
+            result.returncode,
+            0,
+            msg=f"subprocess failed:\n{result.stderr.decode()}",
+        )
+
     def test_nanmean_out(self):
         # Regression test to ensure we don't error out.
         with torch._subclasses.fake_tensor.FakeTensorMode() as mode:
