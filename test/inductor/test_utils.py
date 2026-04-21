@@ -53,6 +53,10 @@ class TestUtils(TestCase):
             _extract_triton_kernel_sources(code, remove_quote=True),
             ["kernel 0", "kernel 1"],
         )
+        self.assertEqual(
+            _extract_triton_kernel_sources(code, remove_quote=False),
+            ["kernel 0", "kernel 1"],
+        )
 
     def test_zip_schema(self):
         def foo(x: torch.Tensor) -> None:
