@@ -58,25 +58,43 @@ def compile(*args, **kwargs):
     return torch.compile(*args, **kwargs)
 
 
-def generate_kernel(fn: Callable[..., Any], example_inputs: Any) -> str:
+def generate_kernel(
+    fn: Callable[..., Any],
+    example_inputs: Any,
+    **compile_kwargs: Any,
+) -> str:
     """
     Compile ``fn`` with ``torch.compile`` and return its generated Triton kernel.
 
     Args:
         fn: Callable to compile.
-        example_inputs: Example positional inputs. Pass a tuple for multiple
-            inputs.
+        example_inputs: Example positional inputs. Pass a tuple or list for
+            multiple inputs. NamedTuples are treated as a single input.
+        compile_kwargs: Additional keyword arguments to forward to
+            ``torch.compile``.
 
     Returns:
         The generated Triton kernel source.
 
     Raises:
         RuntimeError: If compilation generates zero or multiple Triton kernels.
+
+    .. note::
+        This helper resets Dynamo compilation state internally when collecting
+        generated code.
     """
     from torch._inductor.utils import run_and_get_kernels
+    from torch.utils import _pytree as pytree
 
-    args = example_inputs if isinstance(example_inputs, tuple) else (example_inputs,)
-    _, kernels = run_and_get_kernels(torch.compile(fn), *args, remove_quote=True)
+    args = (
+        tuple(example_inputs)
+        if isinstance(example_inputs, (tuple, list))
+        and not pytree.is_namedtuple_instance(example_inputs)
+        else (example_inputs,)
+    )
+    _, kernels = run_and_get_kernels(
+        torch.compile(fn, **compile_kwargs), *args, remove_quote=True
+    )
 
     if len(kernels) != 1:
         raise RuntimeError(
