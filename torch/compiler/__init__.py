@@ -15,6 +15,7 @@ from ._cache import CacheInfo
 __all__ = [
     "compile",
     "config",
+    "generate_kernel",
     "assume_constant_result",
     "reset",
     "allow_in_graph",
@@ -55,6 +56,35 @@ def compile(*args, **kwargs):
     """
     # pyrefly: ignore [not-iterable]
     return torch.compile(*args, **kwargs)
+
+
+def generate_kernel(fn: Callable[..., Any], example_inputs: Any) -> str:
+    """
+    Compile ``fn`` with ``torch.compile`` and return its generated Triton kernel.
+
+    Args:
+        fn: Callable to compile.
+        example_inputs: Example positional inputs. Pass a tuple for multiple
+            inputs.
+
+    Returns:
+        The generated Triton kernel source.
+
+    Raises:
+        RuntimeError: If compilation generates zero or multiple Triton kernels.
+    """
+    from torch._inductor.utils import run_and_get_kernels
+
+    args = example_inputs if isinstance(example_inputs, tuple) else (example_inputs,)
+    _, kernels = run_and_get_kernels(torch.compile(fn), *args, remove_quote=True)
+
+    if len(kernels) != 1:
+        raise RuntimeError(
+            "torch.compiler.generate_kernel expected exactly one Triton kernel, "
+            f"but torch.compile generated {len(kernels)} kernels."
+        )
+
+    return kernels[0]
 
 
 def reset() -> None:
