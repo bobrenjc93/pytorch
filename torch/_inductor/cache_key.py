@@ -4,10 +4,17 @@ import base64
 import dataclasses
 import hashlib
 import json
-from typing import Any, Literal
+from typing import Any, Literal, Protocol
+from typing_extensions import assert_never
 
 
 CacheKeyComponent = str | bytes | bytearray | memoryview
+
+
+class _HashLike(Protocol):
+    def update(self, data: bytes, /) -> None: ...
+    def digest(self) -> bytes: ...
+    def hexdigest(self) -> str: ...
 
 
 @dataclasses.dataclass(frozen=True)
@@ -20,6 +27,7 @@ class CacheKeyStrategy:
     named strategies makes the composition explicit at the call site.
     """
 
+    # Human-readable label for repr/debugging; it is not part of the cache key.
     name: str
     digest_format: Literal["base32", "hex"]
     prefix: str = ""
@@ -38,7 +46,7 @@ class CacheKeyStrategy:
             return component.tobytes()
         raise TypeError(f"Unsupported cache key component: {type(component)!r}")
 
-    def _hasher(self, components: tuple[CacheKeyComponent, ...]) -> hashlib._Hash:
+    def _hasher(self, components: tuple[CacheKeyComponent, ...]) -> _HashLike:
         hasher = hashlib.sha256()
         for idx, component in enumerate(components):
             if idx > 0 and self.separator is not None:
@@ -57,7 +65,7 @@ class CacheKeyStrategy:
                 .decode("utf-8")
                 .lower()
             )
-        raise AssertionError(f"Unknown digest format {self.digest_format}")
+        assert_never(self.digest_format)
 
     def key(self, *components: CacheKeyComponent) -> str:
         return f"{self.prefix}{self.digest(*components)}"
@@ -92,4 +100,6 @@ SYSTEM_CACHE_KEY_STRATEGY = CacheKeyStrategy(
 AUTOTUNE_CACHE_KEY_STRATEGY = CacheKeyStrategy(
     name="autotune",
     digest_format="hex",
+    # Preserve the existing autotune cache format, which concatenates components.
+    separator=None,
 )

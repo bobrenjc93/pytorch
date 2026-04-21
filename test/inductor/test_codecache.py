@@ -1,5 +1,6 @@
 # Owner(s): ["module: inductor"]
 import base64
+import copy
 import functools
 import hashlib
 import json
@@ -11,6 +12,7 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+import types
 import unittest
 from contextlib import contextmanager
 from typing_extensions import override
@@ -34,6 +36,7 @@ from torch._inductor.cache_key import (
 )
 from torch._inductor.codecache import (
     BypassFxGraphCache,
+    CacheBase,
     CUDACodeCache,
     FxGraphCachePickler,
     FxGraphHashDetails,
@@ -164,6 +167,50 @@ class TestCacheKeyStrategy(TestCase):
                 json.dumps(system, sort_keys=True).encode("utf-8")
             ).hexdigest(),
         )
+
+    def test_cache_base_get_system_uses_system_strategy(self):
+        class FakeStrategy:
+            value = None
+            sort_keys = None
+
+            def key_from_json(self, value, *, sort_keys=True):
+                self.value = copy.deepcopy(value)
+                self.sort_keys = sort_keys
+                return "sentinel"
+
+        fake_strategy = FakeStrategy()
+        device_properties = types.SimpleNamespace(
+            name="test-gpu", gcnArchName="test-gcn"
+        )
+
+        CacheBase.get_system.cache_clear()
+        try:
+            with (
+                mock.patch(
+                    "torch._inductor.codecache.SYSTEM_CACHE_KEY_STRATEGY",
+                    fake_strategy,
+                ),
+                mock.patch("torch._inductor.runtime.triton_compat.HAS_TRITON", False),
+                mock.patch.object(torch.cuda, "current_device", return_value=0),
+                mock.patch.object(
+                    torch.cuda,
+                    "get_device_properties",
+                    return_value=device_properties,
+                ),
+                mock.patch.object(torch.version, "cuda", "test-cuda"),
+            ):
+                self.assertEqual(CacheBase.get_system()["hash"], "sentinel")
+        finally:
+            CacheBase.get_system.cache_clear()
+
+        self.assertEqual(
+            fake_strategy.value,
+            {
+                "device": {"name": "test-gpu"},
+                "version": {"triton": None, "cuda": "test-cuda"},
+            },
+        )
+        self.assertTrue(fake_strategy.sort_keys)
 
     def test_autotune_prepare_key_uses_strategy(self):
         from torch._inductor.runtime.autotune_cache import AutotuneCache
