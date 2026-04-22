@@ -5,7 +5,7 @@ import logging
 import textwrap
 import threading
 from collections.abc import Callable, Generator, Iterable
-from typing import Any
+from typing import Any, cast
 
 from torch.utils._exposed_in import exposed_in
 
@@ -25,8 +25,11 @@ def get_triton_kernels_for_op(name: str) -> list[object]:
 
 
 def _unwrap(fn: object) -> object:
+    if not callable(fn):
+        return fn
+
     try:
-        return inspect.unwrap(fn)
+        return inspect.unwrap(cast(Callable[..., Any], fn))
     except ValueError:
         return fn
 
@@ -72,6 +75,12 @@ class _TritonKernelFinder:
     def find(self, fn: Callable[..., Any]) -> list[object]:
         self._scan_callable(fn, 0)
         return self.kernels
+
+    def _try_scan_callable(self, fn: object, name: str, depth: int) -> None:
+        try:
+            self._scan_callable(fn, depth)
+        except Exception:
+            logger.debug("failed to analyze called function %s", name, exc_info=True)
 
     def _scan_callable(self, fn: object, depth: int) -> None:
         fn = _unwrap(fn)
@@ -225,7 +234,7 @@ class _TritonKernelFinder:
 
             obj = _unwrap(obj)
             if callable(obj) and hasattr(obj, "__code__"):
-                self._scan_callable(obj, depth + 1)
+                self._try_scan_callable(obj, name, depth + 1)
         finally:
             resolving.remove(name)
 
@@ -234,7 +243,7 @@ class _TritonKernelFinder:
 
         opdef = OPDEFS.get(name)
         if opdef is not None:
-            self._scan_callable(opdef._abstract_fn, depth + 1)
+            self._try_scan_callable(opdef._abstract_fn, name, depth + 1)
 
     def _add_kernel(self, obj: object) -> bool:
         kernel = self._to_kernel(obj)
