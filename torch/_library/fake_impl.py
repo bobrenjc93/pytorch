@@ -114,13 +114,6 @@ def construct_meta_kernel(qualname: str, fake_impl_holder: FakeImplHolder) -> Ca
     return meta_kernel
 
 
-def get_none():
-    return None
-
-
-library_state.global_ctx_getter = get_none
-
-
 def global_ctx_getter():
     return library_state.global_ctx_getter()
 

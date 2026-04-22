@@ -1,11 +1,14 @@
 from __future__ import annotations
 
-from collections.abc import Callable
-from typing import Any, TypeVar, cast
+from typing import Any, cast, TYPE_CHECKING, TypeVar
 from weakref import WeakKeyDictionary, WeakValueDictionary
 
 
-def _default_ctx_getter() -> None:
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+
+def _get_none() -> None:
     return None
 
 
@@ -22,12 +25,15 @@ class LibraryGlobalState:
     """
 
     def __init__(self) -> None:
+        # Keep this module dependency-free: most concrete registry value types
+        # are defined in modules that import global_state, so annotations here
+        # intentionally use Any to avoid circular imports.
         self.impls: set[str] = set()
         self.defs: set[str] = set()
         self.keep_alive: list[Any] = []
 
         self.simple_registry: Any | None = None
-        self.global_ctx_getter: Callable[[], Any] = _default_ctx_getter
+        self.global_ctx_getter: Callable[[], Any] = _get_none
 
         self.custom_opdefs: WeakValueDictionary[str, Any] = WeakValueDictionary()
         self.custom_opdef_to_lib: dict[str, Any] = {}
@@ -40,11 +46,15 @@ class LibraryGlobalState:
         self.opaque_types_by_name: dict[str, Any] = {}
 
     def get_or_create_simple_registry(self, factory: type[_T]) -> _T:
+        # These registries are lazy because their concrete classes live in
+        # modules that import global_state.
         if self.simple_registry is None:
             self.simple_registry = factory()
         return cast(_T, self.simple_registry)
 
     def get_or_create_fake_class_registry(self, factory: type[_T]) -> _T:
+        # These registries are lazy because their concrete classes live in
+        # modules that import global_state.
         if self.fake_class_registry is None:
             self.fake_class_registry = factory()
         return cast(_T, self.fake_class_registry)
