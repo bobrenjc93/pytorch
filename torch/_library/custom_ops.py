@@ -651,9 +651,7 @@ class CustomOpDef:
                 f"tensors not kwarg-only. Got: {schema_str}"
             )
 
-    def _define_dispatcher_op(
-        self, schema_str: str, tags: Sequence[_C.Tag]
-    ) -> None:
+    def _define_dispatcher_op(self, schema_str: str, tags: Sequence[_C.Tag]) -> None:
         self._lib.define(
             schema_str,
             tags=[_C.Tag.pt2_compliant_tag, *tags],
@@ -675,7 +673,7 @@ class CustomOpDef:
                 )
             return self._abstract_fn(*args, **kwargs)
 
-        self._lib._register_fake(self._name, fake_impl, _stacklevel=4)
+        self._lib._register_fake(self._name, fake_impl, _stacklevel=5)
 
     def _register_autograd_dispatcher_impl(self) -> None:
         autograd_impl = autograd.make_autograd_impl(self._opoverload, self)
