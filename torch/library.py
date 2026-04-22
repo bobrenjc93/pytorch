@@ -519,6 +519,8 @@ class Library:
         for handle in self._registration_handles:
             handle.destroy()
         self._registration_handles.clear()
+        # Mutate the shared impl registry in-place so its global_state alias
+        # stays synchronized.
         global _impls
         _impls -= self._op_impls
         for name in self._op_defs:
@@ -559,6 +561,8 @@ def _del_library(
         ) in schema_to_signature_cache:
             del schema_to_signature_cache[(name, overload_name)]
 
+    # Mutate the captured shared registries in-place so their global_state aliases
+    # stay synchronized.
     captured_impls -= op_impls
     captured_defs -= op_defs
     for handle in registration_handles:
