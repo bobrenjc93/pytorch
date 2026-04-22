@@ -20,6 +20,7 @@ from torch._library.custom_ops import (
     device_types_t,
 )
 from torch._library.effects import EffectType
+from torch._library.global_state import library_state
 from torch._library.infer_schema import infer_schema
 from torch._library.triton import triton_op, wrap_triton
 from torch._ops import OpOverload
@@ -51,8 +52,8 @@ _P = ParamSpec("_P")
 # The keys in the set are of the form `namespace + "/" + op_name + "/" + dispatch_key`.
 # This set is maintained to ensure that two libraries don't try to override the exact same functionality to avoid
 # libraries calling into kernels not intended to be called.
-_impls: set[str] = set()
-_defs: set[str] = set()
+_impls: set[str] = library_state.impls
+_defs: set[str] = library_state.defs
 
 # prim is reserved by TorchScript interpreter
 _reserved_namespaces = ["prim"]
@@ -576,7 +577,7 @@ def _scoped_library(*args, **kwargs):
         lib._destroy()
 
 
-_keep_alive: list[Library] = []
+_keep_alive: list[Library] = library_state.keep_alive
 
 
 NAMELESS_SCHEMA = re.compile(r"\(.*\) -> .*")

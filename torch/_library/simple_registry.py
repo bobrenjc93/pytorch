@@ -3,6 +3,7 @@ from typing import Any
 
 from .effects import EffectHolder
 from .fake_impl import FakeImplHolder
+from .global_state import library_state
 from .utils import RegistrationHandle
 
 
@@ -35,7 +36,9 @@ class SimpleLibraryRegistry:
         return res
 
 
-singleton: SimpleLibraryRegistry = SimpleLibraryRegistry()
+singleton: SimpleLibraryRegistry = library_state.get_or_create_simple_registry(
+    SimpleLibraryRegistry
+)
 
 
 class SimpleOperatorEntry:
