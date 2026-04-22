@@ -1,27 +1,23 @@
 """
-torchmux: Run N distributed workers on 1 GPU in a single process.
+torchmux: Simulate N-GPU distributed training on M GPUs (M < N).
 
 Usage:
     python -m torch.distributed.torchmux --nproc 8 train.py [args...]
+    python -m torch.distributed.torchmux --nproc 8 --ngpus 2 train.py [args...]
 
-Takes a standard torchrun-compatible training script and runs it with
-N workers as threads, all sharing GPU 0. Three things are monkey-patched
-so existing scripts work without modification:
+Takes a standard torchrun-compatible training script and runs N workers
+as cooperatively-scheduled threads in a single process. Workers are
+mapped round-robin onto M physical GPUs (default M=1).
 
-  1. os.environ — RANK, LOCAL_RANK, WORLD_SIZE return per-thread values
-  2. dist.init_process_group — uses the vnccl backend (local collectives)
-  3. torch.cuda.set_device — pins all workers to GPU 0
-  4. dist.all_reduce et al. — yield the execution lock at collective
-     boundaries so the next worker can run
+Scripts can use device=f"cuda:{rank}" and backend="nccl" — torchmux
+remaps CUDA device indices to physical GPUs (cuda:{rank % ngpus}) and
+redirects any backend to vnccl.
 
 Only one worker executes at a time. Workers yield to each other at
 collective boundaries (all_reduce, all_gather, broadcast, etc.). This
 cooperative scheduling means:
-  - N workers share 1 GPU's worth of memory
   - The global RNG is never corrupted by thread interleaving
   - Collective numerics are bitwise identical to real NCCL + torchrun
-
-Requires scripts to use LOCAL_RANK (not RANK) for device selection.
 """
 
 import argparse
@@ -38,14 +34,32 @@ import torch.distributed as dist
 _tls = threading.local()
 
 _exec_lock = threading.Lock()
+_ngpus = 1
+
+# ---- torch.device remapping ----
+
+_OrigDevice = torch.device
+
+
+class _DeviceMeta(type):
+    def __instancecheck__(cls, instance):
+        return isinstance(instance, _OrigDevice)
+
+    def __subclasscheck__(cls, subclass):
+        if subclass is _OrigDevice:
+            return True
+        return type.__subclasscheck__(cls, subclass)
+
+
+class _MuxDevice(metaclass=_DeviceMeta):
+    def __new__(cls, *args, **kwargs):
+        d = _OrigDevice(*args, **kwargs)
+        if d.type == "cuda" and d.index is not None:
+            return _OrigDevice("cuda", d.index % _ngpus)
+        return d
 
 
 class _ThreadLocalEnv:
-    """
-    Proxy for os.environ that returns per-thread values for
-    RANK, LOCAL_RANK, WORLD_SIZE, and related keys.
-    """
-
     def __init__(self, real_environ):
         object.__setattr__(self, "_real", real_environ)
 
@@ -86,16 +100,6 @@ class _ThreadLocalEnv:
 
 
 def _yield_at_collective(fn):
-    """
-    Wrap a dist collective so the calling worker releases the execution
-    lock before entering and reacquires it after. This is how workers
-    yield to each other: worker A runs alone until it hits a collective,
-    releases the lock, blocks inside the collective waiting for the
-    others, and worker B picks up the lock and runs until it also hits
-    the collective — at which point the collective resolves and one
-    worker reacquires the lock.
-    """
-
     def wrapper(*args, **kwargs):
         _exec_lock.release()
         try:
@@ -131,7 +135,7 @@ def _worker(rank, world_size, script, script_args, store, ready_barrier, errors)
     try:
         _tls.env_overrides = {
             "RANK": str(rank),
-            "LOCAL_RANK": "0",
+            "LOCAL_RANK": str(rank % _ngpus),
             "WORLD_SIZE": str(world_size),
             "LOCAL_WORLD_SIZE": str(world_size),
             "GROUP_RANK": "0",
@@ -159,17 +163,20 @@ def _worker(rank, world_size, script, script_args, store, ready_barrier, errors)
 def main():
     parser = argparse.ArgumentParser(
         prog="torchmux",
-        description="Run N distributed workers on 1 GPU in a single process",
+        description="Simulate N-GPU distributed training on M GPUs",
     )
-    parser.add_argument("--nproc", type=int, required=True, help="Number of workers")
+    parser.add_argument("--nproc", type=int, required=True, help="Number of simulated workers (N)")
+    parser.add_argument("--ngpus", type=int, default=1, help="Number of physical GPUs (M, default 1)")
     parser.add_argument("script", help="Training script (torchrun-compatible)")
     parser.add_argument("script_args", nargs=argparse.REMAINDER)
     args = parser.parse_args()
 
     nproc = args.nproc
     assert nproc >= 1
+    assert args.ngpus >= 1 and args.ngpus <= nproc
 
-    # -- set up thread-local distributed world --
+    global _ngpus
+    _ngpus = args.ngpus
 
     from torch.testing._internal.distributed.multi_threaded_pg import (
         _install_threaded_pg,
@@ -181,8 +188,6 @@ def main():
     from torch.distributed import vnccl as _vnccl  # noqa: F401,F811
 
     store = dist.HashStore()
-
-    # -- monkey-patches --
 
     _orig_init_pg = dist.init_process_group
     _orig_destroy_pg = dist.destroy_process_group
@@ -210,16 +215,18 @@ def main():
 
     dist.init_process_group = _patched_init_pg
     dist.destroy_process_group = _patched_destroy_pg
-    torch.cuda.set_device = lambda *a, **kw: _orig_cuda_set_device(0)
+    torch.cuda.set_device = lambda *a, **kw: _orig_cuda_set_device(
+        getattr(_tls, "rank", 0) % _ngpus
+    )
+    torch.device = _MuxDevice
     os.environ = _ThreadLocalEnv(os.environ)
 
     for name in _COLLECTIVES:
         if hasattr(dist, name):
             setattr(dist, name, _yield_at_collective(getattr(dist, name)))
 
-    # -- launch workers --
-
-    print(f"torchmux: {nproc} workers on GPU 0, script={args.script}", flush=True)
+    gpu_desc = "GPU 0" if _ngpus == 1 else f"{_ngpus} GPUs"
+    print(f"torchmux: {nproc} workers on {gpu_desc}, script={args.script}", flush=True)
 
     errors = [None] * nproc
     ready_barrier = threading.Barrier(nproc)
@@ -236,11 +243,10 @@ def main():
     for t in threads:
         t.join()
 
-    # -- restore --
-
     dist.init_process_group = _orig_init_pg
     dist.destroy_process_group = _orig_destroy_pg
     torch.cuda.set_device = _orig_cuda_set_device
+    torch.device = _OrigDevice
     torch._C._distributed_c10d._set_thread_isolation_mode(False)
 
     failed = False
