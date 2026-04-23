@@ -63,15 +63,9 @@ Stack variable source attribution:
 """
 
 
-def _munge_with_normalized_markers(message: str) -> str:
+def _munge_with_marker_indentation_removed(message: str) -> str:
     munged = munge_exc(message, suppress_suffix=True, skip=0)
-    # CPython 3.13+ can use mixed `~`/`^` marker lines for the same source span.
-    return re.sub(
-        r"^[ ]+([~^]+)$",
-        lambda match: "^" * len(match.group(1)),
-        munged,
-        flags=re.MULTILINE,
-    )
+    return re.sub(r"^[ ]+([~^]+)$", r"\1", munged, flags=re.MULTILINE)
 
 
 class ExcTests(LoggingTestCase):
@@ -227,7 +221,9 @@ from user code:
             "    return {1, 2}\n"
         )
 
-        self.assertEqual(_munge_with_normalized_markers(record.getMessage()), expected)
+        self.assertEqual(
+            _munge_with_marker_indentation_removed(record.getMessage()), expected
+        )
 
     @torch._dynamo.config.patch(suppress_errors=False)
     def test_internal_error_no_suppress(self):
