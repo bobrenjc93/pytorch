@@ -684,7 +684,7 @@ def main():
             nprocs=nproc,
             join=True,
         )
-
+    finally:
         from torch.distributed import torchmux_trace
 
         trace_dir = os.environ.get("TORCHMUX_TRACE_DIR", "/tmp")
@@ -692,22 +692,25 @@ def main():
         events_by_rank = {}
         for r in range(nproc):
             p = os.path.join(coll_dir, f"trace_rank{r}.json")
-            if os.path.exists(p):
-                with open(p) as f:
-                    events_by_rank[r] = [tuple(e) for e in json.load(f)]
+            if os.path.exists(p) and os.path.getsize(p) > 0:
+                try:
+                    with open(p) as f:
+                        events_by_rank[r] = [tuple(e) for e in json.load(f)]
+                except (json.JSONDecodeError, ValueError):
+                    pass
 
-        natural_path = os.path.join(trace_dir, "torchmux_natural.json")
-        synthetic_path = os.path.join(trace_dir, "torchmux_synthetic.json")
+        if events_by_rank:
+            natural_path = os.path.join(trace_dir, "torchmux_natural.json")
+            synthetic_path = os.path.join(trace_dir, "torchmux_synthetic.json")
 
-        torchmux_trace.export_natural(events_by_rank, natural_path, nproc)
-        torchmux_trace.export_synthetic(events_by_rank, synthetic_path, nproc)
+            torchmux_trace.export_natural(events_by_rank, natural_path, nproc)
+            torchmux_trace.export_synthetic(events_by_rank, synthetic_path, nproc)
 
-        print(
-            f"torchmux: traces written to {natural_path} and {synthetic_path}",
-            flush=True,
-        )
+            print(
+                f"torchmux: traces written to {natural_path} and {synthetic_path}",
+                flush=True,
+            )
 
-    finally:
         sched.cleanup()
         shutil.rmtree(coll_dir, ignore_errors=True)
 

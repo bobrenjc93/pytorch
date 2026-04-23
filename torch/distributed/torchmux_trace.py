@@ -113,6 +113,7 @@ def export_synthetic(events_by_rank, path, nproc):
                     coll_name = n
                     coll_dur = max(coll_dur, d)
 
+        per_rank_compute_end = {}
         for rank in range(nproc):
             worker_events = phase.get(rank, [])
             t = cursor
@@ -131,9 +132,12 @@ def export_synthetic(events_by_rank, path, nproc):
                     }
                 )
                 t += dur_us
+            per_rank_compute_end[rank] = t
 
         if coll_name:
+            coll_end = cursor + max_compute + coll_dur
             for rank in range(nproc):
+                coll_start = per_rank_compute_end.get(rank, cursor)
                 trace_events.append(
                     {
                         "ph": "X",
@@ -141,11 +145,11 @@ def export_synthetic(events_by_rank, path, nproc):
                         "name": coll_name,
                         "pid": rank,
                         "tid": 0,
-                        "ts": int(cursor + max_compute),
-                        "dur": int(coll_dur),
+                        "ts": int(coll_start),
+                        "dur": int(coll_end - coll_start),
                     }
                 )
-            cursor += max_compute + coll_dur
+            cursor = coll_end
         else:
             cursor += max_compute
 
