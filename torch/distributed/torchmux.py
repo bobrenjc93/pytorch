@@ -152,10 +152,11 @@ _checkpointed = False  # has this process ever been checkpointed?
 
 def _snapshot_gpu():
     global _checkpointed
+    if not torch.cuda.is_initialized():
+        return
     torch.cuda.synchronize()
     t0 = _us()
-    with torch.profiler.record_function("torchmux::snapshot"):
-        _baton.checkpoint(os.getpid())
+    _baton.checkpoint(os.getpid())
     _trace("mux", "snapshot", t0, _us() - t0)
     _checkpointed = True
 
@@ -163,8 +164,7 @@ def _snapshot_gpu():
 def _restore_gpu():
     if _checkpointed:
         t0 = _us()
-        with torch.profiler.record_function("torchmux::restore"):
-            _baton.restore_and_unlock(os.getpid())
+        _baton.restore_and_unlock(os.getpid())
         _trace("mux", "restore", t0, _us() - t0)
 
 
