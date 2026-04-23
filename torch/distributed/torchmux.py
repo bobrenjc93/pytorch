@@ -33,7 +33,7 @@ import torch.distributed as dist
 
 _tls = threading.local()
 
-_exec_lock = threading.Lock()
+_exec_lock = None
 _ngpus = 1
 
 # ---- torch.device remapping ----
@@ -131,6 +131,29 @@ _COLLECTIVES = [
 ]
 
 
+_run_as_module = False
+_nproc_for_trace = 1
+
+
+_traces_written = False
+
+
+def _export_traces():
+    global _traces_written
+    if _traces_written:
+        return
+    _traces_written = True
+
+    from torch.distributed import torchmux_trace
+
+    trace_dir = os.environ.get("TORCHMUX_TRACE_DIR", "/tmp")
+    natural_path = os.path.join(trace_dir, "torchmux_natural.json")
+    synthetic_path = os.path.join(trace_dir, "torchmux_synthetic.json")
+    torchmux_trace.export_natural(natural_path, _nproc_for_trace)
+    torchmux_trace.export_synthetic(synthetic_path, _nproc_for_trace)
+    print(f"torchmux: traces written to {natural_path} and {synthetic_path}", flush=True)
+
+
 def _worker(rank, world_size, script, script_args, store, ready_barrier, errors):
     try:
         _tls.env_overrides = {
@@ -148,12 +171,24 @@ def _worker(rank, world_size, script, script_args, store, ready_barrier, errors)
 
         ready_barrier.wait()
 
-        _exec_lock.acquire()
+        from torch.distributed.vnccl import _acquire_exec_lock_ordered
+
+        _acquire_exec_lock_ordered(rank, world_size)
         try:
+            from torch.distributed import torchmux_trace as _trace
+
+            _tls._exec_start = _trace._us()
             sys.argv = [script] + list(script_args)
-            runpy.run_path(script, run_name="__main__")
+            if _run_as_module:
+                runpy.run_module(script, run_name="__main__", alter_sys=True)
+            else:
+                runpy.run_path(script, run_name="__main__")
         finally:
-            _exec_lock.release()
+            from torch.distributed.vnccl import _release_exec_lock_ordered
+
+            _release_exec_lock_ordered(rank, world_size)
+            if rank == 0:
+                _export_traces()
     except SystemExit:
         pass
     except Exception:
@@ -167,7 +202,8 @@ def main():
     )
     parser.add_argument("--nproc", type=int, required=True, help="Number of simulated workers (N)")
     parser.add_argument("--ngpus", type=int, default=1, help="Number of physical GPUs (M, default 1)")
-    parser.add_argument("script", help="Training script (torchrun-compatible)")
+    parser.add_argument("-m", action="store_true", dest="module", help="Run script as a Python module (like python -m)")
+    parser.add_argument("script", help="Training script or module name")
     parser.add_argument("script_args", nargs=argparse.REMAINDER)
     args = parser.parse_args()
 
@@ -175,8 +211,9 @@ def main():
     assert nproc >= 1
     assert args.ngpus >= 1 and args.ngpus <= nproc
 
-    global _ngpus
+    global _ngpus, _run_as_module
     _ngpus = args.ngpus
+    _run_as_module = args.module
 
     from torch.testing._internal.distributed.multi_threaded_pg import (
         _install_threaded_pg,
@@ -187,6 +224,11 @@ def main():
 
     from torch.distributed import vnccl as _vnccl  # noqa: F401,F811
 
+    global _exec_lock
+    _exec_lock = _vnccl.exec_lock
+
+    dist.Backend.default_device_backend_map["cuda"] = "vnccl"
+
     store = dist.HashStore()
 
     _orig_init_pg = dist.init_process_group
@@ -195,23 +237,46 @@ def main():
 
     def _patched_init_pg(backend=None, init_method=None, **kwargs):
         kwargs.pop("timeout", None)
-        _exec_lock.release()
+        from torch.distributed.vnccl import (
+            _rng_states, _save_rng, _restore_rng,
+            _release_exec_lock_ordered, _acquire_exec_lock_ordered,
+        )
+
+        rank = _tls.rank
+        ws = _tls.world_size
+        _rng_states[rank] = _save_rng()
+        _release_exec_lock_ordered(rank, ws)
         try:
             _orig_init_pg(
                 backend="vnccl",
-                rank=_tls.rank,
-                world_size=_tls.world_size,
+                rank=rank,
+                world_size=ws,
                 store=_tls.store,
             )
         finally:
-            _exec_lock.acquire()
+            _acquire_exec_lock_ordered(rank, ws)
+            if rank in _rng_states:
+                _restore_rng(_rng_states[rank])
+
+    _traces_exported = [False]
 
     def _patched_destroy_pg():
+        if not _traces_exported[0]:
+            _traces_exported[0] = True
+            _export_traces()
+
+        from torch.distributed.vnccl import _rng_states, _save_rng, _restore_rng
+
+        rank = getattr(_tls, "rank", None)
+        if rank is not None:
+            _rng_states[rank] = _save_rng()
         _exec_lock.release()
         try:
             _orig_destroy_pg()
         finally:
             _exec_lock.acquire()
+            if rank is not None and rank in _rng_states:
+                _restore_rng(_rng_states[rank])
 
     dist.init_process_group = _patched_init_pg
     dist.destroy_process_group = _patched_destroy_pg
@@ -221,9 +286,13 @@ def main():
     torch.device = _MuxDevice
     os.environ = _ThreadLocalEnv(os.environ)
 
-    for name in _COLLECTIVES:
-        if hasattr(dist, name):
-            setattr(dist, name, _yield_at_collective(getattr(dist, name)))
+    # Cooperative scheduling is handled inside vnccl._do() — every
+    # collective (whether called via dist.all_reduce or directly via
+    # ProcessGroup.allreduce) releases the exec_lock before blocking
+    # on the barrier and reacquires it after. No wrapping needed here.
+
+    global _nproc_for_trace
+    _nproc_for_trace = nproc
 
     gpu_desc = "GPU 0" if _ngpus == 1 else f"{_ngpus} GPUs"
     print(f"torchmux: {nproc} workers on {gpu_desc}, script={args.script}", flush=True)
@@ -242,6 +311,8 @@ def main():
 
     for t in threads:
         t.join()
+
+    _export_traces()
 
     dist.init_process_group = _orig_init_pg
     dist.destroy_process_group = _orig_destroy_pg

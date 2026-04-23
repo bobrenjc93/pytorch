@@ -21,7 +21,67 @@ import threading
 import weakref
 from functools import partial, reduce
 
+import random as _random
+
 import torch
+
+# Cooperative scheduling lock. When held, only one worker thread runs.
+# Workers release it inside _do() before blocking on a collective
+# barrier, allowing the next worker to run. torchmux imports this lock
+# and acquires it around each worker's execution.
+exec_lock = threading.Lock()
+
+# Deterministic rank ordering. After a collective resolves, rank 0
+# runs first, then 1, 2, ..., producing a clean staircase in traces.
+_next_rank = 0
+_next_rank_cond = threading.Condition()
+
+
+def _acquire_exec_lock_ordered(rank, world_size):
+    with _next_rank_cond:
+        _next_rank_cond.wait_for(lambda: _next_rank == rank)
+    exec_lock.acquire()
+
+
+def _release_exec_lock_ordered(rank, world_size):
+    global _next_rank
+    exec_lock.release()
+    with _next_rank_cond:
+        _next_rank = (rank + 1) % world_size
+        _next_rank_cond.notify_all()
+
+
+# Per-worker RNG state. Saved before yielding, restored after resuming.
+# This gives each worker isolated RNG so manual_seed() in one worker
+# doesn't corrupt another's random sequence.
+_rng_states = {}
+
+
+def _save_rng():
+    state = {
+        "cpu": torch.get_rng_state(),
+        "random": _random.getstate(),
+    }
+    if torch.cuda.is_available():
+        state["cuda"] = torch.cuda.get_rng_state_all()
+    try:
+        import numpy as np
+
+        state["numpy"] = np.random.get_state()
+    except ImportError:
+        pass
+    return state
+
+
+def _restore_rng(state):
+    torch.set_rng_state(state["cpu"])
+    _random.setstate(state["random"])
+    if "cuda" in state:
+        torch.cuda.set_rng_state_all(state["cuda"])
+    if "numpy" in state:
+        import numpy as np
+
+        np.random.set_state(state["numpy"])
 import torch.distributed as dist
 from torch._C._distributed_c10d import (
     AllgatherOptions,
@@ -50,20 +110,28 @@ def _completed_work(result):
     return _create_work_from_future(fut)
 
 
-def _binop_reduce(tensors, op):
-    res = op(torch.stack(tensors), dim=0)
-    return res if isinstance(res, torch.Tensor) else res.values
+def _pairwise_reduce(tensors, op):
+    """
+    Reduce using pairwise in-place operations to match NCCL's reduction
+    order. NCCL accumulates into tensor 0 by adding tensor 1, then
+    tensor 2, etc. Using torch.stack + torch.sum would change the FP
+    reduction order and break bitwise equivalence.
+    """
+    result = tensors[0].clone()
+    for t in tensors[1:]:
+        op(result, t)
+    return result
 
 
 _REDUCE_OPS = {
-    ReduceOp.SUM: partial(_binop_reduce, op=torch.sum),
-    ReduceOp.AVG: partial(_binop_reduce, op=torch.mean),
-    ReduceOp.PRODUCT: partial(_binop_reduce, op=torch.prod),
-    ReduceOp.MIN: partial(_binop_reduce, op=torch.min),
-    ReduceOp.MAX: partial(_binop_reduce, op=torch.max),
-    ReduceOp.BAND: partial(reduce, torch.bitwise_and),
-    ReduceOp.BOR: partial(reduce, torch.bitwise_or),
-    ReduceOp.BXOR: partial(reduce, torch.bitwise_xor),
+    ReduceOp.SUM: partial(_pairwise_reduce, op=lambda a, b: a.add_(b)),
+    ReduceOp.AVG: partial(_pairwise_reduce, op=lambda a, b: a.add_(b)),
+    ReduceOp.PRODUCT: partial(_pairwise_reduce, op=lambda a, b: a.mul_(b)),
+    ReduceOp.MIN: partial(_pairwise_reduce, op=lambda a, b: torch.minimum(a, b, out=a)),
+    ReduceOp.MAX: partial(_pairwise_reduce, op=lambda a, b: torch.maximum(a, b, out=a)),
+    ReduceOp.BAND: partial(_pairwise_reduce, op=lambda a, b: a.bitwise_and_(b)),
+    ReduceOp.BOR: partial(_pairwise_reduce, op=lambda a, b: a.bitwise_or_(b)),
+    ReduceOp.BXOR: partial(_pairwise_reduce, op=lambda a, b: a.bitwise_xor_(b)),
 }
 
 
@@ -84,6 +152,8 @@ class _AllReduce:
             dev = data[0][i].device
             tensors = [data[r][i].to(dev) for r in range(len(data))]
             res = _REDUCE_OPS[self.op](tensors)
+            if self.op == ReduceOp.AVG:
+                res.div_(len(data))
             for r in range(len(data)):
                 data[r][i].detach().copy_(res.to(data[r][i].device))
 
@@ -191,6 +261,10 @@ class _CollSync:
             else:
                 self._op.work(self._data)
                 self._done = True
+                global _next_rank
+                with _next_rank_cond:
+                    _next_rank = 0
+                    _next_rank_cond.notify_all()
                 self._cond.notify_all()
         return _completed_work(data)
 
@@ -241,9 +315,19 @@ class VNCCLProcessGroup(dist.ProcessGroup):
         self._ctx = torch.autograd.set_multithreading_enabled(False)
 
     def _do(self, op, data):
-        sync = VNCCLProcessGroup._enter(op, self)
-        result = sync.join(self._rank, data)
-        VNCCLProcessGroup._leave(sync, self)
+        held = exec_lock.locked()
+        if held:
+            _rng_states[self._rank] = _save_rng()
+            _release_exec_lock_ordered(self._rank, self._world_size)
+        try:
+            sync = VNCCLProcessGroup._enter(op, self)
+            result = sync.join(self._rank, data)
+            VNCCLProcessGroup._leave(sync, self)
+        finally:
+            if held:
+                _acquire_exec_lock_ordered(self._rank, self._world_size)
+                if self._rank in _rng_states:
+                    _restore_rng(_rng_states[self._rank])
         return result
 
     # -- metadata --
