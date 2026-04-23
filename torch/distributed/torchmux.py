@@ -7,8 +7,10 @@ Usage:
 
 Launches N worker processes mapped round-robin onto M physical GPUs.
 Workers execute cooperatively: only one runs at a time per GPU, yielding
-at collective boundaries. Collectives are resolved by bookkeeping each
-rank's tensor contribution on disk — no NCCL is needed.
+at collective boundaries. When a worker yields it snapshots all GPU
+state to disk and frees GPU memory so the next worker can use the GPU.
+Collectives are resolved by bookkeeping each rank's tensor contribution
+on disk — no NCCL is needed.
 """
 
 import argparse
@@ -21,7 +23,6 @@ import struct
 import sys
 import tempfile
 import time
-from functools import reduce
 
 import torch
 import torch.distributed as dist
@@ -90,7 +91,7 @@ class _SharedInt:
 
 # ---- Cooperative scheduling ----
 
-_sched = None  # _SharedInt
+_sched = None  # _SharedInt — which rank may run
 _rank = None
 _ws = None
 _held = False
@@ -107,6 +108,33 @@ def _release():
     global _held
     _sched.value = (_rank + 1) % _ws
     _held = False
+
+
+# ---- GPU state snapshot/restore ----
+
+_state_mgr = None  # WorkerStateManager, created per-process
+
+
+def _snapshot_gpu():
+    if _state_mgr is not None:
+        torch.cuda.synchronize()
+        _state_mgr.snapshot(0)
+
+
+def _restore_gpu():
+    if _state_mgr is not None and _state_mgr.has_snapshot(0):
+        _state_mgr.restore(0)
+
+
+def _yield_and_wait(check_fn):
+    """Snapshot GPU, release token, wait for check_fn, reacquire, restore."""
+    _snapshot_gpu()
+    if _held:
+        _release()
+    while not check_fn():
+        time.sleep(1e-5)
+    _acquire()
+    _restore_gpu()
 
 
 # ---- Helpers ----
@@ -156,9 +184,10 @@ from torch._C._distributed_c10d import (
 class _MuxPG(dist.ProcessGroup):
     """Resolves collectives by bookkeeping tensors on disk.
 
-    Each collective: save input tensor(s) → yield → when all ranks have
-    contributed, the last to arrive resolves on CPU → all ranks load
-    the result when rescheduled.
+    Each collective: save contribution → check if all ranks contributed →
+    if yes, resolve on CPU and continue; if no, snapshot GPU to disk,
+    yield the GPU, and wait. When rescheduled, restore GPU state and
+    load the collective result.
     """
 
     _next_pg_id = 0
@@ -198,13 +227,8 @@ class _MuxPG(dist.ProcessGroup):
     def _mark_resolved(self, cid):
         open(self._resolved_path(cid), "w").close()
 
-    def _yield_until_resolved(self, cid):
-        """Release scheduling, spin until this collective is resolved."""
-        while not self._is_resolved(cid):
-            if _held:
-                _release()
-            time.sleep(1e-5)
-            _acquire()
+    def _wait_for_resolved(self, cid):
+        _yield_and_wait(lambda: self._is_resolved(cid))
 
     def _in_path(self, cid, rank, idx):
         return _coll_path(self._pg_id, cid, f"in_r{rank}_t{idx}.pt")
@@ -234,7 +258,7 @@ class _MuxPG(dist.ProcessGroup):
                     _save_tensor(self._out_path(cid, r, i), acc)
             self._mark_resolved(cid)
         else:
-            self._yield_until_resolved(cid)
+            self._wait_for_resolved(cid)
 
         for i, t in enumerate(tensor_list):
             t.copy_(_load_tensor(self._out_path(cid, self._rank, i)).to(t.device))
@@ -257,7 +281,7 @@ class _MuxPG(dist.ProcessGroup):
         if self._all_ready(cid):
             self._mark_resolved(cid)
         else:
-            self._yield_until_resolved(cid)
+            self._wait_for_resolved(cid)
 
         if self._rank != root:
             for i, t in enumerate(tensor_list):
@@ -277,7 +301,7 @@ class _MuxPG(dist.ProcessGroup):
         if self._all_ready(cid):
             self._mark_resolved(cid)
         else:
-            self._yield_until_resolved(cid)
+            self._wait_for_resolved(cid)
 
         for i, out_list in enumerate(output_tensors):
             for r in range(self._ws):
@@ -297,14 +321,14 @@ class _MuxPG(dist.ProcessGroup):
             chunks = []
             for r in range(self._ws):
                 chunks.append(_load_tensor(self._in_path(cid, r, 0)))
-            result = torch.cat(chunks, dim=0)
-            _save_tensor(self._out_path(cid, 0, 0), result)
+            _save_tensor(self._out_path(cid, 0, 0), torch.cat(chunks, dim=0))
             self._mark_resolved(cid)
         else:
-            self._yield_until_resolved(cid)
+            self._wait_for_resolved(cid)
 
-        result = _load_tensor(self._out_path(cid, 0, 0)).to(output.device)
-        output.copy_(result)
+        output.copy_(
+            _load_tensor(self._out_path(cid, 0, 0)).to(output.device)
+        )
         return _completed_work()
 
     @torch.no_grad()
@@ -331,14 +355,17 @@ class _MuxPG(dist.ProcessGroup):
                 acc = acc / self._ws
             chunk_size = acc.size(0) // self._ws
             for r in range(self._ws):
-                chunk = acc[r * chunk_size : (r + 1) * chunk_size]
-                _save_tensor(self._out_path(cid, r, 0), chunk.contiguous())
+                _save_tensor(
+                    self._out_path(cid, r, 0),
+                    acc[r * chunk_size : (r + 1) * chunk_size].contiguous(),
+                )
             self._mark_resolved(cid)
         else:
-            self._yield_until_resolved(cid)
+            self._wait_for_resolved(cid)
 
-        result = _load_tensor(self._out_path(cid, self._rank, 0)).to(output.device)
-        output.copy_(result)
+        output.copy_(
+            _load_tensor(self._out_path(cid, self._rank, 0)).to(output.device)
+        )
         return _completed_work()
 
     @torch.no_grad()
@@ -348,50 +375,30 @@ class _MuxPG(dist.ProcessGroup):
         for i, chunks in enumerate(scatter_list):
             for r, chunk in enumerate(chunks):
                 _save_tensor(
-                    _coll_path(self._pg_id, cid, f"in_r{self._rank}_scatter{i}_chunk{r}.pt"),
+                    _coll_path(
+                        self._pg_id, cid,
+                        f"in_r{self._rank}_s{i}_c{r}.pt",
+                    ),
                     chunk,
                 )
         self._mark_ready(cid)
 
         if self._all_ready(cid):
-            for i in range(len(output_tensor)):
-                acc = None
-                for src_rank in range(self._ws):
-                    for dst_rank in range(self._ws):
-                        chunk = _load_tensor(
-                            _coll_path(self._pg_id, cid, f"in_r{src_rank}_scatter{i}_chunk{dst_rank}.pt")
-                        )
-                        if dst_rank == 0 and src_rank == 0:
-                            pass
-                acc = _load_tensor(
-                    _coll_path(self._pg_id, cid, f"in_r0_scatter{i}_chunk{self._rank}.pt")
-                ).clone()
-                for src_rank in range(1, self._ws):
-                    acc.add_(
-                        _load_tensor(
-                            _coll_path(self._pg_id, cid, f"in_r{src_rank}_scatter{i}_chunk{self._rank}.pt")
-                        )
-                    )
-                _save_tensor(self._out_path(cid, self._rank, i), acc)
-
-            for r in range(self._ws):
-                if r == self._rank:
-                    continue
+            for dst in range(self._ws):
                 for i in range(len(output_tensor)):
                     acc = _load_tensor(
-                        _coll_path(self._pg_id, cid, f"in_r0_scatter{i}_chunk{r}.pt")
+                        _coll_path(self._pg_id, cid, f"in_r0_s{i}_c{dst}.pt")
                     ).clone()
-                    for src_rank in range(1, self._ws):
+                    for src in range(1, self._ws):
                         acc.add_(
                             _load_tensor(
-                                _coll_path(self._pg_id, cid, f"in_r{src_rank}_scatter{i}_chunk{r}.pt")
+                                _coll_path(self._pg_id, cid, f"in_r{src}_s{i}_c{dst}.pt")
                             )
                         )
-                    _save_tensor(self._out_path(cid, r, i), acc)
-
+                    _save_tensor(self._out_path(cid, dst, i), acc)
             self._mark_resolved(cid)
         else:
-            self._yield_until_resolved(cid)
+            self._wait_for_resolved(cid)
 
         for i, t in enumerate(output_tensor):
             t.copy_(_load_tensor(self._out_path(cid, self._rank, i)).to(t.device))
@@ -407,25 +414,22 @@ class _MuxPG(dist.ProcessGroup):
 
     @torch.no_grad()
     def scatter(self, output, input, opts=ScatterOptions()):
-        return self._do_stub("scatter", output, input, opts)
+        raise NotImplementedError("_MuxPG.scatter")
 
     @torch.no_grad()
     def gather(self, output, input, opts=ScatterOptions()):
-        return self._do_stub("gather", output, input, opts)
+        raise NotImplementedError("_MuxPG.gather")
 
     @torch.no_grad()
     def alltoall(self, output, input, opts=AllToAllOptions()):
-        return self._do_stub("alltoall", output, input, opts)
-
-    def _do_stub(self, name, *args, **kwargs):
-        raise NotImplementedError(f"_MuxPG.{name} not yet implemented")
+        raise NotImplementedError("_MuxPG.alltoall")
 
     @torch.no_grad()
     def barrier(self, opts=BarrierOptions()):
         cid = self._next_coll()
         self._mark_ready(cid)
         if not self._all_ready(cid):
-            self._yield_until_resolved(cid)
+            self._wait_for_resolved(cid)
         else:
             self._mark_resolved(cid)
         return _completed_work()
@@ -444,6 +448,7 @@ class _MuxPG(dist.ProcessGroup):
         from torch.testing._internal.distributed.multi_threaded_pg import (
             ThreadLocalWorld,
         )
+
         if isinstance(world, ThreadLocalWorld):
             world = world._get_world()
         return world.pg_names.get(self, f"mux_pg_{self._pg_id}")
@@ -474,10 +479,17 @@ def _create_mux_pg(store, rank, world_size, timeout):
 
 
 def _worker(
-    rank, world_size, ngpus, sched_next, master_port, coll_dir_path,
-    script, script_args, run_as_module,
+    rank,
+    world_size,
+    ngpus,
+    sched_next,
+    master_port,
+    coll_dir_path,
+    script,
+    script_args,
+    run_as_module,
 ):
-    global _ngpus, _sched, _rank, _ws, _held, _coll_dir
+    global _ngpus, _sched, _rank, _ws, _held, _coll_dir, _state_mgr
     _ngpus = ngpus
     _sched = sched_next
     _rank = rank
@@ -500,6 +512,12 @@ def _worker(
     torch.device = _MuxDevice
     _orig_cuda_set_device = torch.cuda.set_device
     torch.cuda.set_device = lambda *a, **kw: _orig_cuda_set_device(rank % ngpus)
+
+    from torch.distributed.state_manager import WorkerStateManager
+
+    _state_mgr = WorkerStateManager(
+        snapshot_dir=os.path.join(coll_dir_path, f"state_rank{rank}")
+    )
 
     dist.Backend.register_backend(
         "mux_files", _create_mux_pg, devices=["cpu", "cuda"]
@@ -545,6 +563,7 @@ def _worker(
     finally:
         if _held:
             _release()
+        _state_mgr.cleanup()
 
 
 # ---- Entry point ----

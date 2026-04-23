@@ -4,11 +4,9 @@ WorkerStateManager: snapshot/restore all GPU tensor state per worker.
 Walks the garbage collector to find every live CUDA tensor, groups them
 by underlying storage (to handle views correctly), serializes raw storage
 bytes to disk, and frees GPU memory via storage.resize_(0). On restore,
-bytes are loaded from disk into fresh GPU allocations, and each tensor
-is reconnected to its storage with the original offset, shape, and stride.
-
-Tensor objects are tracked via weak references so the state manager does
-not prevent garbage collection of tensors the worker has discarded.
+the SAME storage objects are resized back and refilled from disk so that
+all tensors sharing them — including those only referenced from C++ and
+invisible to Python's GC — automatically see the restored data.
 """
 
 import ctypes
@@ -22,25 +20,15 @@ import torch
 
 
 @dataclass
-class _TensorRecord:
-    ref: weakref.ref
-    storage_key: int
-    storage_offset: int
-    shape: tuple
-    stride: tuple
-    dtype: torch.dtype
-
-
-@dataclass
 class _StorageRecord:
     filepath: str
     nbytes: int
     device_index: int
+    storage_ref: object  # strong ref to the original UntypedStorage
 
 
 @dataclass
 class _WorkerSnapshot:
-    tensors: list[_TensorRecord] = field(default_factory=list)
     storages: dict[int, _StorageRecord] = field(default_factory=dict)
 
 
@@ -63,14 +51,23 @@ class WorkerStateManager:
         with open(filepath, "wb") as f:
             f.write(bytes(buf))
 
-    def _load_storage(
-        self, filepath: str, nbytes: int, device_index: int
-    ) -> torch.UntypedStorage:
+    def _load_into_storage(
+        self, storage: torch.UntypedStorage, filepath: str, nbytes: int
+    ) -> None:
+        """Resize the storage back and copy saved data into it."""
+        storage.resize_(nbytes)
         with open(filepath, "rb") as f:
             raw = f.read()
         cpu_storage = torch.UntypedStorage(nbytes)
         ctypes.memmove(cpu_storage.data_ptr(), raw, nbytes)
-        return cpu_storage.cuda(device_index)
+        # Copy from CPU storage into the resized GPU storage via
+        # uint8 tensor views so we get a proper D2H copy.
+        dev = storage.device
+        src = torch.empty(0, dtype=torch.uint8)
+        src.set_(cpu_storage, 0, (nbytes,), (1,))
+        dst = torch.empty(0, dtype=torch.uint8, device=dev)
+        dst.set_(storage, 0, (nbytes,), (1,))
+        dst.copy_(src)
 
     def snapshot(self, rank: int) -> None:
         self._clear_rank_files(rank)
@@ -90,32 +87,22 @@ class WorkerStateManager:
                     continue
                 skey = s.data_ptr()
                 if skey not in seen_storages:
-                    idx = len(seen_storages)
-                    snap.storages[skey] = _StorageRecord(
-                        filepath=os.path.join(rank_dir, f"storage_{idx}.bin"),
-                        nbytes=s.nbytes(),
-                        device_index=s.device.index or 0,
-                    )
                     seen_storages[skey] = s
-
-                snap.tensors.append(
-                    _TensorRecord(
-                        ref=weakref.ref(obj),
-                        storage_key=skey,
-                        storage_offset=obj.storage_offset(),
-                        shape=tuple(obj.shape),
-                        stride=tuple(obj.stride()),
-                        dtype=obj.dtype,
-                    )
-                )
             except Exception:
                 pass
 
-        for skey, storage in seen_storages.items():
-            self._save_storage(storage, snap.storages[skey].filepath)
+        for idx, (skey, s) in enumerate(seen_storages.items()):
+            filepath = os.path.join(rank_dir, f"storage_{idx}.bin")
+            self._save_storage(s, filepath)
+            snap.storages[skey] = _StorageRecord(
+                filepath=filepath,
+                nbytes=s.nbytes(),
+                device_index=s.device.index or 0,
+                storage_ref=s,
+            )
 
-        for storage in seen_storages.values():
-            storage.resize_(0)
+        for s in seen_storages.values():
+            s.resize_(0)
 
         self._snapshots[rank] = snap
 
@@ -124,21 +111,9 @@ class WorkerStateManager:
         if not snap:
             return
 
-        gpu_storages: dict[int, torch.UntypedStorage] = {}
-        for skey, record in snap.storages.items():
-            gpu_storages[skey] = self._load_storage(
-                record.filepath, record.nbytes, record.device_index
-            )
-
-        with torch.no_grad():
-            for tr in snap.tensors:
-                t = tr.ref()
-                if t is None:
-                    continue
-                storage = gpu_storages.get(tr.storage_key)
-                if storage is None:
-                    continue
-                t.set_(storage, tr.storage_offset, tr.shape, tr.stride)
+        for record in snap.storages.values():
+            s = record.storage_ref
+            self._load_into_storage(s, record.filepath, record.nbytes)
 
     def has_snapshot(self, rank: int) -> bool:
         return rank in self._snapshots
