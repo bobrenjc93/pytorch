@@ -942,9 +942,7 @@ User code traceback:
         )
 
         self.assertExpectedInline(
-            post_munge(
-                _munge_graph_break_message(records[1].getMessage())
-            ),
+            post_munge(_munge_graph_break_message(records[1].getMessage())),
             expected,
         )
 
