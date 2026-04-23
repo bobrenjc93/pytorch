@@ -1,44 +1,37 @@
 """
-torchmux: Simulate N-GPU distributed training on M GPUs (M < N).
+torchmux: Simulate N-GPU distributed training on M GPUs (M ≤ N).
 
 Usage:
     python -m torch.distributed.torchmux --nproc 8 train.py [args...]
     python -m torch.distributed.torchmux --nproc 8 --ngpus 2 train.py [args...]
 
-Takes a standard torchrun-compatible training script and runs N workers
-as cooperatively-scheduled threads in a single process. Workers are
-mapped round-robin onto M physical GPUs (default M=1).
-
-Scripts can use device=f"cuda:{rank}" and backend="nccl" — torchmux
-remaps CUDA device indices to physical GPUs (cuda:{rank % ngpus}) and
-redirects any backend to vnccl.
-
-Only one worker executes at a time. Workers yield to each other at
-collective boundaries (all_reduce, all_gather, broadcast, etc.). This
-cooperative scheduling means:
-  - The global RNG is never corrupted by thread interleaving
-  - Collective numerics are bitwise identical to real NCCL + torchrun
+Launches N worker processes mapped round-robin onto M physical GPUs.
+Workers execute cooperatively: only one runs at a time per GPU, yielding
+at collective boundaries. Collectives are resolved by bookkeeping each
+rank's tensor contribution on disk — no NCCL is needed.
 """
 
 import argparse
+import mmap
 import os
 import runpy
+import shutil
+import socket
+import struct
 import sys
-import threading
-import traceback
+import tempfile
+import time
+from functools import reduce
 
 import torch
 import torch.distributed as dist
+import torch.multiprocessing as mp
 
-
-_tls = threading.local()
-
-_exec_lock = None
-_ngpus = 1
 
 # ---- torch.device remapping ----
 
 _OrigDevice = torch.device
+_ngpus = 1
 
 
 class _DeviceMeta(type):
@@ -59,140 +52,502 @@ class _MuxDevice(metaclass=_DeviceMeta):
         return d
 
 
-class _ThreadLocalEnv:
-    def __init__(self, real_environ):
-        object.__setattr__(self, "_real", real_environ)
+# ---- Shared int via mmap (survives mp.spawn pickling) ----
 
-    def _override(self, key):
-        overrides = getattr(_tls, "env_overrides", None)
-        if overrides is not None and key in overrides:
-            return overrides[key]
-        return None
 
-    def __getitem__(self, key):
-        v = self._override(key)
-        return v if v is not None else self._real[key]
+class _SharedInt:
+    def __init__(self):
+        self._fd = tempfile.NamedTemporaryFile(delete=False)
+        self._path = self._fd.name
+        self._fd.write(struct.pack("i", 0))
+        self._fd.flush()
+        self._mm = mmap.mmap(self._fd.fileno(), 4)
 
-    def get(self, key, default=None):
-        v = self._override(key)
-        return v if v is not None else self._real.get(key, default)
+    @property
+    def value(self):
+        self._mm.seek(0)
+        return struct.unpack("i", self._mm.read(4))[0]
 
-    def __contains__(self, key):
-        return self._override(key) is not None or key in self._real
+    @value.setter
+    def value(self, v):
+        self._mm.seek(0)
+        self._mm.write(struct.pack("i", v))
+        self._mm.flush()
 
-    def __setitem__(self, key, value):
-        self._real[key] = value
+    def cleanup(self):
+        self._mm.close()
+        self._fd.close()
+        os.unlink(self._path)
 
-    def __delitem__(self, key):
-        del self._real[key]
+    def __getstate__(self):
+        return self._path
 
-    def __iter__(self):
-        return iter(self._real)
+    def __setstate__(self, path):
+        self._path = path
+        self._fd = open(path, "r+b")
+        self._mm = mmap.mmap(self._fd.fileno(), 4)
 
-    def __len__(self):
-        return len(self._real)
+
+# ---- Cooperative scheduling ----
+
+_sched = None  # _SharedInt
+_rank = None
+_ws = None
+_held = False
+
+
+def _acquire():
+    global _held
+    while _sched.value != _rank:
+        time.sleep(1e-5)
+    _held = True
+
+
+def _release():
+    global _held
+    _sched.value = (_rank + 1) % _ws
+    _held = False
+
+
+# ---- Helpers ----
+
+
+def _completed_work():
+    from torch._C._distributed_c10d import _create_work_from_future
+    from torch.futures import Future
+
+    fut = Future()
+    fut.set_result(None)
+    return _create_work_from_future(fut)
+
+
+_coll_dir = None  # shared tempdir for collective data
+
+
+def _coll_path(pg_id, coll_id, filename):
+    return os.path.join(_coll_dir, f"pg{pg_id}", f"c{coll_id:08d}", filename)
+
+
+def _save_tensor(path, tensor):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp"
+    torch.save(tensor.detach().cpu(), tmp)
+    os.rename(tmp, path)
+
+
+def _load_tensor(path):
+    return torch.load(path, map_location="cpu", weights_only=True)
+
+
+# ---- File-based ProcessGroup ----
+
+from torch._C._distributed_c10d import (
+    AllgatherOptions,
+    AllreduceOptions,
+    AllToAllOptions,
+    BarrierOptions,
+    BroadcastOptions,
+    ReduceOp,
+    ReduceScatterOptions,
+    ScatterOptions,
+)
+
+
+class _MuxPG(dist.ProcessGroup):
+    """Resolves collectives by bookkeeping tensors on disk.
+
+    Each collective: save input tensor(s) → yield → when all ranks have
+    contributed, the last to arrive resolves on CPU → all ranks load
+    the result when rescheduled.
+    """
+
+    _next_pg_id = 0
+
+    def __init__(self, rank, world_size):
+        super().__init__(rank, world_size)
+        self._rank = rank
+        self._ws = world_size
+        self._pg_id = _MuxPG._next_pg_id
+        _MuxPG._next_pg_id += 1
+        self._coll_id = 0
+
+    def _next_coll(self):
+        cid = self._coll_id
+        self._coll_id += 1
+        return cid
+
+    def _ready_path(self, cid, rank):
+        return _coll_path(self._pg_id, cid, f"ready_{rank}")
+
+    def _resolved_path(self, cid):
+        return _coll_path(self._pg_id, cid, "resolved")
+
+    def _mark_ready(self, cid):
+        p = self._ready_path(cid, self._rank)
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        open(p, "w").close()
+
+    def _all_ready(self, cid):
+        return all(
+            os.path.exists(self._ready_path(cid, r)) for r in range(self._ws)
+        )
+
+    def _is_resolved(self, cid):
+        return os.path.exists(self._resolved_path(cid))
+
+    def _mark_resolved(self, cid):
+        open(self._resolved_path(cid), "w").close()
+
+    def _yield_until_resolved(self, cid):
+        """Release scheduling, spin until this collective is resolved."""
+        while not self._is_resolved(cid):
+            if _held:
+                _release()
+            time.sleep(1e-5)
+            _acquire()
+
+    def _in_path(self, cid, rank, idx):
+        return _coll_path(self._pg_id, cid, f"in_r{rank}_t{idx}.pt")
+
+    def _out_path(self, cid, rank, idx):
+        return _coll_path(self._pg_id, cid, f"out_r{rank}_t{idx}.pt")
+
+    # ---- collectives ----
+
+    @torch.no_grad()
+    def allreduce(self, tensor_list, opts=AllreduceOptions()):
+        cid = self._next_coll()
+        op = opts.reduceOp if hasattr(opts, "reduceOp") else ReduceOp.SUM
+
+        for i, t in enumerate(tensor_list):
+            _save_tensor(self._in_path(cid, self._rank, i), t)
+        self._mark_ready(cid)
+
+        if self._all_ready(cid):
+            for i in range(len(tensor_list)):
+                acc = _load_tensor(self._in_path(cid, 0, i))
+                for r in range(1, self._ws):
+                    acc = acc + _load_tensor(self._in_path(cid, r, i))
+                if op == ReduceOp.AVG:
+                    acc = acc / self._ws
+                for r in range(self._ws):
+                    _save_tensor(self._out_path(cid, r, i), acc)
+            self._mark_resolved(cid)
+        else:
+            self._yield_until_resolved(cid)
+
+        for i, t in enumerate(tensor_list):
+            t.copy_(_load_tensor(self._out_path(cid, self._rank, i)).to(t.device))
+        return _completed_work()
+
+    @torch.no_grad()
+    def allreduce_coalesced(self, tensor_list, opts=AllreduceOptions()):
+        return self.allreduce(tensor_list, opts)
+
+    @torch.no_grad()
+    def broadcast(self, tensor_list, opts=BroadcastOptions()):
+        cid = self._next_coll()
+        root = opts.rootRank
+
+        if self._rank == root:
+            for i, t in enumerate(tensor_list):
+                _save_tensor(self._in_path(cid, root, i), t)
+        self._mark_ready(cid)
+
+        if self._all_ready(cid):
+            self._mark_resolved(cid)
+        else:
+            self._yield_until_resolved(cid)
+
+        if self._rank != root:
+            for i, t in enumerate(tensor_list):
+                t.copy_(
+                    _load_tensor(self._in_path(cid, root, i)).to(t.device)
+                )
+        return _completed_work()
+
+    @torch.no_grad()
+    def allgather(self, output_tensors, input_tensor, opts=AllgatherOptions()):
+        cid = self._next_coll()
+
+        for i, t in enumerate(input_tensor):
+            _save_tensor(self._in_path(cid, self._rank, i), t)
+        self._mark_ready(cid)
+
+        if self._all_ready(cid):
+            self._mark_resolved(cid)
+        else:
+            self._yield_until_resolved(cid)
+
+        for i, out_list in enumerate(output_tensors):
+            for r in range(self._ws):
+                out_list[r].copy_(
+                    _load_tensor(self._in_path(cid, r, i)).to(out_list[r].device)
+                )
+        return _completed_work()
+
+    @torch.no_grad()
+    def _allgather_base(self, output, input, opts=AllgatherOptions()):
+        cid = self._next_coll()
+
+        _save_tensor(self._in_path(cid, self._rank, 0), input)
+        self._mark_ready(cid)
+
+        if self._all_ready(cid):
+            chunks = []
+            for r in range(self._ws):
+                chunks.append(_load_tensor(self._in_path(cid, r, 0)))
+            result = torch.cat(chunks, dim=0)
+            _save_tensor(self._out_path(cid, 0, 0), result)
+            self._mark_resolved(cid)
+        else:
+            self._yield_until_resolved(cid)
+
+        result = _load_tensor(self._out_path(cid, 0, 0)).to(output.device)
+        output.copy_(result)
+        return _completed_work()
+
+    @torch.no_grad()
+    def allgather_into_tensor_coalesced(
+        self, outputs, inputs, opts=AllgatherOptions()
+    ):
+        for o, i in zip(outputs, inputs):
+            self._allgather_base(o, i, opts)
+        return _completed_work()
+
+    @torch.no_grad()
+    def _reduce_scatter_base(self, output, input, opts=ReduceScatterOptions()):
+        cid = self._next_coll()
+        op = opts.reduceOp if hasattr(opts, "reduceOp") else ReduceOp.SUM
+
+        _save_tensor(self._in_path(cid, self._rank, 0), input)
+        self._mark_ready(cid)
+
+        if self._all_ready(cid):
+            acc = _load_tensor(self._in_path(cid, 0, 0))
+            for r in range(1, self._ws):
+                acc = acc + _load_tensor(self._in_path(cid, r, 0))
+            if op == ReduceOp.AVG:
+                acc = acc / self._ws
+            chunk_size = acc.size(0) // self._ws
+            for r in range(self._ws):
+                chunk = acc[r * chunk_size : (r + 1) * chunk_size]
+                _save_tensor(self._out_path(cid, r, 0), chunk.contiguous())
+            self._mark_resolved(cid)
+        else:
+            self._yield_until_resolved(cid)
+
+        result = _load_tensor(self._out_path(cid, self._rank, 0)).to(output.device)
+        output.copy_(result)
+        return _completed_work()
+
+    @torch.no_grad()
+    def reduce_scatter(self, output_tensor, scatter_list, opts=ReduceScatterOptions()):
+        cid = self._next_coll()
+
+        for i, chunks in enumerate(scatter_list):
+            for r, chunk in enumerate(chunks):
+                _save_tensor(
+                    _coll_path(self._pg_id, cid, f"in_r{self._rank}_scatter{i}_chunk{r}.pt"),
+                    chunk,
+                )
+        self._mark_ready(cid)
+
+        if self._all_ready(cid):
+            for i in range(len(output_tensor)):
+                acc = None
+                for src_rank in range(self._ws):
+                    for dst_rank in range(self._ws):
+                        chunk = _load_tensor(
+                            _coll_path(self._pg_id, cid, f"in_r{src_rank}_scatter{i}_chunk{dst_rank}.pt")
+                        )
+                        if dst_rank == 0 and src_rank == 0:
+                            pass
+                acc = _load_tensor(
+                    _coll_path(self._pg_id, cid, f"in_r0_scatter{i}_chunk{self._rank}.pt")
+                ).clone()
+                for src_rank in range(1, self._ws):
+                    acc.add_(
+                        _load_tensor(
+                            _coll_path(self._pg_id, cid, f"in_r{src_rank}_scatter{i}_chunk{self._rank}.pt")
+                        )
+                    )
+                _save_tensor(self._out_path(cid, self._rank, i), acc)
+
+            for r in range(self._ws):
+                if r == self._rank:
+                    continue
+                for i in range(len(output_tensor)):
+                    acc = _load_tensor(
+                        _coll_path(self._pg_id, cid, f"in_r0_scatter{i}_chunk{r}.pt")
+                    ).clone()
+                    for src_rank in range(1, self._ws):
+                        acc.add_(
+                            _load_tensor(
+                                _coll_path(self._pg_id, cid, f"in_r{src_rank}_scatter{i}_chunk{r}.pt")
+                            )
+                        )
+                    _save_tensor(self._out_path(cid, r, i), acc)
+
+            self._mark_resolved(cid)
+        else:
+            self._yield_until_resolved(cid)
+
+        for i, t in enumerate(output_tensor):
+            t.copy_(_load_tensor(self._out_path(cid, self._rank, i)).to(t.device))
+        return _completed_work()
+
+    @torch.no_grad()
+    def reduce_scatter_tensor_coalesced(
+        self, outputs, inputs, opts=ReduceScatterOptions()
+    ):
+        for o, i in zip(outputs, inputs):
+            self._reduce_scatter_base(o, i, opts)
+        return _completed_work()
+
+    @torch.no_grad()
+    def scatter(self, output, input, opts=ScatterOptions()):
+        return self._do_stub("scatter", output, input, opts)
+
+    @torch.no_grad()
+    def gather(self, output, input, opts=ScatterOptions()):
+        return self._do_stub("gather", output, input, opts)
+
+    @torch.no_grad()
+    def alltoall(self, output, input, opts=AllToAllOptions()):
+        return self._do_stub("alltoall", output, input, opts)
+
+    def _do_stub(self, name, *args, **kwargs):
+        raise NotImplementedError(f"_MuxPG.{name} not yet implemented")
+
+    @torch.no_grad()
+    def barrier(self, opts=BarrierOptions()):
+        cid = self._next_coll()
+        self._mark_ready(cid)
+        if not self._all_ready(cid):
+            self._yield_until_resolved(cid)
+        else:
+            self._mark_resolved(cid)
+        return _completed_work()
+
+    # ---- metadata ----
+
+    def size(self):
+        return self._ws
+
+    def getBackendName(self):
+        return "mux_files"
+
+    @property
+    def pg_name(self):
+        world = dist.distributed_c10d._world
+        from torch.testing._internal.distributed.multi_threaded_pg import (
+            ThreadLocalWorld,
+        )
+        if isinstance(world, ThreadLocalWorld):
+            world = world._get_world()
+        return world.pg_names.get(self, f"mux_pg_{self._pg_id}")
+
+    @property
+    def group_name(self):
+        return self.pg_name
 
     def __repr__(self):
-        return repr(self._real)
-
-    def __getattr__(self, name):
-        return getattr(self._real, name)
+        return f"MuxFiles(rank={self._rank}, size={self._ws})"
 
 
-def _yield_at_collective(fn):
-    def wrapper(*args, **kwargs):
-        _exec_lock.release()
-        try:
-            return fn(*args, **kwargs)
-        finally:
-            _exec_lock.acquire()
-
-    wrapper.__name__ = getattr(fn, "__name__", "")
-    wrapper.__qualname__ = getattr(fn, "__qualname__", "")
-    return wrapper
+# ---- Backend factory ----
 
 
-_COLLECTIVES = [
-    "broadcast",
-    "all_reduce",
-    "all_reduce_coalesced",
-    "reduce",
-    "all_gather",
-    "all_gather_into_tensor",
-    "all_gather_coalesced",
-    "gather",
-    "scatter",
-    "reduce_scatter",
-    "reduce_scatter_tensor",
-    "all_to_all",
-    "all_to_all_single",
-    "barrier",
-    "batch_isend_irecv",
-]
+def _create_mux_pg(store, rank, world_size, timeout):
+    from torch.distributed.distributed_c10d import _store_based_barrier
+
+    pg = _MuxPG(rank, world_size)
+    if _held:
+        _release()
+    _store_based_barrier(rank, store, "", world_size, timeout)
+    _acquire()
+    return pg
 
 
-_run_as_module = False
-_nproc_for_trace = 1
+# ---- Worker process ----
 
 
-_traces_written = False
+def _worker(
+    rank, world_size, ngpus, sched_next, master_port, coll_dir_path,
+    script, script_args, run_as_module,
+):
+    global _ngpus, _sched, _rank, _ws, _held, _coll_dir
+    _ngpus = ngpus
+    _sched = sched_next
+    _rank = rank
+    _ws = world_size
+    _coll_dir = coll_dir_path
 
-
-def _export_traces():
-    global _traces_written
-    if _traces_written:
-        return
-    _traces_written = True
-
-    from torch.distributed import torchmux_trace
-
-    trace_dir = os.environ.get("TORCHMUX_TRACE_DIR", "/tmp")
-    natural_path = os.path.join(trace_dir, "torchmux_natural.json")
-    synthetic_path = os.path.join(trace_dir, "torchmux_synthetic.json")
-    torchmux_trace.export_natural(natural_path, _nproc_for_trace)
-    torchmux_trace.export_synthetic(synthetic_path, _nproc_for_trace)
-    print(f"torchmux: traces written to {natural_path} and {synthetic_path}", flush=True)
-
-
-def _worker(rank, world_size, script, script_args, store, ready_barrier, errors):
-    try:
-        _tls.env_overrides = {
+    os.environ.update(
+        {
             "RANK": str(rank),
-            "LOCAL_RANK": str(rank % _ngpus),
+            "LOCAL_RANK": str(rank % ngpus),
             "WORLD_SIZE": str(world_size),
             "LOCAL_WORLD_SIZE": str(world_size),
             "GROUP_RANK": "0",
             "MASTER_ADDR": "localhost",
-            "MASTER_PORT": "29500",
+            "MASTER_PORT": str(master_port),
+            "CUDA_VISIBLE_DEVICES": ",".join(str(i) for i in range(ngpus)),
         }
-        _tls.rank = rank
-        _tls.world_size = world_size
-        _tls.store = store
+    )
 
-        ready_barrier.wait()
+    torch.device = _MuxDevice
+    _orig_cuda_set_device = torch.cuda.set_device
+    torch.cuda.set_device = lambda *a, **kw: _orig_cuda_set_device(rank % ngpus)
 
-        from torch.distributed.vnccl import _acquire_exec_lock_ordered
+    dist.Backend.register_backend(
+        "mux_files", _create_mux_pg, devices=["cpu", "cuda"]
+    )
 
-        _acquire_exec_lock_ordered(rank, world_size)
+    _orig_init = dist.init_process_group
+    _orig_destroy = dist.destroy_process_group
+    _orig_new_group = dist.new_group
+
+    def _mux_init(backend=None, **kwargs):
+        if _held:
+            _release()
+        _orig_init(backend="mux_files", **kwargs)
+        _acquire()
+
+    def _mux_destroy():
+        if _held:
+            _release()
         try:
-            from torch.distributed import torchmux_trace as _trace
-
-            _tls._exec_start = _trace._us()
-            sys.argv = [script] + list(script_args)
-            if _run_as_module:
-                runpy.run_module(script, run_name="__main__", alter_sys=True)
-            else:
-                runpy.run_path(script, run_name="__main__")
+            _orig_destroy()
         finally:
-            from torch.distributed.vnccl import _release_exec_lock_ordered
+            _acquire()
 
-            _release_exec_lock_ordered(rank, world_size)
-            if rank == 0:
-                _export_traces()
-    except SystemExit:
-        pass
-    except Exception:
-        errors[rank] = traceback.format_exc()
+    def _mux_new_group(*args, **kwargs):
+        if _held:
+            _release()
+        try:
+            return _orig_new_group(*args, **kwargs)
+        finally:
+            _acquire()
+
+    dist.init_process_group = _mux_init
+    dist.destroy_process_group = _mux_destroy
+    dist.new_group = _mux_new_group
+
+    _acquire()
+    try:
+        sys.argv = [script] + list(script_args)
+        if run_as_module:
+            runpy.run_module(script, run_name="__main__", alter_sys=True)
+        else:
+            runpy.run_path(script, run_name="__main__")
+    finally:
+        if _held:
+            _release()
+
+
+# ---- Entry point ----
 
 
 def main():
@@ -200,133 +555,59 @@ def main():
         prog="torchmux",
         description="Simulate N-GPU distributed training on M GPUs",
     )
-    parser.add_argument("--nproc", type=int, required=True, help="Number of simulated workers (N)")
-    parser.add_argument("--ngpus", type=int, default=1, help="Number of physical GPUs (M, default 1)")
-    parser.add_argument("-m", action="store_true", dest="module", help="Run script as a Python module (like python -m)")
+    parser.add_argument(
+        "--nproc", type=int, required=True, help="Number of simulated workers"
+    )
+    parser.add_argument(
+        "--ngpus",
+        type=int,
+        default=1,
+        help="Number of physical GPUs (default 1)",
+    )
+    parser.add_argument(
+        "-m", action="store_true", dest="module", help="Run script as a Python module"
+    )
     parser.add_argument("script", help="Training script or module name")
     parser.add_argument("script_args", nargs=argparse.REMAINDER)
     args = parser.parse_args()
 
     nproc = args.nproc
+    ngpus = args.ngpus
     assert nproc >= 1
-    assert args.ngpus >= 1 and args.ngpus <= nproc
+    assert ngpus >= 1
 
-    global _ngpus, _run_as_module
-    _ngpus = args.ngpus
-    _run_as_module = args.module
+    with socket.socket() as s:
+        s.bind(("", 0))
+        port = s.getsockname()[1]
 
-    from torch.testing._internal.distributed.multi_threaded_pg import (
-        _install_threaded_pg,
+    sched = _SharedInt()
+    coll_dir = tempfile.mkdtemp(prefix="torchmux_colls_")
+
+    gpu_desc = "GPU 0" if ngpus == 1 else f"{ngpus} GPUs"
+    print(
+        f"torchmux: {nproc} workers on {gpu_desc}, script={args.script}",
+        flush=True,
     )
 
-    _install_threaded_pg()
-    torch._C._distributed_c10d._set_thread_isolation_mode(True)
-
-    from torch.distributed import vnccl as _vnccl  # noqa: F401,F811
-
-    global _exec_lock
-    _exec_lock = _vnccl.exec_lock
-
-    dist.Backend.default_device_backend_map["cuda"] = "vnccl"
-
-    store = dist.HashStore()
-
-    _orig_init_pg = dist.init_process_group
-    _orig_destroy_pg = dist.destroy_process_group
-    _orig_cuda_set_device = torch.cuda.set_device
-
-    def _patched_init_pg(backend=None, init_method=None, **kwargs):
-        kwargs.pop("timeout", None)
-        from torch.distributed.vnccl import (
-            _rng_states, _save_rng, _restore_rng,
-            _release_exec_lock_ordered, _acquire_exec_lock_ordered,
+    try:
+        mp.spawn(
+            _worker,
+            args=(
+                nproc,
+                ngpus,
+                sched,
+                port,
+                coll_dir,
+                args.script,
+                args.script_args,
+                args.module,
+            ),
+            nprocs=nproc,
+            join=True,
         )
-
-        rank = _tls.rank
-        ws = _tls.world_size
-        _rng_states[rank] = _save_rng()
-        _release_exec_lock_ordered(rank, ws)
-        try:
-            _orig_init_pg(
-                backend="vnccl",
-                rank=rank,
-                world_size=ws,
-                store=_tls.store,
-            )
-        finally:
-            _acquire_exec_lock_ordered(rank, ws)
-            if rank in _rng_states:
-                _restore_rng(_rng_states[rank])
-
-    _traces_exported = [False]
-
-    def _patched_destroy_pg():
-        if not _traces_exported[0]:
-            _traces_exported[0] = True
-            _export_traces()
-
-        from torch.distributed.vnccl import _rng_states, _save_rng, _restore_rng
-
-        rank = getattr(_tls, "rank", None)
-        if rank is not None:
-            _rng_states[rank] = _save_rng()
-        _exec_lock.release()
-        try:
-            _orig_destroy_pg()
-        finally:
-            _exec_lock.acquire()
-            if rank is not None and rank in _rng_states:
-                _restore_rng(_rng_states[rank])
-
-    dist.init_process_group = _patched_init_pg
-    dist.destroy_process_group = _patched_destroy_pg
-    torch.cuda.set_device = lambda *a, **kw: _orig_cuda_set_device(
-        getattr(_tls, "rank", 0) % _ngpus
-    )
-    torch.device = _MuxDevice
-    os.environ = _ThreadLocalEnv(os.environ)
-
-    # Cooperative scheduling is handled inside vnccl._do() — every
-    # collective (whether called via dist.all_reduce or directly via
-    # ProcessGroup.allreduce) releases the exec_lock before blocking
-    # on the barrier and reacquires it after. No wrapping needed here.
-
-    global _nproc_for_trace
-    _nproc_for_trace = nproc
-
-    gpu_desc = "GPU 0" if _ngpus == 1 else f"{_ngpus} GPUs"
-    print(f"torchmux: {nproc} workers on {gpu_desc}, script={args.script}", flush=True)
-
-    errors = [None] * nproc
-    ready_barrier = threading.Barrier(nproc)
-    threads = []
-    for rank in range(nproc):
-        t = threading.Thread(
-            target=_worker,
-            args=(rank, nproc, args.script, args.script_args, store, ready_barrier, errors),
-            daemon=True,
-        )
-        threads.append(t)
-        t.start()
-
-    for t in threads:
-        t.join()
-
-    _export_traces()
-
-    dist.init_process_group = _orig_init_pg
-    dist.destroy_process_group = _orig_destroy_pg
-    torch.cuda.set_device = _orig_cuda_set_device
-    torch.device = _OrigDevice
-    torch._C._distributed_c10d._set_thread_isolation_mode(False)
-
-    failed = False
-    for rank, err in enumerate(errors):
-        if err is not None:
-            print(f"\n[rank {rank}] FAILED:\n{err}", file=sys.stderr)
-            failed = True
-    if failed:
-        sys.exit(1)
+    finally:
+        sched.cleanup()
+        shutil.rmtree(coll_dir, ignore_errors=True)
 
 
 if __name__ == "__main__":
