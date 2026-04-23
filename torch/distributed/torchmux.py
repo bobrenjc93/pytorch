@@ -6,14 +6,20 @@ Usage:
     python -m torch.distributed.torchmux --nproc 8 --ngpus 2 train.py [args...]
 
 Launches N worker processes mapped round-robin onto M physical GPUs.
-Workers execute cooperatively: only one runs at a time per GPU, yielding
-at collective boundaries. When a worker yields it snapshots all GPU
-state to disk and frees GPU memory so the next worker can use the GPU.
-Collectives are resolved by bookkeeping each rank's tensor contribution
-on disk — no NCCL is needed.
+Workers execute cooperatively: only one runs per GPU at a time, yielding
+at collective boundaries. When a worker yields it checkpoints its entire
+CUDA context via the driver API (VRAM returned to the driver) and
+restores it when rescheduled. Collectives are resolved by bookkeeping
+each rank's tensor contribution on disk — no NCCL is needed.
+
+Produces two chrome://tracing traces (set TORCHMUX_TRACE_DIR, default
+/tmp): a natural trace showing actual serial execution with
+snapshot/restore overhead, and a synthetic trace reconstructing what
+parallel execution would look like.
 """
 
 import argparse
+import json
 import mmap
 import os
 import runpy
@@ -110,6 +116,34 @@ def _release():
     _held = False
 
 
+# ---- Per-process trace recording ----
+
+_trace_events = []  # list of (cat, name, start_us, dur_us)
+_compute_start = None  # monotonic us when current compute phase began
+
+
+def _us():
+    return time.monotonic() * 1e6
+
+
+def _trace(cat, name, start, dur):
+    _trace_events.append((cat, name, start, dur))
+
+
+def _begin_compute():
+    global _compute_start
+    _compute_start = _us()
+
+
+def _end_compute():
+    global _compute_start
+    if _compute_start is not None:
+        dur = _us() - _compute_start
+        if dur > 0:
+            _trace("compute", "compute", _compute_start, dur)
+        _compute_start = None
+
+
 # ---- GPU state checkpoint/restore via CUDA driver ----
 
 _baton = None  # CudaBaton instance
@@ -119,13 +153,19 @@ _checkpointed = False  # has this process ever been checkpointed?
 def _snapshot_gpu():
     global _checkpointed
     torch.cuda.synchronize()
-    _baton.checkpoint(os.getpid())
+    t0 = _us()
+    with torch.profiler.record_function("torchmux::snapshot"):
+        _baton.checkpoint(os.getpid())
+    _trace("mux", "snapshot", t0, _us() - t0)
     _checkpointed = True
 
 
 def _restore_gpu():
     if _checkpointed:
-        _baton.restore_and_unlock(os.getpid())
+        t0 = _us()
+        with torch.profiler.record_function("torchmux::restore"):
+            _baton.restore_and_unlock(os.getpid())
+        _trace("mux", "restore", t0, _us() - t0)
 
 
 def _yield_and_wait(check_fn):
@@ -238,33 +278,43 @@ class _MuxPG(dist.ProcessGroup):
     def _out_path(self, cid, rank, idx):
         return _coll_path(self._pg_id, cid, f"out_r{rank}_t{idx}.pt")
 
+    def _do_collective(self, name, fn):
+        """End compute span, run collective fn, begin new compute span."""
+        _end_compute()
+        t0 = _us()
+        with torch.profiler.record_function(f"torchmux::collective::{name}"):
+            result = fn()
+        _trace("collective", name, t0, _us() - t0)
+        _begin_compute()
+        return result
+
     # ---- collectives ----
 
     @torch.no_grad()
     def allreduce(self, tensor_list, opts=AllreduceOptions()):
-        cid = self._next_coll()
-        op = opts.reduceOp if hasattr(opts, "reduceOp") else ReduceOp.SUM
+        def _run():
+            cid = self._next_coll()
+            op = opts.reduceOp if hasattr(opts, "reduceOp") else ReduceOp.SUM
+            for i, t in enumerate(tensor_list):
+                _save_tensor(self._in_path(cid, self._rank, i), t)
+            self._mark_ready(cid)
+            if self._all_ready(cid):
+                for i in range(len(tensor_list)):
+                    acc = _load_tensor(self._in_path(cid, 0, i))
+                    for r in range(1, self._ws):
+                        acc = acc + _load_tensor(self._in_path(cid, r, i))
+                    if op == ReduceOp.AVG:
+                        acc = acc / self._ws
+                    for r in range(self._ws):
+                        _save_tensor(self._out_path(cid, r, i), acc)
+                self._mark_resolved(cid)
+            else:
+                self._wait_for_resolved(cid)
+            for i, t in enumerate(tensor_list):
+                t.copy_(_load_tensor(self._out_path(cid, self._rank, i)).to(t.device))
+            return _completed_work()
 
-        for i, t in enumerate(tensor_list):
-            _save_tensor(self._in_path(cid, self._rank, i), t)
-        self._mark_ready(cid)
-
-        if self._all_ready(cid):
-            for i in range(len(tensor_list)):
-                acc = _load_tensor(self._in_path(cid, 0, i))
-                for r in range(1, self._ws):
-                    acc = acc + _load_tensor(self._in_path(cid, r, i))
-                if op == ReduceOp.AVG:
-                    acc = acc / self._ws
-                for r in range(self._ws):
-                    _save_tensor(self._out_path(cid, r, i), acc)
-            self._mark_resolved(cid)
-        else:
-            self._wait_for_resolved(cid)
-
-        for i, t in enumerate(tensor_list):
-            t.copy_(_load_tensor(self._out_path(cid, self._rank, i)).to(t.device))
-        return _completed_work()
+        return self._do_collective("allreduce", _run)
 
     @torch.no_grad()
     def allreduce_coalesced(self, tensor_list, opts=AllreduceOptions()):
@@ -272,144 +322,129 @@ class _MuxPG(dist.ProcessGroup):
 
     @torch.no_grad()
     def broadcast(self, tensor_list, opts=BroadcastOptions()):
-        cid = self._next_coll()
-        root = opts.rootRank
+        def _run():
+            cid = self._next_coll()
+            root = opts.rootRank
+            if self._rank == root:
+                for i, t in enumerate(tensor_list):
+                    _save_tensor(self._in_path(cid, root, i), t)
+            self._mark_ready(cid)
+            if self._all_ready(cid):
+                self._mark_resolved(cid)
+            else:
+                self._wait_for_resolved(cid)
+            if self._rank != root:
+                for i, t in enumerate(tensor_list):
+                    t.copy_(_load_tensor(self._in_path(cid, root, i)).to(t.device))
+            return _completed_work()
 
-        if self._rank == root:
-            for i, t in enumerate(tensor_list):
-                _save_tensor(self._in_path(cid, root, i), t)
-        self._mark_ready(cid)
-
-        if self._all_ready(cid):
-            self._mark_resolved(cid)
-        else:
-            self._wait_for_resolved(cid)
-
-        if self._rank != root:
-            for i, t in enumerate(tensor_list):
-                t.copy_(
-                    _load_tensor(self._in_path(cid, root, i)).to(t.device)
-                )
-        return _completed_work()
+        return self._do_collective("broadcast", _run)
 
     @torch.no_grad()
     def allgather(self, output_tensors, input_tensor, opts=AllgatherOptions()):
-        cid = self._next_coll()
+        def _run():
+            cid = self._next_coll()
+            for i, t in enumerate(input_tensor):
+                _save_tensor(self._in_path(cid, self._rank, i), t)
+            self._mark_ready(cid)
+            if self._all_ready(cid):
+                self._mark_resolved(cid)
+            else:
+                self._wait_for_resolved(cid)
+            for i, out_list in enumerate(output_tensors):
+                for r in range(self._ws):
+                    out_list[r].copy_(
+                        _load_tensor(self._in_path(cid, r, i)).to(out_list[r].device)
+                    )
+            return _completed_work()
 
-        for i, t in enumerate(input_tensor):
-            _save_tensor(self._in_path(cid, self._rank, i), t)
-        self._mark_ready(cid)
-
-        if self._all_ready(cid):
-            self._mark_resolved(cid)
-        else:
-            self._wait_for_resolved(cid)
-
-        for i, out_list in enumerate(output_tensors):
-            for r in range(self._ws):
-                out_list[r].copy_(
-                    _load_tensor(self._in_path(cid, r, i)).to(out_list[r].device)
-                )
-        return _completed_work()
+        return self._do_collective("allgather", _run)
 
     @torch.no_grad()
     def _allgather_base(self, output, input, opts=AllgatherOptions()):
-        cid = self._next_coll()
+        def _run():
+            cid = self._next_coll()
+            _save_tensor(self._in_path(cid, self._rank, 0), input)
+            self._mark_ready(cid)
+            if self._all_ready(cid):
+                chunks = [_load_tensor(self._in_path(cid, r, 0)) for r in range(self._ws)]
+                _save_tensor(self._out_path(cid, 0, 0), torch.cat(chunks, dim=0))
+                self._mark_resolved(cid)
+            else:
+                self._wait_for_resolved(cid)
+            output.copy_(_load_tensor(self._out_path(cid, 0, 0)).to(output.device))
+            return _completed_work()
 
-        _save_tensor(self._in_path(cid, self._rank, 0), input)
-        self._mark_ready(cid)
-
-        if self._all_ready(cid):
-            chunks = []
-            for r in range(self._ws):
-                chunks.append(_load_tensor(self._in_path(cid, r, 0)))
-            _save_tensor(self._out_path(cid, 0, 0), torch.cat(chunks, dim=0))
-            self._mark_resolved(cid)
-        else:
-            self._wait_for_resolved(cid)
-
-        output.copy_(
-            _load_tensor(self._out_path(cid, 0, 0)).to(output.device)
-        )
-        return _completed_work()
+        return self._do_collective("allgather", _run)
 
     @torch.no_grad()
-    def allgather_into_tensor_coalesced(
-        self, outputs, inputs, opts=AllgatherOptions()
-    ):
+    def allgather_into_tensor_coalesced(self, outputs, inputs, opts=AllgatherOptions()):
         for o, i in zip(outputs, inputs):
             self._allgather_base(o, i, opts)
         return _completed_work()
 
     @torch.no_grad()
     def _reduce_scatter_base(self, output, input, opts=ReduceScatterOptions()):
-        cid = self._next_coll()
-        op = opts.reduceOp if hasattr(opts, "reduceOp") else ReduceOp.SUM
+        def _run():
+            cid = self._next_coll()
+            op = opts.reduceOp if hasattr(opts, "reduceOp") else ReduceOp.SUM
+            _save_tensor(self._in_path(cid, self._rank, 0), input)
+            self._mark_ready(cid)
+            if self._all_ready(cid):
+                acc = _load_tensor(self._in_path(cid, 0, 0))
+                for r in range(1, self._ws):
+                    acc = acc + _load_tensor(self._in_path(cid, r, 0))
+                if op == ReduceOp.AVG:
+                    acc = acc / self._ws
+                chunk_size = acc.size(0) // self._ws
+                for r in range(self._ws):
+                    _save_tensor(
+                        self._out_path(cid, r, 0),
+                        acc[r * chunk_size : (r + 1) * chunk_size].contiguous(),
+                    )
+                self._mark_resolved(cid)
+            else:
+                self._wait_for_resolved(cid)
+            output.copy_(_load_tensor(self._out_path(cid, self._rank, 0)).to(output.device))
+            return _completed_work()
 
-        _save_tensor(self._in_path(cid, self._rank, 0), input)
-        self._mark_ready(cid)
-
-        if self._all_ready(cid):
-            acc = _load_tensor(self._in_path(cid, 0, 0))
-            for r in range(1, self._ws):
-                acc = acc + _load_tensor(self._in_path(cid, r, 0))
-            if op == ReduceOp.AVG:
-                acc = acc / self._ws
-            chunk_size = acc.size(0) // self._ws
-            for r in range(self._ws):
-                _save_tensor(
-                    self._out_path(cid, r, 0),
-                    acc[r * chunk_size : (r + 1) * chunk_size].contiguous(),
-                )
-            self._mark_resolved(cid)
-        else:
-            self._wait_for_resolved(cid)
-
-        output.copy_(
-            _load_tensor(self._out_path(cid, self._rank, 0)).to(output.device)
-        )
-        return _completed_work()
+        return self._do_collective("reduce_scatter", _run)
 
     @torch.no_grad()
     def reduce_scatter(self, output_tensor, scatter_list, opts=ReduceScatterOptions()):
-        cid = self._next_coll()
-
-        for i, chunks in enumerate(scatter_list):
-            for r, chunk in enumerate(chunks):
-                _save_tensor(
-                    _coll_path(
-                        self._pg_id, cid,
-                        f"in_r{self._rank}_s{i}_c{r}.pt",
-                    ),
-                    chunk,
-                )
-        self._mark_ready(cid)
-
-        if self._all_ready(cid):
-            for dst in range(self._ws):
-                for i in range(len(output_tensor)):
-                    acc = _load_tensor(
-                        _coll_path(self._pg_id, cid, f"in_r0_s{i}_c{dst}.pt")
-                    ).clone()
-                    for src in range(1, self._ws):
-                        acc.add_(
-                            _load_tensor(
-                                _coll_path(self._pg_id, cid, f"in_r{src}_s{i}_c{dst}.pt")
+        def _run():
+            cid = self._next_coll()
+            for i, chunks in enumerate(scatter_list):
+                for r, chunk in enumerate(chunks):
+                    _save_tensor(
+                        _coll_path(self._pg_id, cid, f"in_r{self._rank}_s{i}_c{r}.pt"),
+                        chunk,
+                    )
+            self._mark_ready(cid)
+            if self._all_ready(cid):
+                for dst in range(self._ws):
+                    for i in range(len(output_tensor)):
+                        acc = _load_tensor(
+                            _coll_path(self._pg_id, cid, f"in_r0_s{i}_c{dst}.pt")
+                        ).clone()
+                        for src in range(1, self._ws):
+                            acc.add_(
+                                _load_tensor(
+                                    _coll_path(self._pg_id, cid, f"in_r{src}_s{i}_c{dst}.pt")
+                                )
                             )
-                        )
-                    _save_tensor(self._out_path(cid, dst, i), acc)
-            self._mark_resolved(cid)
-        else:
-            self._wait_for_resolved(cid)
+                        _save_tensor(self._out_path(cid, dst, i), acc)
+                self._mark_resolved(cid)
+            else:
+                self._wait_for_resolved(cid)
+            for i, t in enumerate(output_tensor):
+                t.copy_(_load_tensor(self._out_path(cid, self._rank, i)).to(t.device))
+            return _completed_work()
 
-        for i, t in enumerate(output_tensor):
-            t.copy_(_load_tensor(self._out_path(cid, self._rank, i)).to(t.device))
-        return _completed_work()
+        return self._do_collective("reduce_scatter", _run)
 
     @torch.no_grad()
-    def reduce_scatter_tensor_coalesced(
-        self, outputs, inputs, opts=ReduceScatterOptions()
-    ):
+    def reduce_scatter_tensor_coalesced(self, outputs, inputs, opts=ReduceScatterOptions()):
         for o, i in zip(outputs, inputs):
             self._reduce_scatter_base(o, i, opts)
         return _completed_work()
@@ -428,13 +463,16 @@ class _MuxPG(dist.ProcessGroup):
 
     @torch.no_grad()
     def barrier(self, opts=BarrierOptions()):
-        cid = self._next_coll()
-        self._mark_ready(cid)
-        if not self._all_ready(cid):
-            self._wait_for_resolved(cid)
-        else:
-            self._mark_resolved(cid)
-        return _completed_work()
+        def _run():
+            cid = self._next_coll()
+            self._mark_ready(cid)
+            if not self._all_ready(cid):
+                self._wait_for_resolved(cid)
+            else:
+                self._mark_resolved(cid)
+            return _completed_work()
+
+        return self._do_collective("barrier", _run)
 
     # ---- metadata ----
 
@@ -516,6 +554,7 @@ def _worker(
     torch.cuda.set_device = lambda *a, **kw: _orig_cuda_set_device(rank % ngpus)
 
     import ctypes
+
     ctypes.CDLL("libcuda.so.1").cuInit(0)
 
     from torch.distributed.checkpoint.baton import CudaBaton
@@ -531,32 +570,42 @@ def _worker(
     _orig_new_group = dist.new_group
 
     def _mux_init(backend=None, **kwargs):
+        _end_compute()
         if _held:
             _release()
         _orig_init(backend="mux_files", **kwargs)
         _acquire()
+        _begin_compute()
 
     def _mux_destroy():
+        _end_compute()
         if _held:
             _release()
         try:
             _orig_destroy()
         finally:
             _acquire()
+            _begin_compute()
 
     def _mux_new_group(*args, **kwargs):
+        _end_compute()
         if _held:
             _release()
         try:
             return _orig_new_group(*args, **kwargs)
         finally:
             _acquire()
+            _begin_compute()
 
     dist.init_process_group = _mux_init
     dist.destroy_process_group = _mux_destroy
     dist.new_group = _mux_new_group
 
+    trace_dir = os.environ.get("TORCHMUX_TRACE_DIR", "/tmp")
+    os.makedirs(trace_dir, exist_ok=True)
+
     _acquire()
+    _begin_compute()
     try:
         sys.argv = [script] + list(script_args)
         if run_as_module:
@@ -564,8 +613,13 @@ def _worker(
         else:
             runpy.run_path(script, run_name="__main__")
     finally:
+        _end_compute()
         if _held:
             _release()
+
+        synthetic_path = os.path.join(coll_dir_path, f"trace_rank{rank}.json")
+        with open(synthetic_path, "w") as f:
+            json.dump(_trace_events, f)
 
 
 # ---- Entry point ----
@@ -626,6 +680,29 @@ def main():
             nprocs=nproc,
             join=True,
         )
+
+        from torch.distributed import torchmux_trace
+
+        trace_dir = os.environ.get("TORCHMUX_TRACE_DIR", "/tmp")
+
+        events_by_rank = {}
+        for r in range(nproc):
+            p = os.path.join(coll_dir, f"trace_rank{r}.json")
+            if os.path.exists(p):
+                with open(p) as f:
+                    events_by_rank[r] = [tuple(e) for e in json.load(f)]
+
+        natural_path = os.path.join(trace_dir, "torchmux_natural.json")
+        synthetic_path = os.path.join(trace_dir, "torchmux_synthetic.json")
+
+        torchmux_trace.export_natural(events_by_rank, natural_path, nproc)
+        torchmux_trace.export_synthetic(events_by_rank, synthetic_path, nproc)
+
+        print(
+            f"torchmux: traces written to {natural_path} and {synthetic_path}",
+            flush=True,
+        )
+
     finally:
         sched.cleanup()
         shutil.rmtree(coll_dir, ignore_errors=True)

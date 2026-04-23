@@ -1,238 +1,197 @@
 """
 Tracing for torchmux: produces two chrome://tracing JSON files.
 
-Natural trace: shows the actual serial execution with time slices per
-worker, including snapshot/restore overhead spans.
+Natural trace: shows actual serial execution with time slices per
+worker. Includes snapshot/restore overhead spans so you can see what
+time is real compute vs mux overhead.
 
 Synthetic trace: reconstructs what a parallel run would look like.
-Workers' compute spans are overlapped (aligned at start), and
-collective boundaries are placed at max(worker_durations) + a small
-collective overhead.
+All workers' compute phases are aligned at the start (overlapped),
+and each collective is placed at max(worker_compute_durations).
+Snapshot/restore spans are omitted (they don't exist in real
+parallel execution).
 """
 
 import json
 import os
-import time
-import threading
-
-_tls = threading.local()
-
-# Collected per-worker events: list of (rank, category, name, start_us, dur_us)
-_events = []
-_events_lock = threading.Lock()
 
 
-def _us():
-    return time.monotonic() * 1e6
+def export_natural(events_by_rank, path, nproc):
+    """Export the natural (serial) trace.
 
+    Each worker is a separate process in the chrome trace. Events are
+    placed at their actual wall-clock times.
 
-def record(rank, cat, name, start_us, dur_us):
-    with _events_lock:
-        _events.append((rank, cat, name, start_us, dur_us))
-
-
-def begin_span(rank, cat, name):
-    return (rank, cat, name, _us())
-
-
-def end_span(span):
-    rank, cat, name, start = span
-    record(rank, cat, name, start, _us() - start)
-
-
-class SpanContext:
-    def __init__(self, rank, cat, name):
-        self.rank = rank
-        self.cat = cat
-        self.name = name
-
-    def __enter__(self):
-        self._start = _us()
-        return self
-
-    def __exit__(self, *args):
-        record(self.rank, self.cat, self.name, self._start, _us() - self._start)
-
-
-def export_natural(path, nproc):
-    """
-    Export the natural (serial) trace. Each worker is a separate
-    process in the chrome trace, showing the actual execution order.
+    Args:
+        events_by_rank: dict[int, list[tuple]] where each tuple is
+            (category, name, start_us, dur_us)
+        path: output file path
+        nproc: number of workers
     """
     trace_events = []
 
     for rank in range(nproc):
-        trace_events.append({
-            "ph": "M", "name": "process_name",
-            "pid": rank, "tid": 0,
-            "args": {"name": f"Worker {rank}"},
-        })
-        trace_events.append({
-            "ph": "M", "name": "thread_name",
-            "pid": rank, "tid": 0,
-            "args": {"name": "main"},
-        })
+        trace_events.append(
+            {
+                "ph": "M",
+                "name": "process_name",
+                "pid": rank,
+                "tid": 0,
+                "args": {"name": f"Worker {rank}"},
+            }
+        )
 
-    with _events_lock:
-        events = list(_events)
-
-    base_ts = min(e[3] for e in events) if events else 0
-    for rank, cat, name, start_us, dur_us in events:
-        trace_events.append({
-            "ph": "X",
-            "cat": cat,
-            "name": name,
-            "pid": rank,
-            "tid": 0,
-            "ts": start_us - base_ts,
-            "dur": dur_us,
-        })
-
-    trace = {
-        "traceEvents": trace_events,
-        "displayTimeUnit": "ms",
-    }
-    with open(path, "w") as f:
-        json.dump(trace, f)
-
-
-def export_synthetic(path, nproc):
-    """
-    Export the synthetic (parallel) trace. Reconstructs what a parallel
-    run would look like by overlapping workers' compute spans between
-    collectives.
-
-    Algorithm:
-      1. Group events by worker, sorted by time.
-      2. Identify collective boundaries (events with cat="collective").
-      3. Between each pair of consecutive collectives, each worker has a
-         "compute phase." In the synthetic trace, all workers' compute
-         phases start at the same time (parallel).
-      4. The collective is placed at max(worker_compute_durations), with
-         duration = min(measured_durations) across workers — the last
-         worker to arrive does the actual work without waiting.
-      5. Overhead spans (rng_save/restore) are omitted.
-    """
-    with _events_lock:
-        events = list(_events)
-
-    if not events:
-        _write_empty_trace(path, nproc)
+    if not events_by_rank:
+        _write(path, trace_events)
         return
 
-    per_rank = {r: [] for r in range(nproc)}
-    for rank, cat, name, start_us, dur_us in events:
-        per_rank[rank].append((cat, name, start_us, dur_us))
+    all_starts = []
+    for events in events_by_rank.values():
+        for _, _, start, _ in events:
+            all_starts.append(start)
+    base_ts = min(all_starts) if all_starts else 0
 
-    for r in per_rank:
-        per_rank[r].sort(key=lambda e: e[2])
+    for rank, events in events_by_rank.items():
+        for cat, name, start_us, dur_us in events:
+            trace_events.append(
+                {
+                    "ph": "X",
+                    "cat": cat,
+                    "name": name,
+                    "pid": rank,
+                    "tid": 0,
+                    "ts": start_us - base_ts,
+                    "dur": dur_us,
+                }
+            )
 
-    phases = _extract_phases(per_rank, nproc)
+    _write(path, trace_events)
 
+
+def export_synthetic(events_by_rank, path, nproc):
+    """Export the synthetic (parallel) trace.
+
+    Reconstructs what a parallel run would look like by overlapping
+    workers' compute phases between collectives.
+
+    Algorithm:
+      1. Split each worker's events into phases (by collective boundaries).
+      2. In each phase, all workers' compute spans start at the same time.
+      3. The collective is placed at max(worker_compute_durations).
+      4. Snapshot/restore spans are omitted.
+    """
     trace_events = []
     for rank in range(nproc):
-        trace_events.append({
-            "ph": "M", "name": "process_name",
-            "pid": rank, "tid": 0,
-            "args": {"name": f"Worker {rank}"},
-        })
+        trace_events.append(
+            {
+                "ph": "M",
+                "name": "process_name",
+                "pid": rank,
+                "tid": 0,
+                "args": {"name": f"Worker {rank}"},
+            }
+        )
 
-    synthetic_cursor = 0.0
+    if not events_by_rank:
+        _write(path, trace_events)
+        return
+
+    phases = _split_into_phases(events_by_rank, nproc)
+
+    cursor = 0.0
     for phase in phases:
         max_compute = 0.0
-        min_coll_dur = float("inf")
         coll_name = None
+        coll_dur = 0.0
 
         for rank in range(nproc):
             worker_events = phase.get(rank, [])
             compute_dur = sum(
-                d for c, _, _, d in worker_events if c == "compute" and d > 0
+                d for c, _, _, d in worker_events if c == "compute"
             )
             max_compute = max(max_compute, compute_dur)
             for c, n, _, d in worker_events:
-                if c == "collective" and d > 0:
-                    min_coll_dur = min(min_coll_dur, d)
+                if c == "collective":
                     coll_name = n
+                    coll_dur = max(coll_dur, d)
 
         for rank in range(nproc):
-            cursor = synthetic_cursor
-            for cat, name, _, dur_us in phase.get(rank, []):
-                if cat != "compute" or dur_us <= 0:
+            worker_events = phase.get(rank, [])
+            t = cursor
+            for cat, name, _, dur_us in worker_events:
+                if cat != "compute":
                     continue
-                trace_events.append({
-                    "ph": "X", "cat": "compute", "name": name,
-                    "pid": rank, "tid": 0,
-                    "ts": cursor, "dur": dur_us,
-                })
-                cursor += dur_us
+                trace_events.append(
+                    {
+                        "ph": "X",
+                        "cat": "compute",
+                        "name": name,
+                        "pid": rank,
+                        "tid": 0,
+                        "ts": t,
+                        "dur": dur_us,
+                    }
+                )
+                t += dur_us
 
-        if coll_name and min_coll_dur < float("inf"):
+        if coll_name:
             for rank in range(nproc):
-                trace_events.append({
-                    "ph": "X", "cat": "collective",
-                    "name": coll_name,
-                    "pid": rank, "tid": 0,
-                    "ts": synthetic_cursor + max_compute,
-                    "dur": min_coll_dur,
-                })
-            synthetic_cursor += max_compute + min_coll_dur
+                trace_events.append(
+                    {
+                        "ph": "X",
+                        "cat": "collective",
+                        "name": coll_name,
+                        "pid": rank,
+                        "tid": 0,
+                        "ts": cursor + max_compute,
+                        "dur": coll_dur,
+                    }
+                )
+            cursor += max_compute + coll_dur
         else:
-            synthetic_cursor += max_compute
+            cursor += max_compute
 
-    trace = {
-        "traceEvents": trace_events,
-        "displayTimeUnit": "ms",
-    }
-    with open(path, "w") as f:
-        json.dump(trace, f)
+    _write(path, trace_events)
 
 
-def _extract_phases(per_rank, nproc):
-    """
-    Split each worker's events into phases separated by collectives.
-    A phase is a dict mapping rank -> list of events between two
+def _split_into_phases(events_by_rank, nproc):
+    """Split events into phases separated by collectives.
+
+    A phase is a dict[rank, list[events]] containing the compute
+    events and the ending collective for each worker between two
     consecutive collective boundaries.
     """
-    coll_indices = {r: [] for r in range(nproc)}
-    for r in range(nproc):
-        for i, (cat, name, start, dur) in enumerate(per_rank[r]):
+    per_rank_phases = {}
+    for rank in range(nproc):
+        events = events_by_rank.get(rank, [])
+        phases = []
+        current = []
+        for ev in events:
+            cat = ev[0]
+            current.append(ev)
             if cat == "collective":
-                coll_indices[r].append(i)
+                phases.append(current)
+                current = []
+        if current:
+            phases.append(current)
+        per_rank_phases[rank] = phases
 
-    if not coll_indices.get(0):
-        return [{r: list(per_rank[r]) for r in range(nproc)}]
+    max_phases = max(
+        (len(p) for p in per_rank_phases.values()), default=0
+    )
 
-    num_colls = len(coll_indices[0])
-    phases = []
-
-    for ci in range(num_colls):
+    result = []
+    for i in range(max_phases):
         phase = {}
-        for r in range(nproc):
-            if ci >= len(coll_indices[r]):
-                continue
-            end_idx = coll_indices[r][ci]
-            start_idx = coll_indices[r][ci - 1] + 1 if ci > 0 else 0
-            phase[r] = per_rank[r][start_idx : end_idx + 1]
-        phases.append(phase)
-
-    last_phase = {}
-    for r in range(nproc):
-        if coll_indices[r]:
-            last_idx = coll_indices[r][-1] + 1
-            if last_idx < len(per_rank[r]):
-                last_phase[r] = per_rank[r][last_idx:]
-    if last_phase:
-        phases.append(last_phase)
-
-    return phases
+        for rank in range(nproc):
+            if i < len(per_rank_phases[rank]):
+                phase[rank] = per_rank_phases[rank][i]
+        result.append(phase)
+    return result
 
 
-def _write_empty_trace(path, nproc):
-    trace = {"traceEvents": [], "displayTimeUnit": "ms"}
+def _write(path, trace_events):
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    trace = {"traceEvents": trace_events, "displayTimeUnit": "ms"}
     with open(path, "w") as f:
         json.dump(trace, f)
-
-
-def clear():
-    with _events_lock:
-        _events.clear()
