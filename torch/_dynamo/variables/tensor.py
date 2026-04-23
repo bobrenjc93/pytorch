@@ -2739,8 +2739,13 @@ class DataPtrVariable(VariableTracker):
             same_data_ptr = self._is_same_data_ptr(args[0])
             if same_data_ptr:
                 return ConstantVariable.create(name == "__eq__")
-            # Fall through so the base implementation graph breaks when we
-            # cannot prove the data pointers are equivalent.
+            unimplemented(
+                gb_type="Data pointer comparison",
+                context=f"call_method {self} {name} {args} {kwargs}",
+                explanation="Dynamo can only trace data pointer comparisons "
+                "when it can prove both operands have the same data pointer.",
+                hints=[],
+            )
         return super().call_method(tx, name, args, kwargs)
 
     def reconstruct(self, codegen: "PyCodegen") -> None:
