@@ -110,20 +110,22 @@ def _release():
     _held = False
 
 
-# ---- GPU state snapshot/restore ----
+# ---- GPU state checkpoint/restore via CUDA driver ----
 
-_state_mgr = None  # WorkerStateManager, created per-process
+_baton = None  # CudaBaton instance
+_checkpointed = False  # has this process ever been checkpointed?
 
 
 def _snapshot_gpu():
-    if _state_mgr is not None:
-        torch.cuda.synchronize()
-        _state_mgr.snapshot(0)
+    global _checkpointed
+    torch.cuda.synchronize()
+    _baton.checkpoint(os.getpid())
+    _checkpointed = True
 
 
 def _restore_gpu():
-    if _state_mgr is not None and _state_mgr.has_snapshot(0):
-        _state_mgr.restore(0)
+    if _checkpointed:
+        _baton.restore_and_unlock(os.getpid())
 
 
 def _yield_and_wait(check_fn):
@@ -489,7 +491,7 @@ def _worker(
     script_args,
     run_as_module,
 ):
-    global _ngpus, _sched, _rank, _ws, _held, _coll_dir, _state_mgr
+    global _ngpus, _sched, _rank, _ws, _held, _coll_dir, _baton
     _ngpus = ngpus
     _sched = sched_next
     _rank = rank
@@ -513,11 +515,12 @@ def _worker(
     _orig_cuda_set_device = torch.cuda.set_device
     torch.cuda.set_device = lambda *a, **kw: _orig_cuda_set_device(rank % ngpus)
 
-    from torch.distributed.state_manager import WorkerStateManager
+    import ctypes
+    ctypes.CDLL("libcuda.so.1").cuInit(0)
 
-    _state_mgr = WorkerStateManager(
-        snapshot_dir=os.path.join(coll_dir_path, f"state_rank{rank}")
-    )
+    from torch.distributed.checkpoint.baton import CudaBaton
+
+    _baton = CudaBaton()
 
     dist.Backend.register_backend(
         "mux_files", _create_mux_pg, devices=["cpu", "cuda"]
@@ -563,7 +566,6 @@ def _worker(
     finally:
         if _held:
             _release()
-        _state_mgr.cleanup()
 
 
 # ---- Entry point ----

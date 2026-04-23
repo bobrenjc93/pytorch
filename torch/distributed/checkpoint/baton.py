@@ -1,0 +1,116 @@
+"""
+GPU baton: checkpoint and restore a process's entire CUDA context.
+
+Wraps cuCheckpointProcess{Lock,Checkpoint,Restore,Unlock} via ctypes
+so a process can release its entire CUDA context (VRAM returned to the
+driver) and later restore it at the same virtual addresses.
+
+Usage from a coordinator process::
+
+    baton = CudaBaton()
+    baton.checkpoint(worker_pid)   # worker's VRAM freed
+    baton.restore(worker_pid)      # worker's VRAM restored
+
+The target process must have an active CUDA context. After checkpoint,
+the process is in CHECKPOINTED state and cannot make CUDA calls.
+After restore, it is back in LOCKED state; call unlock to resume.
+"""
+
+import ctypes
+import os
+from dataclasses import dataclass
+
+
+_cuda = ctypes.CDLL("libcuda.so.1")
+
+
+class _LockArgs(ctypes.Structure):
+    _fields_ = [
+        ("timeoutMs", ctypes.c_uint),
+        ("reserved0", ctypes.c_uint),
+        ("reserved1", ctypes.c_uint64 * 7),
+    ]
+
+
+class _CheckpointArgs(ctypes.Structure):
+    _fields_ = [("reserved", ctypes.c_uint64 * 8)]
+
+
+class _RestoreArgs(ctypes.Structure):
+    _fields_ = [("reserved", ctypes.c_uint64 * 8)]
+
+
+class _UnlockArgs(ctypes.Structure):
+    _fields_ = [("reserved", ctypes.c_uint64 * 8)]
+
+
+class _ProcessState(ctypes.c_int):
+    RUNNING = 0
+    LOCKED = 1
+    CHECKPOINTED = 2
+    FAILED = 3
+
+
+def _check(result: int, name: str) -> None:
+    if result != 0:
+        err = ctypes.c_char_p()
+        _cuda.cuGetErrorString(result, ctypes.byref(err))
+        msg = err.value.decode() if err.value else f"code {result}"
+        raise RuntimeError(f"{name} failed: {msg}")
+
+
+class CudaBaton:
+    """Checkpoint/restore a process's GPU state via the CUDA driver API.
+
+    All methods target a remote process by PID. The caller must be in
+    the same CUDA MPS or checkpoint-capable environment.
+    """
+
+    def lock(self, pid: int, timeout_ms: int = 30000) -> None:
+        args = _LockArgs(timeoutMs=timeout_ms)
+        _check(_cuda.cuCheckpointProcessLock(pid, ctypes.byref(args)), "Lock")
+
+    def checkpoint(self, pid: int) -> None:
+        """Lock + checkpoint: VRAM is freed, process cannot use CUDA."""
+        self.lock(pid)
+        args = _CheckpointArgs()
+        _check(
+            _cuda.cuCheckpointProcessCheckpoint(pid, ctypes.byref(args)),
+            "Checkpoint",
+        )
+
+    def restore(self, pid: int) -> None:
+        """Restore from last checkpoint (process enters LOCKED state)."""
+        args = _RestoreArgs()
+        _check(
+            _cuda.cuCheckpointProcessRestore(pid, ctypes.byref(args)),
+            "Restore",
+        )
+
+    def unlock(self, pid: int) -> None:
+        args = _UnlockArgs()
+        _check(
+            _cuda.cuCheckpointProcessUnlock(pid, ctypes.byref(args)),
+            "Unlock",
+        )
+
+    def restore_and_unlock(self, pid: int) -> None:
+        """Restore + unlock: process can resume CUDA calls."""
+        self.restore(pid)
+        self.unlock(pid)
+
+    def get_state(self, pid: int) -> int:
+        state = _ProcessState()
+        _check(
+            _cuda.cuCheckpointProcessGetState(pid, ctypes.byref(state)),
+            "GetState",
+        )
+        return state.value
+
+    def checkpoint_self(self, timeout_ms: int = 30000) -> None:
+        """Convenience: checkpoint the calling process."""
+        self.checkpoint(os.getpid(), timeout_ms)
+
+    def restore_self(self) -> None:
+        """Convenience: restore and unlock the calling process."""
+        self.restore_and_unlock(os.getpid())
