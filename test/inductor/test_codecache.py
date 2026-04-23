@@ -2684,10 +2684,8 @@ class TestCustomPartitionerFn(CustomPartitionerFn):
 
 
 class TestFxGraphCacheHashing(TestCase):
+    @unittest.skipIf(not torch.backends.mkldnn.is_available(), "requires MKLDNN")
     def test_cacheability_validator_checks_mkldnn_constant(self):
-        if not torch.backends.mkldnn.is_available():
-            raise unittest.SkipTest("requires MKLDNN")
-
         graph = torch.fx.Graph()
         output = graph.get_attr("mkldnn_weight")
         graph.output(output)
@@ -2698,10 +2696,8 @@ class TestFxGraphCacheHashing(TestCase):
         with self.assertRaisesRegex(BypassFxGraphCache, "mkldnn tensors unpickleable"):
             CacheabilityValidator(gm, require_shape_env=False).validate()
 
+    @unittest.skipIf(not torch.backends.mkldnn.is_available(), "requires MKLDNN")
     def test_check_for_hop_skips_constants(self):
-        if not torch.backends.mkldnn.is_available():
-            raise unittest.SkipTest("requires MKLDNN")
-
         graph = torch.fx.Graph()
         output = graph.get_attr("mkldnn_weight")
         graph.output(output)
@@ -2721,10 +2717,8 @@ class TestFxGraphCacheHashing(TestCase):
                 require_shape_env=False,
             )
 
+    @unittest.skipIf(not torch.backends.mkldnn.is_available(), "requires MKLDNN")
     def test_check_can_cache_checks_nested_fx_kwargs_tensor(self):
-        if not torch.backends.mkldnn.is_available():
-            raise unittest.SkipTest("requires MKLDNN")
-
         gm = torch.fx.GraphModule({}, torch.fx.Graph())
         fx_kwargs = cast(
             Any, {"nested": {"mkldnn_weight": torch.randn(2, 2).to_mkldnn()}}
