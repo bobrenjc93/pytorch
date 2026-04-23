@@ -103,15 +103,19 @@ _ws = None
 _held = False
 
 
-def _acquire():
+def _acquire(*, restore=True):
     global _held
     while _sched.value != _rank:
         time.sleep(1e-5)
     _held = True
+    if restore:
+        _restore_gpu()
 
 
-def _release():
+def _release(*, snapshot=True):
     global _held
+    if snapshot:
+        _snapshot_gpu()
     _sched.value = (_rank + 1) % _ws
     _held = False
 
@@ -162,21 +166,21 @@ def _snapshot_gpu():
 
 
 def _restore_gpu():
+    global _checkpointed
     if _checkpointed:
         t0 = _us()
         _baton.restore_and_unlock(os.getpid())
         _trace("mux", "restore", t0, _us() - t0)
+        _checkpointed = False
 
 
 def _yield_and_wait(check_fn):
-    """Snapshot GPU, release token, wait for check_fn, reacquire, restore."""
-    _snapshot_gpu()
+    """Release token (snapshots GPU), wait, reacquire (restores GPU)."""
     if _held:
         _release()
     while not check_fn():
         time.sleep(1e-5)
     _acquire()
-    _restore_gpu()
 
 
 # ---- Helpers ----
@@ -515,9 +519,9 @@ def _create_mux_pg(store, rank, world_size, timeout):
 
     pg = _MuxPG(rank, world_size)
     if _held:
-        _release()
+        _release(snapshot=False)
     _store_based_barrier(rank, store, "", world_size, timeout)
-    _acquire()
+    _acquire(restore=False)
     return pg
 
 
@@ -575,30 +579,36 @@ def _worker(
 
     def _mux_init(backend=None, **kwargs):
         _end_compute()
+        t0 = _us()
         if _held:
-            _release()
+            _release(snapshot=False)
         _orig_init(backend="mux_files", **kwargs)
-        _acquire()
+        _acquire(restore=False)
+        _trace("collective", "init", t0, _us() - t0)
         _begin_compute()
 
     def _mux_destroy():
         _end_compute()
+        t0 = _us()
         if _held:
-            _release()
+            _release(snapshot=False)
         try:
             _orig_destroy()
         finally:
-            _acquire()
+            _acquire(restore=False)
+            _trace("collective", "destroy", t0, _us() - t0)
             _begin_compute()
 
     def _mux_new_group(*args, **kwargs):
         _end_compute()
+        t0 = _us()
         if _held:
-            _release()
+            _release(snapshot=False)
         try:
             return _orig_new_group(*args, **kwargs)
         finally:
-            _acquire()
+            _acquire(restore=False)
+            _trace("collective", "new_group", t0, _us() - t0)
             _begin_compute()
 
     dist.init_process_group = _mux_init
