@@ -259,9 +259,7 @@ class _MuxPG(dist.ProcessGroup):
         open(p, "w").close()
 
     def _all_ready(self, cid):
-        return all(
-            os.path.exists(self._ready_path(cid, r)) for r in range(self._ws)
-        )
+        return all(os.path.exists(self._ready_path(cid, r)) for r in range(self._ws))
 
     def _is_resolved(self, cid):
         return os.path.exists(self._resolved_path(cid))
@@ -367,7 +365,9 @@ class _MuxPG(dist.ProcessGroup):
             _save_tensor(self._in_path(cid, self._rank, 0), input)
             self._mark_ready(cid)
             if self._all_ready(cid):
-                chunks = [_load_tensor(self._in_path(cid, r, 0)) for r in range(self._ws)]
+                chunks = [
+                    _load_tensor(self._in_path(cid, r, 0)) for r in range(self._ws)
+                ]
                 _save_tensor(self._out_path(cid, 0, 0), torch.cat(chunks, dim=0))
                 self._mark_resolved(cid)
             else:
@@ -405,7 +405,9 @@ class _MuxPG(dist.ProcessGroup):
                 self._mark_resolved(cid)
             else:
                 self._wait_for_resolved(cid)
-            output.copy_(_load_tensor(self._out_path(cid, self._rank, 0)).to(output.device))
+            output.copy_(
+                _load_tensor(self._out_path(cid, self._rank, 0)).to(output.device)
+            )
             return _completed_work()
 
         return self._do_collective("reduce_scatter", _run)
@@ -430,7 +432,9 @@ class _MuxPG(dist.ProcessGroup):
                         for src in range(1, self._ws):
                             acc.add_(
                                 _load_tensor(
-                                    _coll_path(self._pg_id, cid, f"in_r{src}_s{i}_c{dst}.pt")
+                                    _coll_path(
+                                        self._pg_id, cid, f"in_r{src}_s{i}_c{dst}.pt"
+                                    )
                                 )
                             )
                         _save_tensor(self._out_path(cid, dst, i), acc)
@@ -444,7 +448,9 @@ class _MuxPG(dist.ProcessGroup):
         return self._do_collective("reduce_scatter", _run)
 
     @torch.no_grad()
-    def reduce_scatter_tensor_coalesced(self, outputs, inputs, opts=ReduceScatterOptions()):
+    def reduce_scatter_tensor_coalesced(
+        self, outputs, inputs, opts=ReduceScatterOptions()
+    ):
         for o, i in zip(outputs, inputs):
             self._reduce_scatter_base(o, i, opts)
         return _completed_work()
@@ -561,9 +567,7 @@ def _worker(
 
     _baton = CudaBaton()
 
-    dist.Backend.register_backend(
-        "mux_files", _create_mux_pg, devices=["cpu", "cuda"]
-    )
+    dist.Backend.register_backend("mux_files", _create_mux_pg, devices=["cpu", "cuda"])
 
     _orig_init = dist.init_process_group
     _orig_destroy = dist.destroy_process_group

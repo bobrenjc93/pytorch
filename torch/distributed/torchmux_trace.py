@@ -106,9 +106,7 @@ def export_synthetic(events_by_rank, path, nproc):
 
         for rank in range(nproc):
             worker_events = phase.get(rank, [])
-            compute_dur = sum(
-                d for c, _, _, d in worker_events if c == "compute"
-            )
+            compute_dur = sum(d for c, _, _, d in worker_events if c == "compute")
             max_compute = max(max_compute, compute_dur)
             for c, n, _, d in worker_events:
                 if c == "collective":
@@ -176,9 +174,7 @@ def _split_into_phases(events_by_rank, nproc):
             phases.append(current)
         per_rank_phases[rank] = phases
 
-    max_phases = max(
-        (len(p) for p in per_rank_phases.values()), default=0
-    )
+    max_phases = max((len(p) for p in per_rank_phases.values()), default=0)
 
     result = []
     for i in range(max_phases):

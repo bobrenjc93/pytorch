@@ -8,8 +8,8 @@ driver) and later restore it at the same virtual addresses.
 Usage from a coordinator process::
 
     baton = CudaBaton()
-    baton.checkpoint(worker_pid)   # worker's VRAM freed
-    baton.restore(worker_pid)      # worker's VRAM restored
+    baton.checkpoint(worker_pid)  # worker's VRAM freed
+    baton.restore(worker_pid)  # worker's VRAM restored
 
 The target process must have an active CUDA context. After checkpoint,
 the process is in CHECKPOINTED state and cannot make CUDA calls.
@@ -18,7 +18,6 @@ After restore, it is back in LOCKED state; call unlock to resume.
 
 import ctypes
 import os
-from dataclasses import dataclass
 
 
 _cuda = ctypes.CDLL("libcuda.so.1")

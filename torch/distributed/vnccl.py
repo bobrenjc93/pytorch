@@ -17,13 +17,13 @@ Usage:
 Typically used via torchmux rather than directly.
 """
 
+import random as _random
 import threading
 import weakref
-from functools import partial, reduce
-
-import random as _random
+from functools import partial
 
 import torch
+
 
 # Cooperative scheduling lock. When held, only one worker thread runs.
 # Workers release it inside _do() before blocking on a collective
@@ -82,8 +82,11 @@ def _restore_rng(state):
         import numpy as np
 
         np.random.set_state(state["numpy"])
+
+
 import torch.distributed as dist
 from torch._C._distributed_c10d import (
+    _create_work_from_future,
     AllgatherOptions,
     AllreduceOptions,
     AllToAllOptions,
@@ -92,7 +95,6 @@ from torch._C._distributed_c10d import (
     ReduceOp,
     ReduceScatterOptions,
     ScatterOptions,
-    _create_work_from_future,
 )
 from torch.distributed.distributed_c10d import _store_based_barrier
 from torch.futures import Future
@@ -386,7 +388,9 @@ class VNCCLProcessGroup(dist.ProcessGroup):
         chunks = list(torch.chunk(input, self._world_size))
         return self.reduce_scatter([output], [chunks], opts)
 
-    def reduce_scatter_tensor_coalesced(self, outputs, inputs, opts=ReduceScatterOptions()):
+    def reduce_scatter_tensor_coalesced(
+        self, outputs, inputs, opts=ReduceScatterOptions()
+    ):
         works = [self._reduce_scatter_base(o, i, opts) for o, i in zip(outputs, inputs)]
         for w in works[:-1]:
             w.wait()
