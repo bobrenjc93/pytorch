@@ -60,8 +60,8 @@ def export_natural(events_by_rank, path, nproc):
                     "name": name,
                     "pid": rank,
                     "tid": 0,
-                    "ts": start_us - base_ts,
-                    "dur": dur_us,
+                    "ts": int(start_us - base_ts),
+                    "dur": int(dur_us),
                 }
             )
 
@@ -126,8 +126,8 @@ def export_synthetic(events_by_rank, path, nproc):
                         "name": name,
                         "pid": rank,
                         "tid": 0,
-                        "ts": t,
-                        "dur": dur_us,
+                        "ts": int(t),
+                        "dur": int(dur_us),
                     }
                 )
                 t += dur_us
@@ -141,8 +141,8 @@ def export_synthetic(events_by_rank, path, nproc):
                         "name": coll_name,
                         "pid": rank,
                         "tid": 0,
-                        "ts": cursor + max_compute,
-                        "dur": coll_dur,
+                        "ts": int(cursor + max_compute),
+                        "dur": int(coll_dur),
                     }
                 )
             cursor += max_compute + coll_dur
