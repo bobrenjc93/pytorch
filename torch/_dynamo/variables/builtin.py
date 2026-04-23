@@ -1428,8 +1428,10 @@ class BuiltinVariable(BaseBuiltinVariable):
 
                 return wrap_fx_proxy_cls(variables.NumpyNdarrayVariable, tx, proxy)
 
-            if fn in (operator.eq, operator.ne) and len(args) == 2 and (
-                args[0].is_tensor() or isinstance(args[0], DataPtrVariable)
+            if (
+                fn in (operator.eq, operator.ne)
+                and len(args) == 2
+                and args[0].is_tensor()
             ):
                 # Dynamo expects `__eq__` / `__ne__` strings while operator.{eq,ne}
                 # provides call_function dispatch first.

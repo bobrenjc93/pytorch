@@ -2703,9 +2703,7 @@ class DataPtrVariable(VariableTracker):
         return int
 
     @classmethod
-    def _strip_data_ptr_preserving_aliases(
-        cls, node: torch.fx.Node
-    ) -> torch.fx.Node:
+    def _strip_data_ptr_preserving_aliases(cls, node: torch.fx.Node) -> torch.fx.Node:
         while (
             isinstance(node, torch.fx.Node)
             and (node.op, node.target) in cls._DATA_PTR_PRESERVING_TARGETS
@@ -2719,13 +2717,16 @@ class DataPtrVariable(VariableTracker):
         if not isinstance(other, DataPtrVariable):
             return False
 
-        if self.tensor_version != other.tensor_version:
+        if self.tensor_version is None or self.tensor_version != other.tensor_version:
             return False
 
-        return (
-            self._strip_data_ptr_preserving_aliases(self.from_tensor.as_proxy().node)
-            is self._strip_data_ptr_preserving_aliases(other.from_tensor.as_proxy().node)
+        self_root = self._strip_data_ptr_preserving_aliases(
+            self.from_tensor.as_proxy().node
         )
+        other_root = self._strip_data_ptr_preserving_aliases(
+            other.from_tensor.as_proxy().node
+        )
+        return self_root is other_root
 
     def call_method(
         self,
@@ -2738,6 +2739,8 @@ class DataPtrVariable(VariableTracker):
             same_data_ptr = self._is_same_data_ptr(args[0])
             if same_data_ptr:
                 return ConstantVariable.create(name == "__eq__")
+            # Fall through so the base implementation graph breaks when we
+            # cannot prove the data pointers are equivalent.
         return super().call_method(tx, name, args, kwargs)
 
     def reconstruct(self, codegen: "PyCodegen") -> None:
