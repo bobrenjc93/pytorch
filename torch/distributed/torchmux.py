@@ -26,6 +26,7 @@ C++ internals are unaffected.
 
 import argparse
 import json
+import logging
 import mmap
 import os
 import runpy
@@ -39,6 +40,8 @@ import time
 import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
+
+log = logging.getLogger(__name__)
 
 
 # ---- torch.device remapping ----
@@ -208,8 +211,10 @@ def _yield_and_wait(check_fn):
     """Release token (snapshots GPU), wait, reacquire (restores GPU)."""
     if _held:
         _release()
+    delay = 1e-5
     while not check_fn():
-        time.sleep(1e-5)
+        time.sleep(delay)
+        delay = min(delay * 2, 1e-2)
     _acquire()
 
 
@@ -300,7 +305,13 @@ class _MuxPG(dist.ProcessGroup):
     def _next_coll(self):
         cid = self._coll_id
         self._coll_id += 1
+        if cid >= 1:
+            self._cleanup_coll(cid - 1)
         return cid
+
+    def _cleanup_coll(self, cid):
+        coll_dir = os.path.join(_coll_dir, f"pg{self._pg_id}", f"c{cid:08d}")
+        shutil.rmtree(coll_dir, ignore_errors=True)
 
     def _ready_path(self, cid, rank):
         return _coll_path(self._pg_id, cid, f"ready_{rank}")
@@ -714,7 +725,7 @@ def _worker(
 
 def _print_timing_summary(events_by_rank):
     header = f"{'Worker':>8} {'Wall(s)':>9} {'Compute%':>9} {'Snap%':>9} {'Restore%':>9} {'Overhead%':>9}"
-    print(f"\ntorchmux: timing overview\n{header}", flush=True)
+    log.info("\ntorchmux: timing overview\n%s", header)
 
     sum_wall = 0
     sum_compute = 0
@@ -734,28 +745,31 @@ def _print_timing_summary(events_by_rank):
         sum_snap += snap
         sum_restore += restore
 
-        print(
-            f"{'R' + str(r):>8} {wall / 1e6:>8.1f}s"
-            f" {compute / wall * 100:>8.1f}%"
-            f" {snap / wall * 100:>8.1f}%"
-            f" {restore / wall * 100:>8.1f}%"
-            f" {overhead / wall * 100:>8.1f}%",
-            flush=True,
+        log.info(
+            "%s %s %s %s %s %s",
+            f"{'R' + str(r):>8}",
+            f"{wall / 1e6:>8.1f}s",
+            f"{compute / wall * 100:>8.1f}%",
+            f"{snap / wall * 100:>8.1f}%",
+            f"{restore / wall * 100:>8.1f}%",
+            f"{overhead / wall * 100:>8.1f}%",
         )
 
     if len(events_by_rank) > 1:
         avg_wall = sum_wall / len(events_by_rank)
-        print(
-            f"{'Avg':>8} {avg_wall / 1e6:>8.1f}s"
-            f" {sum_compute / sum_wall * 100:>8.1f}%"
-            f" {sum_snap / sum_wall * 100:>8.1f}%"
-            f" {sum_restore / sum_wall * 100:>8.1f}%"
-            f" {(sum_snap + sum_restore) / sum_wall * 100:>8.1f}%",
-            flush=True,
+        log.info(
+            "%s %s %s %s %s %s",
+            f"{'Avg':>8}",
+            f"{avg_wall / 1e6:>8.1f}s",
+            f"{sum_compute / sum_wall * 100:>8.1f}%",
+            f"{sum_snap / sum_wall * 100:>8.1f}%",
+            f"{sum_restore / sum_wall * 100:>8.1f}%",
+            f"{(sum_snap + sum_restore) / sum_wall * 100:>8.1f}%",
         )
 
 
 def main():
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
     parser = argparse.ArgumentParser(
         prog="torchmux",
         description="Simulate N-GPU distributed training on M GPUs",
@@ -787,8 +801,10 @@ def main():
 
     nproc = args.nproc_per_node
     ngpus = args.ngpus
-    assert nproc >= 1
-    assert ngpus >= 1
+    if nproc < 1:
+        parser.error("--nproc-per-node must be >= 1")
+    if ngpus < 1:
+        parser.error("--ngpus must be >= 1")
 
     with socket.socket() as s:
         s.bind(("", 0))
@@ -799,9 +815,11 @@ def main():
     coll_dir = tempfile.mkdtemp(prefix="torchmux_colls_", dir=shm)
 
     gpu_desc = "GPU 0" if ngpus == 1 else f"{ngpus} GPUs"
-    print(
-        f"torchmux: {nproc} workers on {gpu_desc}, script={args.training_script}",
-        flush=True,
+    log.info(
+        "torchmux: %d workers on %s, script=%s",
+        nproc,
+        gpu_desc,
+        args.training_script,
     )
 
     try:
@@ -842,9 +860,10 @@ def main():
             torchmux_trace.export_natural(events_by_rank, natural_path, nproc)
             torchmux_trace.export_synthetic(events_by_rank, synthetic_path, nproc)
 
-            print(
-                f"torchmux: traces written to {natural_path} and {synthetic_path}",
-                flush=True,
+            log.info(
+                "torchmux: traces written to %s and %s",
+                natural_path,
+                synthetic_path,
             )
 
             _print_timing_summary(events_by_rank)

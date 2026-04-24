@@ -186,23 +186,19 @@ class _AllGather:
 
 class _ReduceScatter:
     def __init__(self, op):
-        self.op = op
+        self.op = op if isinstance(op, int) else op.op
 
     @torch.no_grad()
     def work(self, data):
-        started = [False] * len(data)
-        for each in data:
-            chunks = each[1][0]
-            for i, chunk in enumerate(chunks):
-                dst = data[i][0][0]
-                if not started[i]:
-                    dst.detach().copy_(chunk.to(dst.device))
-                    started[i] = True
-                else:
-                    dst.detach().add_(chunk.to(dst.device))
-        if self.op == ReduceOp.AVG:
-            for each in data:
-                each[0][0].detach().div_(len(data))
+        ws = len(data)
+        reduce_fn = _REDUCE_OPS[self.op]
+        for i in range(ws):
+            dst = data[i][0][0]
+            chunks = [data[src][1][0][i].to(dst.device) for src in range(ws)]
+            result = reduce_fn(chunks)
+            if self.op == ReduceOp.AVG:
+                result.div_(ws)
+            dst.detach().copy_(result)
 
 
 class _Scatter:

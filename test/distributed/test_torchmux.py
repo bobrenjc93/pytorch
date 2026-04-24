@@ -1,3 +1,4 @@
+# Owner(s): ["module: distributed"]
 """Integration tests for torchmux and vnccl.
 
 Tests cooperative scheduling trace ordering, collective correctness
@@ -300,6 +301,14 @@ class TestTorchmuxCollectiveCorrectness(TestCase):
 
 
 class TestTorchmuxSyntheticTrace(TestCase):
+    def setUp(self):
+        super().setUp()
+        self._tmpdir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self._tmpdir, ignore_errors=True)
+        super().tearDown()
+
     def test_synthetic_trace_structure(self):
         from torch.distributed.torchmux_trace import export_synthetic
 
@@ -318,44 +327,40 @@ class TestTorchmuxSyntheticTrace(TestCase):
             ],
         }
 
-        tmpdir = tempfile.mkdtemp()
-        try:
-            path = os.path.join(tmpdir, "synthetic.json")
-            export_synthetic(events_by_rank, path, 2)
+        path = os.path.join(self._tmpdir, "synthetic.json")
+        export_synthetic(events_by_rank, path, 2)
 
-            with open(path) as f:
-                trace = json.load(f)
+        with open(path) as f:
+            trace = json.load(f)
 
-            x_events = [e for e in trace["traceEvents"] if e.get("ph") == "X"]
-            self.assertGreater(len(x_events), 0)
+        x_events = [e for e in trace["traceEvents"] if e.get("ph") == "X"]
+        self.assertGreater(len(x_events), 0)
 
-            compute_events = [e for e in x_events if e["cat"] == "compute"]
-            coll_events = [e for e in x_events if e["cat"] == "collective"]
+        compute_events = [e for e in x_events if e["cat"] == "compute"]
+        coll_events = [e for e in x_events if e["cat"] == "collective"]
 
-            self.assertEqual(len(compute_events), 4)
-            self.assertEqual(len(coll_events), 4)
+        self.assertEqual(len(compute_events), 4)
+        self.assertEqual(len(coll_events), 4)
 
-            for rank in (0, 1):
-                rank_computes = [
-                    e for e in compute_events if e["pid"] == rank
-                ]
-                rank_colls = [e for e in coll_events if e["pid"] == rank]
-                self.assertEqual(len(rank_computes), 2)
-                self.assertEqual(len(rank_colls), 2)
-
-            # In the synthetic trace, both workers' first compute starts
-            # at ts=0 (overlapped)
-            first_computes = [
-                e for e in compute_events
-                if e["ts"] == 0
+        for rank in (0, 1):
+            rank_computes = [
+                e for e in compute_events if e["pid"] == rank
             ]
-            self.assertEqual(len(first_computes), 2)
+            rank_colls = [e for e in coll_events if e["pid"] == rank]
+            self.assertEqual(len(rank_computes), 2)
+            self.assertEqual(len(rank_colls), 2)
 
-            # No snapshot/restore events in synthetic trace
-            mux_events = [e for e in x_events if e["cat"] == "mux"]
-            self.assertEqual(len(mux_events), 0)
-        finally:
-            shutil.rmtree(tmpdir, ignore_errors=True)
+        # In the synthetic trace, both workers' first compute starts
+        # at ts=0 (overlapped)
+        first_computes = [
+            e for e in compute_events
+            if e["ts"] == 0
+        ]
+        self.assertEqual(len(first_computes), 2)
+
+        # No snapshot/restore events in synthetic trace
+        mux_events = [e for e in x_events if e["cat"] == "mux"]
+        self.assertEqual(len(mux_events), 0)
 
     def test_natural_trace_preserves_timestamps(self):
         from torch.distributed.torchmux_trace import export_natural
@@ -370,22 +375,18 @@ class TestTorchmuxSyntheticTrace(TestCase):
             ],
         }
 
-        tmpdir = tempfile.mkdtemp()
-        try:
-            path = os.path.join(tmpdir, "natural.json")
-            export_natural(events_by_rank, path, 2)
+        path = os.path.join(self._tmpdir, "natural.json")
+        export_natural(events_by_rank, path, 2)
 
-            with open(path) as f:
-                trace = json.load(f)
+        with open(path) as f:
+            trace = json.load(f)
 
-            x_events = [e for e in trace["traceEvents"] if e.get("ph") == "X"]
-            self.assertEqual(len(x_events), 3)
+        x_events = [e for e in trace["traceEvents"] if e.get("ph") == "X"]
+        self.assertEqual(len(x_events), 3)
 
-            # First event should be at ts=0 (base_ts subtracted)
-            ts_values = sorted(e["ts"] for e in x_events)
-            self.assertEqual(ts_values[0], 0)
-        finally:
-            shutil.rmtree(tmpdir, ignore_errors=True)
+        # First event should be at ts=0 (base_ts subtracted)
+        ts_values = sorted(e["ts"] for e in x_events)
+        self.assertEqual(ts_values[0], 0)
 
 
 class TestMuxDevice(TestCase):
@@ -665,6 +666,133 @@ class TestTorchmuxSingleWorker(TestCase):
             f"torchmux nproc=1 failed (rc={result.returncode}):\n"
             f"stdout: {result.stdout}\nstderr: {result.stderr}",
         )
+
+
+@unittest.skipIf(not torch.cuda.is_available(), "CUDA not available")
+class TestTorchmuxErrorHandling(TestCase):
+    def setUp(self):
+        super().setUp()
+        self._tmpdir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self._tmpdir, ignore_errors=True)
+        super().tearDown()
+
+    def test_worker_crash_propagates(self):
+        script = os.path.join(self._tmpdir, "crash.py")
+        with open(script, "w") as f:
+            f.write(
+                "import os, torch, torch.distributed as dist\n"
+                "dist.init_process_group()\n"
+                "rank = dist.get_rank()\n"
+                "device = f\"cuda:{rank % int(os.environ.get('TORCHMUX_NGPUS', '1'))}\"\n"
+                "torch.cuda.set_device(device)\n"
+                "raise RuntimeError('intentional crash')\n"
+            )
+        env = os.environ.copy()
+        env["TORCHMUX_TRACE_DIR"] = self._tmpdir
+        env["TORCHMUX_NGPUS"] = "1"
+        result = subprocess.run(
+            [
+                sys.executable, "-m", "torch.distributed.torchmux",
+                "--nproc-per-node", "2", script,
+            ],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        self.assertNotEqual(result.returncode, 0)
+
+
+class TestTorchmuxVNCCLReduceScatterOps(TestCase):
+    """Verify vnccl reduce_scatter works with non-SUM reduce ops."""
+
+    def setUp(self):
+        super().setUp()
+        self._world_size = 3
+        self._pgs = []
+
+    def tearDown(self):
+        from torch.distributed.vnccl import VNCCLProcessGroup
+
+        VNCCLProcessGroup._active.clear()
+        for pg in self._pgs:
+            dist.distributed_c10d._world.pg_names.pop(pg, None)
+        self._pgs = []
+        super().tearDown()
+
+    def _make_pgs(self):
+        from torch.distributed.vnccl import VNCCLProcessGroup
+
+        pgs = []
+        for r in range(self._world_size):
+            pg = VNCCLProcessGroup(r, self._world_size)
+            dist.distributed_c10d._world.pg_names[pg] = "vnccl_rs_test"
+            pgs.append(pg)
+        self._pgs = pgs
+        return pgs
+
+    def _run_on_pgs(self, pgs, fn):
+        results = [None] * self._world_size
+        errors = [None] * self._world_size
+
+        def _worker(rank):
+            try:
+                results[rank] = fn(rank, pgs[rank])
+            except Exception as e:
+                errors[rank] = e
+
+        threads = [
+            threading.Thread(target=_worker, args=(r,))
+            for r in range(self._world_size)
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=30)
+        for r, e in enumerate(errors):
+            if e is not None:
+                raise RuntimeError(f"rank {r} failed") from e
+        return results
+
+    def test_reduce_scatter_product(self):
+        from torch._C._distributed_c10d import ReduceOp, ReduceScatterOptions
+
+        pgs = self._make_pgs()
+
+        def _work(rank, pg):
+            chunks = [torch.full((2,), float(rank + 1)) for _ in range(self._world_size)]
+            out = [torch.zeros(2)]
+            opts = ReduceScatterOptions()
+            opts.reduceOp = ReduceOp.PRODUCT
+            pg.reduce_scatter(out, [chunks], opts)
+            return out[0]
+
+        results = self._run_on_pgs(pgs, _work)
+        expected = 1.0
+        for r in range(self._world_size):
+            expected *= r + 1
+        for r, t in enumerate(results):
+            self.assertEqual(t, torch.full((2,), expected))
+
+    def test_reduce_scatter_max(self):
+        from torch._C._distributed_c10d import ReduceOp, ReduceScatterOptions
+
+        pgs = self._make_pgs()
+
+        def _work(rank, pg):
+            chunks = [torch.full((2,), float(rank + 1)) for _ in range(self._world_size)]
+            out = [torch.zeros(2)]
+            opts = ReduceScatterOptions()
+            opts.reduceOp = ReduceOp.MAX
+            pg.reduce_scatter(out, [chunks], opts)
+            return out[0]
+
+        results = self._run_on_pgs(pgs, _work)
+        expected = float(self._world_size)
+        for r, t in enumerate(results):
+            self.assertEqual(t, torch.full((2,), expected))
 
 
 if __name__ == "__main__":
