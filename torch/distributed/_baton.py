@@ -141,7 +141,19 @@ class CudaBaton:
     def restore_and_unlock(self, pid: int) -> None:
         """Restore + unlock: process can resume CUDA calls."""
         self.restore(pid)
-        self.unlock(pid)
+        try:
+            self.unlock(pid)
+        except Exception:
+            # Process is restored but stuck in LOCKED state. Log and
+            # re-raise — the caller must handle this, otherwise the
+            # process will deadlock on its next CUDA call.
+            import logging
+            logging.getLogger(__name__).error(
+                "CudaBaton: unlock failed after successful restore for pid %d; "
+                "process is in LOCKED state and cannot make CUDA calls",
+                pid,
+            )
+            raise
 
     def get_state(self, pid: int) -> int:
         cuda = _get_cuda()

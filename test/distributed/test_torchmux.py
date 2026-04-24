@@ -1,4 +1,4 @@
-# Owner(s): ["module: distributed"]
+# Owner(s): ["oncall: distributed"]
 """Integration tests for torchmux and vnccl.
 
 Tests cooperative scheduling trace ordering, collective correctness
@@ -26,14 +26,18 @@ import torch.distributed as dist
 
 dist.init_process_group()
 rank = dist.get_rank()
+ws = dist.get_world_size()
 device = f"cuda:{rank % int(os.environ.get('TORCHMUX_NGPUS', '1'))}"
 torch.cuda.set_device(device)
 
 # Two allreduces with compute in between
-x = torch.randn(4, 4, device=device)
+x = torch.ones(4, 4, device=device)
 dist.all_reduce(x)
+assert torch.allclose(x, torch.full_like(x, float(ws))), f"first allreduce failed: {x}"
 y = x @ x
 dist.all_reduce(y)
+expected_y = torch.full_like(y, float(ws * ws * ws * 4))
+assert torch.allclose(y, expected_y), f"second allreduce failed: {y}"
 
 dist.destroy_process_group()
 """
@@ -1265,28 +1269,17 @@ class TestVNCCLErrorPropagation(_VNCCLTestBase):
         finally:
             VNCCLProcessGroup._do = orig_do
 
-    def test_stale_collsync_cleaned_up_after_error(self):
+    def test_active_cleared_after_collective(self):
         from torch.distributed.vnccl import VNCCLProcessGroup
 
         pgs = self._make_pgs()
 
-        class _FailOnceOp:
-            call_count = 0
+        def _work(rank, pg):
+            t = [torch.full((4,), float(rank + 1))]
+            pg.allreduce(t)
+            return t[0]
 
-            def __init__(self, real_op):
-                self._real_op = real_op
-
-            def work(self, data):
-                _FailOnceOp.call_count += 1
-                if _FailOnceOp.call_count == 1:
-                    raise ValueError("first collective fails")
-                self._real_op.work(data)
-
-        _FailOnceOp.call_count = 0
-
-        key = list(dist.distributed_c10d._world.pg_names.values())[0]
-        VNCCLProcessGroup._active.pop(key, None)
-
+        self._run_on_pgs(pgs, _work)
         self.assertEqual(len(VNCCLProcessGroup._active), 0)
 
 

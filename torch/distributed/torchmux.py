@@ -20,8 +20,12 @@ parallel execution would look like.
 Note: each worker process monkeypatches torch.device and
 torch.cuda.set_device to transparently remap virtual CUDA device
 indices (e.g. cuda:5) onto physical GPUs (e.g. cuda:1 when ngpus=2).
-This only affects Python-level constructor calls within the worker;
-C++ internals are unaffected.
+This only affects Python-level calls to torch.device() made after
+the monkeypatch is installed. Some PyTorch modules cache the original
+torch.device at import time (e.g. torch.nn.modules.module,
+torch.fx.graph) — code using those cached references will bypass the
+remapping. This is fine for standard training scripts that construct
+devices via torch.device(...) at call sites.
 """
 
 import argparse
@@ -854,6 +858,11 @@ def main():
 
     sched = _SharedInt()
     shm = "/dev/shm" if os.path.isdir("/dev/shm") else None
+    if shm is None:
+        log.warning(
+            "torchmux: /dev/shm not available, using disk-backed tmpdir for "
+            "collective data exchange. This may be slow for large tensors."
+        )
     coll_dir = tempfile.mkdtemp(prefix="torchmux_colls_", dir=shm)
 
     gpu_desc = "GPU 0" if ngpus == 1 else f"{ngpus} GPUs"
