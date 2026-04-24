@@ -24,6 +24,8 @@ log = logging.getLogger(__name__)
 
 _cuda = None
 _cuda_lock = threading.Lock()
+_cuda_init_lock = threading.Lock()
+_cuda_initialized = False
 
 
 # Checkpoint process state constants returned by get_state().
@@ -31,51 +33,6 @@ CHECKPOINT_STATE_INVALID = 0
 CHECKPOINT_STATE_ACTIVE = 1
 CHECKPOINT_STATE_LOCKED = 2
 CHECKPOINT_STATE_CHECKPOINTED = 3
-
-
-def _get_cuda():
-    global _cuda
-    if _cuda is not None:
-        return _cuda
-    with _cuda_lock:
-        if _cuda is not None:
-            return _cuda
-        try:
-            lib = ctypes.CDLL("libcuda.so.1")
-        except OSError as e:
-            raise RuntimeError(
-                "torchmux requires the CUDA driver library (libcuda.so.1). "
-                "Ensure CUDA drivers are installed and libcuda.so.1 is on "
-                "the library search path."
-            ) from e
-
-        _ptr = ctypes.POINTER
-        _c_int = ctypes.c_int
-
-        lib.cuInit.restype = _c_int
-        lib.cuInit.argtypes = [ctypes.c_uint]
-
-        lib.cuGetErrorString.restype = _c_int
-        lib.cuGetErrorString.argtypes = [_c_int, _ptr(ctypes.c_char_p)]
-
-        lib.cuCheckpointProcessLock.restype = _c_int
-        lib.cuCheckpointProcessLock.argtypes = [_c_int, _ptr(_LockArgs)]
-
-        lib.cuCheckpointProcessCheckpoint.restype = _c_int
-        lib.cuCheckpointProcessCheckpoint.argtypes = [_c_int, _ptr(_CheckpointArgs)]
-
-        lib.cuCheckpointProcessRestore.restype = _c_int
-        lib.cuCheckpointProcessRestore.argtypes = [_c_int, _ptr(_RestoreArgs)]
-
-        lib.cuCheckpointProcessUnlock.restype = _c_int
-        lib.cuCheckpointProcessUnlock.argtypes = [_c_int, _ptr(_UnlockArgs)]
-
-        lib.cuCheckpointProcessGetState.restype = _c_int
-        lib.cuCheckpointProcessGetState.argtypes = [_c_int, _ptr(_c_int)]
-
-        lib.cuInit(0)
-        _cuda = lib
-    return _cuda
 
 
 class _LockArgs(ctypes.Structure):
@@ -98,6 +55,78 @@ class _UnlockArgs(ctypes.Structure):
     _fields_ = [("reserved", ctypes.c_uint64 * 8)]
 
 
+def _bind_cuda_symbol(lib, name: str, argtypes):
+    try:
+        fn = getattr(lib, name)
+    except AttributeError as e:
+        raise RuntimeError(
+            "torchmux requires CUDA driver checkpoint/restore support. "
+            f"Your libcuda.so.1 is missing `{name}`."
+        ) from e
+    fn.restype = ctypes.c_int
+    fn.argtypes = argtypes
+    return fn
+
+
+def _get_cuda():
+    global _cuda
+    if _cuda is not None:
+        return _cuda
+    with _cuda_lock:
+        if _cuda is not None:
+            return _cuda
+        try:
+            lib = ctypes.CDLL("libcuda.so.1")
+        except OSError as e:
+            raise RuntimeError(
+                "torchmux requires the CUDA driver library (libcuda.so.1). "
+                "Ensure CUDA drivers are installed and libcuda.so.1 is on "
+                "the library search path."
+            ) from e
+
+        _ptr = ctypes.POINTER
+        _c_int = ctypes.c_int
+
+        _bind_cuda_symbol(lib, "cuInit", [ctypes.c_uint])
+        _bind_cuda_symbol(lib, "cuGetErrorString", [_c_int, _ptr(ctypes.c_char_p)])
+        _bind_cuda_symbol(
+            lib, "cuCheckpointProcessLock", [_c_int, _ptr(_LockArgs)]
+        )
+        _bind_cuda_symbol(
+            lib,
+            "cuCheckpointProcessCheckpoint",
+            [_c_int, _ptr(_CheckpointArgs)],
+        )
+        _bind_cuda_symbol(
+            lib, "cuCheckpointProcessRestore", [_c_int, _ptr(_RestoreArgs)]
+        )
+        _bind_cuda_symbol(
+            lib, "cuCheckpointProcessUnlock", [_c_int, _ptr(_UnlockArgs)]
+        )
+        _bind_cuda_symbol(
+            lib, "cuCheckpointProcessGetState", [_c_int, _ptr(_c_int)]
+        )
+
+        _cuda = lib
+    return _cuda
+
+
+def _maybe_init_cuda():
+    global _cuda_initialized
+    if _cuda_initialized:
+        return
+    import torch
+
+    if not torch.cuda.is_initialized():
+        return
+    cuda = _get_cuda()
+    with _cuda_init_lock:
+        if _cuda_initialized:
+            return
+        _check(cuda.cuInit(0), "cuInit")
+        _cuda_initialized = True
+
+
 def _check(result: int, name: str) -> None:
     if result != 0:
         cuda = _get_cuda()
@@ -115,6 +144,7 @@ class CudaBaton:
     """
 
     def lock(self, pid: int, timeout_ms: int = 30000) -> None:
+        _maybe_init_cuda()
         cuda = _get_cuda()
         args = _LockArgs(timeoutMs=timeout_ms)
         _check(cuda.cuCheckpointProcessLock(pid, ctypes.byref(args)), "Lock")
@@ -142,6 +172,7 @@ class CudaBaton:
 
     def restore(self, pid: int) -> None:
         """Restore from last checkpoint (process enters LOCKED state)."""
+        _maybe_init_cuda()
         cuda = _get_cuda()
         args = _RestoreArgs()
         _check(
@@ -150,6 +181,7 @@ class CudaBaton:
         )
 
     def unlock(self, pid: int) -> None:
+        _maybe_init_cuda()
         cuda = _get_cuda()
         args = _UnlockArgs()
         _check(
@@ -174,6 +206,7 @@ class CudaBaton:
             raise
 
     def get_state(self, pid: int) -> int:
+        _maybe_init_cuda()
         cuda = _get_cuda()
         state = ctypes.c_int()
         _check(

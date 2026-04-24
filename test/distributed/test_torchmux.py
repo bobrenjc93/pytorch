@@ -13,6 +13,7 @@ import sys
 import tempfile
 import threading
 import unittest
+from unittest import mock
 
 import torch
 import torch.distributed as dist
@@ -1244,6 +1245,158 @@ class TestSharedInt(TestCase):
         si = _SharedInt()
         si.cleanup()
         del si
+
+    def test_rejects_non_x86_arch(self):
+        from torch.distributed.torchmux import _SharedInt
+
+        with mock.patch(
+            "torch.distributed.torchmux.platform.machine", return_value="aarch64"
+        ):
+            with self.assertRaisesRegex(RuntimeError, "x86_64/AMD64"):
+                _SharedInt()
+
+
+class TestTorchmuxHelpers(TestCase):
+    def test_save_tensor_wraps_oserror(self):
+        from torch.distributed import torchmux
+
+        tmpdir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmpdir, True)
+        self.addCleanup(setattr, torchmux, "_rank", torchmux._rank)
+        self.addCleanup(setattr, torchmux, "_coll_dir", torchmux._coll_dir)
+        torchmux._rank = 3
+        torchmux._coll_dir = tmpdir
+
+        with mock.patch.object(
+            torchmux.torch, "save", side_effect=OSError("disk full")
+        ):
+            with self.assertRaisesRegex(RuntimeError, "disk full"):
+                torchmux._save_tensor(os.path.join(tmpdir, "x.pt"), torch.ones(1))
+
+    def test_default_trace_dir_uses_dedicated_tempdir(self):
+        from torch.distributed import torchmux
+
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("TORCHMUX_TRACE_DIR", None)
+            trace_dir = torchmux._resolve_trace_dir()
+            self.addCleanup(shutil.rmtree, trace_dir, True)
+            self.assertTrue(os.path.isdir(trace_dir))
+            self.assertEqual(os.environ["TORCHMUX_TRACE_DIR"], trace_dir)
+            self.assertTrue(os.path.basename(trace_dir).startswith("torchmux_traces_"))
+
+
+class _FakeCudaFn:
+    def __init__(self, return_value=0):
+        self.return_value = return_value
+        self.restype = None
+        self.argtypes = None
+
+    def __call__(self, *args, **kwargs):
+        return self.return_value
+
+
+class _FakeCudaLib:
+    def __init__(self, missing=()):
+        self.cuInit = _FakeCudaFn()
+        self.cuGetErrorString = _FakeCudaFn()
+        if "cuCheckpointProcessLock" not in missing:
+            self.cuCheckpointProcessLock = _FakeCudaFn()
+        if "cuCheckpointProcessCheckpoint" not in missing:
+            self.cuCheckpointProcessCheckpoint = _FakeCudaFn()
+        if "cuCheckpointProcessRestore" not in missing:
+            self.cuCheckpointProcessRestore = _FakeCudaFn()
+        if "cuCheckpointProcessUnlock" not in missing:
+            self.cuCheckpointProcessUnlock = _FakeCudaFn()
+        if "cuCheckpointProcessGetState" not in missing:
+            self.cuCheckpointProcessGetState = _FakeCudaFn()
+
+
+class TestCudaBaton(TestCase):
+    def test_missing_driver_library_raises(self):
+        from torch.distributed import _baton
+
+        with mock.patch.object(_baton, "_cuda", None), mock.patch.object(
+            _baton, "_cuda_initialized", False
+        ), mock.patch.object(
+            _baton.ctypes, "CDLL", side_effect=OSError("missing libcuda")
+        ):
+            with self.assertRaisesRegex(RuntimeError, "libcuda\\.so\\.1"):
+                _baton._get_cuda()
+
+    def test_missing_checkpoint_symbol_raises(self):
+        from torch.distributed import _baton
+
+        with mock.patch.object(_baton, "_cuda", None), mock.patch.object(
+            _baton, "_cuda_initialized", False
+        ), mock.patch.object(
+            _baton.ctypes,
+            "CDLL",
+            return_value=_FakeCudaLib(missing=("cuCheckpointProcessRestore",)),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "cuCheckpointProcessRestore"):
+                _baton._get_cuda()
+
+    def test_checkpoint_unlocks_on_failure(self):
+        from torch.distributed import _baton
+
+        baton = _baton.CudaBaton()
+        fake_cuda = mock.Mock()
+        fake_cuda.cuCheckpointProcessCheckpoint.return_value = 1
+
+        def _fake_check(result, name):
+            if name == "Checkpoint":
+                raise RuntimeError("Checkpoint failed: fake error")
+
+        with mock.patch.object(_baton.CudaBaton, "lock"), mock.patch.object(
+            _baton, "_get_cuda", return_value=fake_cuda
+        ), mock.patch.object(
+            _baton, "_check", side_effect=_fake_check
+        ), mock.patch.object(baton, "unlock") as unlock:
+            with self.assertRaisesRegex(RuntimeError, "Checkpoint failed"):
+                baton.checkpoint(123)
+
+        unlock.assert_called_once_with(123)
+
+    def test_checkpoint_logs_if_unlock_after_failure_fails(self):
+        from torch.distributed import _baton
+
+        baton = _baton.CudaBaton()
+        fake_cuda = mock.Mock()
+        fake_cuda.cuCheckpointProcessCheckpoint.return_value = 1
+
+        def _fake_check(result, name):
+            if name == "Checkpoint":
+                raise RuntimeError("Checkpoint failed: fake error")
+
+        with mock.patch.object(_baton.CudaBaton, "lock"), mock.patch.object(
+            _baton, "_get_cuda", return_value=fake_cuda
+        ), mock.patch.object(
+            _baton, "_check", side_effect=_fake_check
+        ), mock.patch.object(
+            baton, "unlock", side_effect=RuntimeError("unlock failed")
+        ), self.assertLogs(_baton.log.name, level="ERROR") as logs:
+            with self.assertRaisesRegex(RuntimeError, "Checkpoint failed"):
+                baton.checkpoint(123)
+
+        self.assertIn(
+            "unlock failed after checkpoint failure",
+            "\n".join(logs.output),
+        )
+
+    def test_restore_and_unlock_logs_unlock_failure(self):
+        from torch.distributed import _baton
+
+        baton = _baton.CudaBaton()
+        with mock.patch.object(baton, "restore"), mock.patch.object(
+            baton, "unlock", side_effect=RuntimeError("unlock failed")
+        ), self.assertLogs(_baton.log.name, level="ERROR") as logs:
+            with self.assertRaisesRegex(RuntimeError, "unlock failed"):
+                baton.restore_and_unlock(456)
+
+        self.assertIn(
+            "unlock failed after successful restore",
+            "\n".join(logs.output),
+        )
 
 
 @unittest.skipIf(not torch.cuda.is_available(), "CUDA not available")

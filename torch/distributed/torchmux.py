@@ -13,7 +13,7 @@ restores it when rescheduled. Collectives are resolved by bookkeeping
 each rank's tensor contribution on disk — no NCCL is needed.
 
 Produces two chrome://tracing traces (set TORCHMUX_TRACE_DIR, default
-/tmp): a natural trace showing actual serial execution with
+a dedicated temp dir): a natural trace showing actual serial execution with
 snapshot/restore overhead, and a synthetic trace reconstructing what
 parallel execution would look like.
 
@@ -32,6 +32,7 @@ import argparse
 import json
 import logging
 import os
+import platform
 import runpy
 import shutil
 import socket
@@ -39,12 +40,16 @@ import struct
 import sys
 import tempfile
 import time
+from typing import cast
 
 import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
 
 log = logging.getLogger(__name__)
+
+_TRACE_DIR_ENV = "TORCHMUX_TRACE_DIR"
+_SHARED_INT_ARCHES = {"amd64", "x86_64"}
 
 
 # ---- torch.device remapping ----
@@ -72,23 +77,42 @@ class _MuxDevice(metaclass=_DeviceMeta):
 
 
 # ---- Shared int via POSIX shared memory (survives mp.spawn pickling) ----
+#
+# The scheduler relies on x86's strong memory ordering when handing off
+# the token without an additional synchronization primitive.
 
 
 class _SharedInt:
+    @staticmethod
+    def _check_arch():
+        arch = platform.machine().lower()
+        if arch not in _SHARED_INT_ARCHES:
+            raise RuntimeError(
+                "torchmux currently requires x86_64/AMD64 hosts because "
+                "_SharedInt relies on x86 memory ordering."
+            )
+
     def __init__(self):
         from multiprocessing.shared_memory import SharedMemory
 
+        self._check_arch()
         self._shm = SharedMemory(create=True, size=4)
-        struct.pack_into("i", self._shm.buf, 0, 0)
+        struct.pack_into("i", self._buffer(), 0, 0)
         self._owner = True
+
+    def _buffer(self):
+        buf = self._shm.buf
+        if buf is None:
+            raise RuntimeError("_SharedInt shared-memory buffer is not available")
+        return cast(memoryview, buf)
 
     @property
     def value(self):
-        return struct.unpack_from("i", self._shm.buf, 0)[0]
+        return struct.unpack_from("i", self._buffer(), 0)[0]
 
     @value.setter
     def value(self, v):
-        struct.pack_into("i", self._shm.buf, 0, v)
+        struct.pack_into("i", self._buffer(), 0, v)
 
     def cleanup(self):
         try:
@@ -113,6 +137,7 @@ class _SharedInt:
     def __setstate__(self, name):
         from multiprocessing.shared_memory import SharedMemory
 
+        self._check_arch()
         self._shm = SharedMemory(name=name, create=False)
         self._owner = False
 
@@ -128,14 +153,43 @@ _held = False
 _ACQUIRE_TIMEOUT_S = float(os.environ.get("TORCHMUX_ACQUIRE_TIMEOUT", "300"))
 
 
+def _require_worker_state():
+    if _sched is None or _rank is None or _ws is None:
+        raise RuntimeError("torchmux worker state is not initialized")
+    return _sched, _rank, _ws
+
+
+def _require_baton():
+    if _baton is None:
+        raise RuntimeError("torchmux CUDA baton is not initialized")
+    return _baton
+
+
+def _require_coll_dir():
+    if _coll_dir is None:
+        raise RuntimeError("torchmux collective directory is not initialized")
+    return _coll_dir
+
+
+def _resolve_trace_dir():
+    trace_dir = os.environ.get(_TRACE_DIR_ENV)
+    if trace_dir:
+        os.makedirs(trace_dir, exist_ok=True)
+        return trace_dir
+    trace_dir = tempfile.mkdtemp(prefix="torchmux_traces_")
+    os.environ[_TRACE_DIR_ENV] = trace_dir
+    return trace_dir
+
+
 def _acquire(*, restore=True):
     global _held
+    sched, rank, _ = _require_worker_state()
     deadline = time.monotonic() + _ACQUIRE_TIMEOUT_S
     delay = 1e-5
-    while _sched.value != _rank:
+    while sched.value != rank:
         if time.monotonic() > deadline:
             raise RuntimeError(
-                f"rank {_rank}: timed out waiting for scheduling token after "
+                f"rank {rank}: timed out waiting for scheduling token after "
                 f"{_ACQUIRE_TIMEOUT_S}s (likely a worker crash)"
             )
         time.sleep(delay)
@@ -147,11 +201,12 @@ def _acquire(*, restore=True):
 
 def _release(*, snapshot=True):
     global _held
+    sched, rank, world_size = _require_worker_state()
     if snapshot:
         _snapshot_gpu()
     # Safe without locking: only the token holder calls _release, and no
     # other process writes _sched until we advance it here.
-    _sched.value = (_rank + 1) % _ws
+    sched.value = (rank + 1) % world_size
     _held = False
 
 
@@ -195,7 +250,7 @@ def _snapshot_gpu():
         return
     torch.cuda.synchronize()
     t0 = _us()
-    _baton.checkpoint(os.getpid())
+    _require_baton().checkpoint(os.getpid())
     _trace("mux", "snapshot", t0, _us() - t0)
     _checkpointed = True
 
@@ -204,7 +259,7 @@ def _restore_gpu():
     global _checkpointed
     if _checkpointed:
         t0 = _us()
-        _baton.restore_and_unlock(os.getpid())
+        _require_baton().restore_and_unlock(os.getpid())
         _trace("mux", "restore", t0, _us() - t0)
         _checkpointed = False
 
@@ -244,10 +299,11 @@ _coll_dir = None  # shared tempdir for collective data
 
 
 def _coll_path(pg_id, coll_id, filename):
-    return os.path.join(_coll_dir, f"pg{pg_id}", f"c{coll_id:08d}", filename)
+    return os.path.join(_require_coll_dir(), f"pg{pg_id}", f"c{coll_id:08d}", filename)
 
 
 def _save_tensor(path, tensor):
+    coll_dir = _require_coll_dir()
     os.makedirs(os.path.dirname(path), exist_ok=True)
     tmp = path + ".tmp"
     try:
@@ -255,7 +311,7 @@ def _save_tensor(path, tensor):
     except OSError as e:
         raise RuntimeError(
             f"rank {_rank}: failed to save tensor to {tmp} "
-            f"(collective data dir: {_coll_dir}): {e}"
+            f"(collective data dir: {coll_dir}): {e}"
         ) from e
     os.rename(tmp, path)
 
@@ -495,6 +551,9 @@ class _MuxPG(dist.ProcessGroup):
 
     @torch.no_grad()
     def allgather_into_tensor_coalesced(self, outputs, inputs, opts=AllgatherOptions()):
+        # Each tensor pair is resolved as its own collective barrier.
+        # This is correct but not performance-equivalent to NCCL's
+        # batched coalesced implementation.
         for o, i in zip(outputs, inputs):
             self._allgather_base(o, i, opts)
         return _completed_work()
@@ -573,6 +632,9 @@ class _MuxPG(dist.ProcessGroup):
     def reduce_scatter_tensor_coalesced(
         self, outputs, inputs, opts=ReduceScatterOptions()
     ):
+        # Each tensor pair is resolved as its own collective barrier.
+        # This is correct but not performance-equivalent to NCCL's
+        # batched coalesced implementation.
         for o, i in zip(outputs, inputs):
             self._reduce_scatter_base(o, i, opts)
         return _completed_work()
@@ -725,8 +787,7 @@ def _worker(
     dist.destroy_process_group = _mux_destroy
     dist.new_group = _mux_new_group
 
-    trace_dir = os.environ.get("TORCHMUX_TRACE_DIR", "/tmp")
-    os.makedirs(trace_dir, exist_ok=True)
+    _resolve_trace_dir()
 
     _acquire()
     _begin_compute()
@@ -852,6 +913,7 @@ def main():
             "collective data exchange. This may be slow for large tensors."
         )
     coll_dir = tempfile.mkdtemp(prefix="torchmux_colls_", dir=shm)
+    trace_dir = _resolve_trace_dir()
 
     gpu_desc = "GPU 0" if ngpus == 1 else f"{ngpus} GPUs"
     log.info(
@@ -879,8 +941,6 @@ def main():
         )
     finally:
         from torch.distributed import torchmux_trace
-
-        trace_dir = os.environ.get("TORCHMUX_TRACE_DIR", "/tmp")
 
         events_by_rank = {}
         for r in range(nproc):
