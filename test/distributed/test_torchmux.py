@@ -501,6 +501,11 @@ class _VNCCLTestBase(TestCase):
             t.start()
         for t in threads:
             t.join(timeout=30)
+        hung = [r for r, t in enumerate(threads) if t.is_alive()]
+        if hung:
+            raise RuntimeError(
+                f"ranks {hung} still alive after 30s timeout"
+            )
         for r, e in enumerate(errors):
             if e is not None:
                 raise RuntimeError(f"rank {r} failed") from e
@@ -543,7 +548,7 @@ class TestVNCCL(_VNCCLTestBase):
         results = self._run_on_pgs(pgs, _work)
         expected = (self._world_size + 1) / 2.0
         for r, t in enumerate(results):
-            self.assertTrue(torch.allclose(t, torch.full((4,), expected)))
+            self.assertEqual(t, torch.full((4,), expected))
 
     def test_allreduce_product(self):
         from torch._C._distributed_c10d import AllreduceOptions, ReduceOp
@@ -956,7 +961,134 @@ class TestVNCCLReduceScatterOps(_VNCCLTestBase):
         results = self._run_on_pgs(pgs, _work)
         expected = (self._world_size + 1) / 2.0
         for r, t in enumerate(results):
-            self.assertTrue(torch.allclose(t, torch.full((2,), expected)))
+            self.assertEqual(t, torch.full((2,), expected))
+
+
+class TestVNCCLCoalesced(_VNCCLTestBase):
+    """Test coalesced operations that FSDP2 relies on."""
+
+    def test_allgather_into_tensor_coalesced(self):
+        pgs = self._make_pgs()
+
+        def _work(rank, pg):
+            inputs = [
+                torch.full((2,), float(rank)),
+                torch.full((3,), float(rank + 10)),
+            ]
+            outputs = [
+                torch.zeros(2 * self._world_size),
+                torch.zeros(3 * self._world_size),
+            ]
+            pg.allgather_into_tensor_coalesced(outputs, inputs)
+            return outputs
+
+        results = self._run_on_pgs(pgs, _work)
+        for r, outputs in enumerate(results):
+            expected_0 = torch.cat(
+                [torch.full((2,), float(src)) for src in range(self._world_size)]
+            )
+            expected_1 = torch.cat(
+                [torch.full((3,), float(src + 10)) for src in range(self._world_size)]
+            )
+            self.assertEqual(outputs[0], expected_0)
+            self.assertEqual(outputs[1], expected_1)
+
+    def test_reduce_scatter_tensor_coalesced(self):
+        pgs = self._make_pgs()
+
+        def _work(rank, pg):
+            inputs = [
+                torch.full((2 * self._world_size,), float(rank + 1)),
+                torch.full((3 * self._world_size,), float(rank + 1)),
+            ]
+            outputs = [torch.zeros(2), torch.zeros(3)]
+            pg.reduce_scatter_tensor_coalesced(outputs, inputs)
+            return outputs
+
+        results = self._run_on_pgs(pgs, _work)
+        expected = self._world_size * (self._world_size + 1) / 2
+        for r, outputs in enumerate(results):
+            self.assertEqual(outputs[0], torch.full((2,), expected))
+            self.assertEqual(outputs[1], torch.full((3,), expected))
+
+
+class TestVNCCLWorldSize1(_VNCCLTestBase):
+    """Verify vnccl works with a single rank."""
+
+    def test_allreduce_single_rank(self):
+        self._world_size = 1
+        pgs = self._make_pgs()
+
+        def _work(rank, pg):
+            t = [torch.full((4,), 42.0)]
+            pg.allreduce(t)
+            return t[0]
+
+        results = self._run_on_pgs(pgs, _work)
+        self.assertEqual(results[0], torch.full((4,), 42.0))
+
+    def test_barrier_single_rank(self):
+        self._world_size = 1
+        pgs = self._make_pgs()
+
+        def _work(rank, pg):
+            pg.barrier()
+            return True
+
+        results = self._run_on_pgs(pgs, _work)
+        self.assertTrue(results[0])
+
+    def test_allgather_single_rank(self):
+        self._world_size = 1
+        pgs = self._make_pgs()
+
+        def _work(rank, pg):
+            inp = [torch.full((2,), 7.0)]
+            out = [[torch.zeros(2)]]
+            pg.allgather(out, inp)
+            return out[0]
+
+        results = self._run_on_pgs(pgs, _work)
+        self.assertEqual(results[0][0], torch.full((2,), 7.0))
+
+
+class TestVNCCLNonContiguous(_VNCCLTestBase):
+    """Verify vnccl handles non-contiguous tensor inputs."""
+
+    def test_allreduce_non_contiguous(self):
+        pgs = self._make_pgs()
+
+        def _work(rank, pg):
+            base = torch.full((4, 4), float(rank + 1))
+            t = [base[:, 0]]
+            self.assertFalse(t[0].is_contiguous())
+            pg.allreduce(t)
+            return t[0]
+
+        results = self._run_on_pgs(pgs, _work)
+        expected = self._world_size * (self._world_size + 1) / 2
+        for r, t in enumerate(results):
+            self.assertEqual(t, torch.full((4,), expected))
+
+    def test_broadcast_non_contiguous(self):
+        from torch._C._distributed_c10d import BroadcastOptions
+
+        pgs = self._make_pgs()
+
+        def _work(rank, pg):
+            if rank == 0:
+                base = torch.full((4, 4), 99.0)
+                t = [base[:, 0]]
+            else:
+                t = [torch.zeros(4)]
+            opts = BroadcastOptions()
+            opts.rootRank = 0
+            pg.broadcast(t, opts)
+            return t[0]
+
+        results = self._run_on_pgs(pgs, _work)
+        for r, t in enumerate(results):
+            self.assertEqual(t, torch.full((4,), 99.0))
 
 
 class TestMuxPGNotImplemented(TestCase):

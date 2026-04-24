@@ -135,13 +135,15 @@ def _acquire(*, restore=True):
     # Aligned 4-byte reads are atomic on x86-64; on other architectures a
     # torn read could occur but would just cause an extra spin iteration
     # (the small value space 0..N-1 cannot alias _rank via partial writes).
+    delay = 1e-5
     while _sched.value != _rank:
         if time.monotonic() > deadline:
             raise RuntimeError(
                 f"rank {_rank}: timed out waiting for scheduling token after "
                 f"{_ACQUIRE_TIMEOUT_S}s (likely a worker crash)"
             )
-        time.sleep(1e-5)
+        time.sleep(delay)
+        delay = min(delay * 2, 1e-2)
     _held = True
     if restore:
         _restore_gpu()
@@ -660,7 +662,7 @@ def _worker(
             "RANK": str(rank),
             "LOCAL_RANK": str(rank % ngpus),
             "WORLD_SIZE": str(world_size),
-            "LOCAL_WORLD_SIZE": str(world_size),
+            "LOCAL_WORLD_SIZE": str(ngpus),
             "GROUP_RANK": "0",
             "MASTER_ADDR": "localhost",
             "MASTER_PORT": str(master_port),
@@ -759,7 +761,11 @@ def _print_timing_summary(events_by_rank):
 
     for r in sorted(events_by_rank):
         evts = events_by_rank[r]
+        if not evts:
+            continue
         wall = max(s + d for _, _, s, d in evts) - min(s for _, _, s, d in evts)
+        if wall <= 0:
+            continue
         compute = sum(d for cat, _, _, d in evts if cat == "compute")
         snap = sum(d for _, name, _, d in evts if name == "snapshot")
         restore = sum(d for _, name, _, d in evts if name == "restore")
@@ -780,7 +786,7 @@ def _print_timing_summary(events_by_rank):
             f"{overhead / wall * 100:>8.1f}%",
         )
 
-    if len(events_by_rank) > 1:
+    if len(events_by_rank) > 1 and sum_wall > 0:
         avg_wall = sum_wall / len(events_by_rank)
         log.info(
             "%s %s %s %s %s %s",

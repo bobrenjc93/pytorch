@@ -15,6 +15,12 @@ Usage:
     dist.init_process_group(backend="vnccl", rank=rank, world_size=N, store=store)
 
 Typically used via torchmux rather than directly.
+
+Note: this is distinct from multi_threaded_pg.ProcessLocalGroup in
+torch/testing/_internal/ which serves a similar purpose for testing.
+vnccl adds cooperative scheduling (exec_lock), deterministic rank
+ordering for trace reproducibility, per-worker RNG isolation, and
+pairwise reduction to match NCCL's bitwise reduction order.
 """
 
 import random as _random
@@ -244,6 +250,9 @@ class _AllToAll:
 # ------------------------------------------------------------------ #
 
 
+_COLL_TIMEOUT_S = 300
+
+
 class _CollSync:
     def __init__(self, world_size, op):
         self._world_size = world_size
@@ -252,6 +261,7 @@ class _CollSync:
         self._data = [None] * world_size
         self._count = 0
         self._done = False
+        self._error = None
 
     def join(self, rank, data):
         # Lock ordering: self._cond is always acquired before
@@ -260,9 +270,26 @@ class _CollSync:
             self._data[rank] = data
             self._count += 1
             if self._count < self._world_size:
-                self._cond.wait_for(lambda: self._done)
+                if not self._cond.wait_for(
+                    lambda: self._done or self._error is not None,
+                    timeout=_COLL_TIMEOUT_S,
+                ):
+                    raise RuntimeError(
+                        f"rank {rank}: collective timed out after "
+                        f"{_COLL_TIMEOUT_S}s waiting for all ranks "
+                        f"({self._count}/{self._world_size} arrived)"
+                    )
+                if self._error is not None:
+                    raise RuntimeError(
+                        f"rank {rank}: collective failed on resolver"
+                    ) from self._error
             else:
-                self._op.work(self._data)
+                try:
+                    self._op.work(self._data)
+                except Exception as e:
+                    self._error = e
+                    self._cond.notify_all()
+                    raise
                 self._done = True
                 global _next_rank
                 with _next_rank_cond:
