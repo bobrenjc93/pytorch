@@ -300,6 +300,127 @@ class TestTorchmuxCollectiveCorrectness(TestCase):
                 self.assertTrue(passed, f"rank {rank}: {op_name} failed")
 
 
+class TestTorchmuxSyntheticTrace(TestCase):
+    def test_synthetic_trace_structure(self):
+        from torch.distributed.torchmux_trace import export_synthetic
+
+        events_by_rank = {
+            0: [
+                ("compute", "compute", 0, 100),
+                ("collective", "allreduce", 100, 10),
+                ("compute", "compute", 110, 50),
+                ("collective", "allreduce", 160, 10),
+            ],
+            1: [
+                ("compute", "compute", 200, 80),
+                ("collective", "allreduce", 280, 10),
+                ("compute", "compute", 290, 60),
+                ("collective", "allreduce", 350, 10),
+            ],
+        }
+
+        tmpdir = tempfile.mkdtemp()
+        try:
+            path = os.path.join(tmpdir, "synthetic.json")
+            export_synthetic(events_by_rank, path, 2)
+
+            with open(path) as f:
+                trace = json.load(f)
+
+            x_events = [e for e in trace["traceEvents"] if e.get("ph") == "X"]
+            self.assertGreater(len(x_events), 0)
+
+            compute_events = [e for e in x_events if e["cat"] == "compute"]
+            coll_events = [e for e in x_events if e["cat"] == "collective"]
+
+            self.assertEqual(len(compute_events), 4)
+            self.assertEqual(len(coll_events), 4)
+
+            for rank in (0, 1):
+                rank_computes = [
+                    e for e in compute_events if e["pid"] == rank
+                ]
+                rank_colls = [e for e in coll_events if e["pid"] == rank]
+                self.assertEqual(len(rank_computes), 2)
+                self.assertEqual(len(rank_colls), 2)
+
+            # In the synthetic trace, both workers' first compute starts
+            # at ts=0 (overlapped)
+            first_computes = [
+                e for e in compute_events
+                if e["ts"] == 0
+            ]
+            self.assertEqual(len(first_computes), 2)
+
+            # No snapshot/restore events in synthetic trace
+            mux_events = [e for e in x_events if e["cat"] == "mux"]
+            self.assertEqual(len(mux_events), 0)
+        finally:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+
+    def test_natural_trace_preserves_timestamps(self):
+        from torch.distributed.torchmux_trace import export_natural
+
+        events_by_rank = {
+            0: [
+                ("compute", "compute", 1000, 100),
+                ("mux", "snapshot", 1100, 5),
+            ],
+            1: [
+                ("compute", "compute", 1200, 80),
+            ],
+        }
+
+        tmpdir = tempfile.mkdtemp()
+        try:
+            path = os.path.join(tmpdir, "natural.json")
+            export_natural(events_by_rank, path, 2)
+
+            with open(path) as f:
+                trace = json.load(f)
+
+            x_events = [e for e in trace["traceEvents"] if e.get("ph") == "X"]
+            self.assertEqual(len(x_events), 3)
+
+            # First event should be at ts=0 (base_ts subtracted)
+            ts_values = sorted(e["ts"] for e in x_events)
+            self.assertEqual(ts_values[0], 0)
+        finally:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+class TestMuxDevice(TestCase):
+    def test_cuda_index_remapping(self):
+        from torch.distributed.torchmux import _MuxDevice, _OrigDevice
+
+        import torch.distributed.torchmux as tm
+        orig_ngpus = tm._ngpus
+        try:
+            tm._ngpus = 2
+            d = _MuxDevice("cuda:5")
+            self.assertEqual(d, _OrigDevice("cuda:1"))
+
+            d = _MuxDevice("cuda:4")
+            self.assertEqual(d, _OrigDevice("cuda:0"))
+
+            d = _MuxDevice("cuda:0")
+            self.assertEqual(d, _OrigDevice("cuda:0"))
+        finally:
+            tm._ngpus = orig_ngpus
+
+    def test_non_cuda_passthrough(self):
+        from torch.distributed.torchmux import _MuxDevice, _OrigDevice
+
+        d = _MuxDevice("cpu")
+        self.assertEqual(d, _OrigDevice("cpu"))
+
+    def test_isinstance_compat(self):
+        from torch.distributed.torchmux import _MuxDevice, _OrigDevice
+
+        d = _MuxDevice("cpu")
+        self.assertIsInstance(d, _OrigDevice)
+
+
 class TestVNCCL(TestCase):
     """Tests vnccl collective correctness using direct PG method calls.
 
@@ -367,10 +488,7 @@ class TestVNCCL(TestCase):
         results = self._run_on_pgs(pgs, _work)
         expected = self._world_size * (self._world_size + 1) / 2
         for r, t in enumerate(results):
-            self.assertTrue(
-                torch.allclose(t, torch.full((4,), expected)),
-                f"rank {r}: allreduce got {t}, expected {expected}",
-            )
+            self.assertEqual(t, torch.full((4,), expected))
 
     def test_broadcast(self):
         pgs = self._make_pgs()
@@ -386,10 +504,7 @@ class TestVNCCL(TestCase):
 
         results = self._run_on_pgs(pgs, _work)
         for r, t in enumerate(results):
-            self.assertTrue(
-                torch.allclose(t, torch.full((4,), 99.0)),
-                f"rank {r}: broadcast got {t}, expected 99.0",
-            )
+            self.assertEqual(t, torch.full((4,), 99.0))
 
     def test_allgather(self):
         pgs = self._make_pgs()
@@ -403,9 +518,81 @@ class TestVNCCL(TestCase):
         results = self._run_on_pgs(pgs, _work)
         for r, gathered in enumerate(results):
             for src, t in enumerate(gathered):
-                self.assertTrue(
-                    torch.allclose(t, torch.full((2,), float(src))),
-                    f"rank {r}: allgather[{src}] got {t}, expected {float(src)}",
+                self.assertEqual(t, torch.full((2,), float(src)))
+
+    def test_reduce_scatter(self):
+        pgs = self._make_pgs()
+
+        from torch._C._distributed_c10d import ReduceScatterOptions
+
+        def _work(rank, pg):
+            chunks = [torch.full((2,), float(rank + 1)) for _ in range(self._world_size)]
+            out = [torch.zeros(2)]
+            pg.reduce_scatter(out, [chunks])
+            return out[0]
+
+        results = self._run_on_pgs(pgs, _work)
+        expected = self._world_size * (self._world_size + 1) / 2
+        for r, t in enumerate(results):
+            self.assertEqual(t, torch.full((2,), expected))
+
+    def test_scatter(self):
+        pgs = self._make_pgs()
+
+        from torch._C._distributed_c10d import ScatterOptions
+
+        def _work(rank, pg):
+            if rank == 0:
+                src = [torch.full((2,), float(i)) for i in range(self._world_size)]
+            else:
+                src = []
+            out = [torch.zeros(2)]
+            opts = ScatterOptions()
+            opts.rootRank = 0
+            pg.scatter(out, [src], opts)
+            return out[0]
+
+        results = self._run_on_pgs(pgs, _work)
+        for r, t in enumerate(results):
+            self.assertEqual(t, torch.full((2,), float(r)))
+
+    def test_gather(self):
+        pgs = self._make_pgs()
+
+        from torch._C._distributed_c10d import ScatterOptions
+
+        def _work(rank, pg):
+            inp = [torch.full((2,), float(rank))]
+            if rank == 0:
+                out = [[torch.zeros(2) for _ in range(self._world_size)]]
+            else:
+                out = [[]]
+            opts = ScatterOptions()
+            opts.rootRank = 0
+            pg.gather(out, inp, opts)
+            return out[0] if rank == 0 else None
+
+        results = self._run_on_pgs(pgs, _work)
+        gathered = results[0]
+        for src, t in enumerate(gathered):
+            self.assertEqual(t, torch.full((2,), float(src)))
+
+    def test_alltoall(self):
+        pgs = self._make_pgs()
+        ws = self._world_size
+
+        def _work(rank, pg):
+            inp = [torch.full((2,), float(rank * ws + dst)) for dst in range(ws)]
+            out = [torch.zeros(2) for _ in range(ws)]
+            pg.alltoall(out, inp)
+            return out
+
+        results = self._run_on_pgs(pgs, _work)
+        for dst in range(ws):
+            for src in range(ws):
+                self.assertEqual(
+                    results[dst][src],
+                    torch.full((2,), float(src * ws + dst)),
                 )
 
     def test_barrier(self):

@@ -255,6 +255,8 @@ class _CollSync:
         self._done = False
 
     def join(self, rank, data):
+        # Lock ordering: self._cond is always acquired before
+        # _next_rank_cond. No code path acquires them in reverse.
         with self._cond:
             self._data[rank] = data
             self._count += 1
@@ -315,6 +317,9 @@ class VNCCLProcessGroup(dist.ProcessGroup):
         self._ctx = torch.autograd.set_multithreading_enabled(False)
 
     def _do(self, op, data):
+        # locked() returns True if ANY thread holds the lock, but
+        # cooperative scheduling guarantees exactly one thread runs at a
+        # time, so the holder is always the calling thread.
         held = exec_lock.locked()
         if held:
             _rng_states[self._rank] = _save_rng()

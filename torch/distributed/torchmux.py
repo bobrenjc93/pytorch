@@ -81,6 +81,16 @@ class _SharedInt:
         self._mm.write(struct.pack("i", v))
         self._mm.flush()
 
+    def __del__(self):
+        try:
+            self._mm.close()
+        except Exception:
+            pass
+        try:
+            self._fd.close()
+        except Exception:
+            pass
+
     def cleanup(self):
         self._mm.close()
         self._fd.close()
@@ -109,6 +119,9 @@ _ACQUIRE_TIMEOUT_S = float(os.environ.get("TORCHMUX_ACQUIRE_TIMEOUT", "300"))
 def _acquire(*, restore=True):
     global _held
     deadline = time.monotonic() + _ACQUIRE_TIMEOUT_S
+    # Aligned 4-byte reads are atomic on x86-64; on other architectures a
+    # torn read could occur but would just cause an extra spin iteration
+    # (the small value space 0..N-1 cannot alias _rank via partial writes).
     while _sched.value != _rank:
         if time.monotonic() > deadline:
             raise RuntimeError(
