@@ -17,7 +17,6 @@ After restore, it is back in LOCKED state; call unlock to resume.
 """
 
 import ctypes
-import os
 
 
 _cuda = None
@@ -48,13 +47,6 @@ class _RestoreArgs(ctypes.Structure):
 
 class _UnlockArgs(ctypes.Structure):
     _fields_ = [("reserved", ctypes.c_uint64 * 8)]
-
-
-class _ProcessState(ctypes.c_int):
-    RUNNING = 0
-    LOCKED = 1
-    CHECKPOINTED = 2
-    FAILED = 3
 
 
 def _check(result: int, name: str) -> None:
@@ -112,17 +104,9 @@ class CudaBaton:
 
     def get_state(self, pid: int) -> int:
         cuda = _get_cuda()
-        state = _ProcessState()
+        state = ctypes.c_int()
         _check(
             cuda.cuCheckpointProcessGetState(pid, ctypes.byref(state)),
             "GetState",
         )
         return state.value
-
-    def checkpoint_self(self, timeout_ms: int = 30000) -> None:
-        """Convenience: checkpoint the calling process."""
-        self.checkpoint(os.getpid(), timeout_ms)
-
-    def restore_self(self) -> None:
-        """Convenience: restore and unlock the calling process."""
-        self.restore_and_unlock(os.getpid())

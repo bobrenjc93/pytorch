@@ -244,6 +244,18 @@ from torch._C._distributed_c10d import (
 )
 
 
+_REDUCE_FNS = {
+    ReduceOp.SUM: torch.Tensor.add_,
+    ReduceOp.AVG: torch.Tensor.add_,
+    ReduceOp.PRODUCT: torch.Tensor.mul_,
+    ReduceOp.MIN: lambda a, b: torch.minimum(a, b, out=a),
+    ReduceOp.MAX: lambda a, b: torch.maximum(a, b, out=a),
+    ReduceOp.BAND: torch.Tensor.bitwise_and_,
+    ReduceOp.BOR: torch.Tensor.bitwise_or_,
+    ReduceOp.BXOR: torch.Tensor.bitwise_xor_,
+}
+
+
 class _MuxPG(dist.ProcessGroup):
     """Resolves collectives by bookkeeping tensors on disk.
 
@@ -318,12 +330,13 @@ class _MuxPG(dist.ProcessGroup):
                 _save_tensor(self._in_path(cid, self._rank, i), t)
             self._mark_ready(cid)
             if self._all_ready(cid):
+                reduce_fn = _REDUCE_FNS[op]
                 for i in range(len(tensor_list)):
-                    acc = _load_tensor(self._in_path(cid, 0, i))
+                    acc = _load_tensor(self._in_path(cid, 0, i)).clone()
                     for r in range(1, self._ws):
-                        acc = acc + _load_tensor(self._in_path(cid, r, i))
+                        reduce_fn(acc, _load_tensor(self._in_path(cid, r, i)))
                     if op == ReduceOp.AVG:
-                        acc = acc / self._ws
+                        acc.div_(self._ws)
                     for r in range(self._ws):
                         _save_tensor(self._out_path(cid, r, i), acc)
                 self._mark_resolved(cid)
@@ -412,11 +425,12 @@ class _MuxPG(dist.ProcessGroup):
             _save_tensor(self._in_path(cid, self._rank, 0), input)
             self._mark_ready(cid)
             if self._all_ready(cid):
-                acc = _load_tensor(self._in_path(cid, 0, 0))
+                reduce_fn = _REDUCE_FNS[op]
+                acc = _load_tensor(self._in_path(cid, 0, 0)).clone()
                 for r in range(1, self._ws):
-                    acc = acc + _load_tensor(self._in_path(cid, r, 0))
+                    reduce_fn(acc, _load_tensor(self._in_path(cid, r, 0)))
                 if op == ReduceOp.AVG:
-                    acc = acc / self._ws
+                    acc.div_(self._ws)
                 chunk_size = acc.size(0) // self._ws
                 for r in range(self._ws):
                     _save_tensor(
@@ -437,6 +451,8 @@ class _MuxPG(dist.ProcessGroup):
     def reduce_scatter(self, output_tensor, scatter_list, opts=ReduceScatterOptions()):
         def _run():
             cid = self._next_coll()
+            op = opts.reduceOp if hasattr(opts, "reduceOp") else ReduceOp.SUM
+            reduce_fn = _REDUCE_FNS[op]
             for i, chunks in enumerate(scatter_list):
                 for r, chunk in enumerate(chunks):
                     _save_tensor(
@@ -451,13 +467,16 @@ class _MuxPG(dist.ProcessGroup):
                             _coll_path(self._pg_id, cid, f"in_r0_s{i}_c{dst}.pt")
                         ).clone()
                         for src in range(1, self._ws):
-                            acc.add_(
+                            reduce_fn(
+                                acc,
                                 _load_tensor(
                                     _coll_path(
                                         self._pg_id, cid, f"in_r{src}_s{i}_c{dst}.pt"
                                     )
-                                )
+                                ),
                             )
+                        if op == ReduceOp.AVG:
+                            acc.div_(self._ws)
                         _save_tensor(self._out_path(cid, dst, i), acc)
                 self._mark_resolved(cid)
             else:
@@ -580,7 +599,7 @@ def _worker(
 
     ctypes.CDLL("libcuda.so.1").cuInit(0)
 
-    from torch.distributed.checkpoint.baton import CudaBaton
+    from torch.distributed._baton import CudaBaton
 
     _baton = CudaBaton()
 

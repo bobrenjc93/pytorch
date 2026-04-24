@@ -45,10 +45,10 @@ def _acquire_exec_lock_ordered(rank, world_size):
 
 def _release_exec_lock_ordered(rank, world_size):
     global _next_rank
-    exec_lock.release()
     with _next_rank_cond:
         _next_rank = (rank + 1) % world_size
         _next_rank_cond.notify_all()
+    exec_lock.release()
 
 
 # Per-worker RNG state. Saved before yielding, restored after resuming.
