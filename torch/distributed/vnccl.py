@@ -307,11 +307,9 @@ class VNCCLProcessGroup(dist.ProcessGroup):
         self._world_size = world_size
 
         world = dist.distributed_c10d._world
-        from torch.testing._internal.distributed.multi_threaded_pg import (
-            ThreadLocalWorld,
-        )
-
-        if isinstance(world, ThreadLocalWorld):
+        # ThreadLocalWorld wraps _World for thread-based PGs; unwrap to
+        # get the real _World so the weakref outlives each thread.
+        if hasattr(world, "_get_world"):
             world = world._get_world()
         self._world = weakref.ref(world)
         self._ctx = torch.autograd.set_multithreading_enabled(False)

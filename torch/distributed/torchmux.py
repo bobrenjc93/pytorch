@@ -103,9 +103,18 @@ _ws = None
 _held = False
 
 
+_ACQUIRE_TIMEOUT_S = float(os.environ.get("TORCHMUX_ACQUIRE_TIMEOUT", "300"))
+
+
 def _acquire(*, restore=True):
     global _held
+    deadline = time.monotonic() + _ACQUIRE_TIMEOUT_S
     while _sched.value != _rank:
+        if time.monotonic() > deadline:
+            raise RuntimeError(
+                f"rank {_rank}: timed out waiting for scheduling token after "
+                f"{_ACQUIRE_TIMEOUT_S}s (likely a worker crash)"
+            )
         time.sleep(1e-5)
     _held = True
     if restore:
@@ -116,6 +125,8 @@ def _release(*, snapshot=True):
     global _held
     if snapshot:
         _snapshot_gpu()
+    # Safe without locking: only the token holder calls _release, and no
+    # other process writes _sched until we advance it here.
     _sched.value = (_rank + 1) % _ws
     _held = False
 
@@ -205,7 +216,13 @@ def _coll_path(pg_id, coll_id, filename):
 def _save_tensor(path, tensor):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     tmp = path + ".tmp"
-    torch.save(tensor.detach().cpu(), tmp)
+    try:
+        torch.save(tensor.detach().cpu(), tmp)
+    except OSError as e:
+        raise RuntimeError(
+            f"rank {_rank}: failed to save tensor to {tmp} "
+            f"(collective data dir: {_coll_dir}): {e}"
+        ) from e
     os.rename(tmp, path)
 
 
@@ -494,14 +511,9 @@ class _MuxPG(dist.ProcessGroup):
 
     @property
     def pg_name(self):
-        world = dist.distributed_c10d._world
-        from torch.testing._internal.distributed.multi_threaded_pg import (
-            ThreadLocalWorld,
+        return dist.distributed_c10d._world.pg_names.get(
+            self, f"mux_pg_{self._pg_id}"
         )
-
-        if isinstance(world, ThreadLocalWorld):
-            world = world._get_world()
-        return world.pg_names.get(self, f"mux_pg_{self._pg_id}")
 
     @property
     def group_name(self):

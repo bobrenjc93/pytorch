@@ -20,7 +20,14 @@ import ctypes
 import os
 
 
-_cuda = ctypes.CDLL("libcuda.so.1")
+_cuda = None
+
+
+def _get_cuda():
+    global _cuda
+    if _cuda is None:
+        _cuda = ctypes.CDLL("libcuda.so.1")
+    return _cuda
 
 
 class _LockArgs(ctypes.Structure):
@@ -52,8 +59,9 @@ class _ProcessState(ctypes.c_int):
 
 def _check(result: int, name: str) -> None:
     if result != 0:
+        cuda = _get_cuda()
         err = ctypes.c_char_p()
-        _cuda.cuGetErrorString(result, ctypes.byref(err))
+        cuda.cuGetErrorString(result, ctypes.byref(err))
         msg = err.value.decode() if err.value else f"code {result}"
         raise RuntimeError(f"{name} failed: {msg}")
 
@@ -66,30 +74,34 @@ class CudaBaton:
     """
 
     def lock(self, pid: int, timeout_ms: int = 30000) -> None:
+        cuda = _get_cuda()
         args = _LockArgs(timeoutMs=timeout_ms)
-        _check(_cuda.cuCheckpointProcessLock(pid, ctypes.byref(args)), "Lock")
+        _check(cuda.cuCheckpointProcessLock(pid, ctypes.byref(args)), "Lock")
 
-    def checkpoint(self, pid: int) -> None:
+    def checkpoint(self, pid: int, timeout_ms: int = 30000) -> None:
         """Lock + checkpoint: VRAM is freed, process cannot use CUDA."""
-        self.lock(pid)
+        self.lock(pid, timeout_ms)
+        cuda = _get_cuda()
         args = _CheckpointArgs()
         _check(
-            _cuda.cuCheckpointProcessCheckpoint(pid, ctypes.byref(args)),
+            cuda.cuCheckpointProcessCheckpoint(pid, ctypes.byref(args)),
             "Checkpoint",
         )
 
     def restore(self, pid: int) -> None:
         """Restore from last checkpoint (process enters LOCKED state)."""
+        cuda = _get_cuda()
         args = _RestoreArgs()
         _check(
-            _cuda.cuCheckpointProcessRestore(pid, ctypes.byref(args)),
+            cuda.cuCheckpointProcessRestore(pid, ctypes.byref(args)),
             "Restore",
         )
 
     def unlock(self, pid: int) -> None:
+        cuda = _get_cuda()
         args = _UnlockArgs()
         _check(
-            _cuda.cuCheckpointProcessUnlock(pid, ctypes.byref(args)),
+            cuda.cuCheckpointProcessUnlock(pid, ctypes.byref(args)),
             "Unlock",
         )
 
@@ -99,9 +111,10 @@ class CudaBaton:
         self.unlock(pid)
 
     def get_state(self, pid: int) -> int:
+        cuda = _get_cuda()
         state = _ProcessState()
         _check(
-            _cuda.cuCheckpointProcessGetState(pid, ctypes.byref(state)),
+            cuda.cuCheckpointProcessGetState(pid, ctypes.byref(state)),
             "GetState",
         )
         return state.value
