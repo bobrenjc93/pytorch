@@ -17,14 +17,29 @@ After restore, it is back in LOCKED state; call unlock to resume.
 """
 
 import ctypes
+import logging
+import threading
 
+log = logging.getLogger(__name__)
 
 _cuda = None
+_cuda_lock = threading.Lock()
+
+
+# Checkpoint process state constants returned by get_state().
+CHECKPOINT_STATE_INVALID = 0
+CHECKPOINT_STATE_ACTIVE = 1
+CHECKPOINT_STATE_LOCKED = 2
+CHECKPOINT_STATE_CHECKPOINTED = 3
 
 
 def _get_cuda():
     global _cuda
-    if _cuda is None:
+    if _cuda is not None:
+        return _cuda
+    with _cuda_lock:
+        if _cuda is not None:
+            return _cuda
         try:
             lib = ctypes.CDLL("libcuda.so.1")
         except OSError as e:
@@ -118,7 +133,11 @@ class CudaBaton:
             try:
                 self.unlock(pid)
             except Exception:
-                pass
+                log.error(
+                    "CudaBaton: unlock failed after checkpoint failure for "
+                    "pid %d; process may be stuck in LOCKED state",
+                    pid,
+                )
             raise
 
     def restore(self, pid: int) -> None:
@@ -147,8 +166,7 @@ class CudaBaton:
             # Process is restored but stuck in LOCKED state. Log and
             # re-raise — the caller must handle this, otherwise the
             # process will deadlock on its next CUDA call.
-            import logging
-            logging.getLogger(__name__).error(
+            log.error(
                 "CudaBaton: unlock failed after successful restore for pid %d; "
                 "process is in LOCKED state and cannot make CUDA calls",
                 pid,

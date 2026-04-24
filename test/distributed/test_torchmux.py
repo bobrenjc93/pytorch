@@ -86,6 +86,10 @@ dist.reduce_scatter_tensor(out, full)
 chunk = full[rank * 2 : (rank + 1) * 2] * ws
 results["reduce_scatter"] = torch.allclose(out, chunk)
 
+# barrier: just verify it completes without hanging
+dist.barrier()
+results["barrier"] = True
+
 dist.destroy_process_group()
 
 output_path = os.path.join(os.environ["TORCHMUX_RESULTS_DIR"], f"rank{rank}.json")
@@ -251,6 +255,32 @@ class TestTorchmuxTraceOrdering(TestCase):
                 f"worker {pid}: {snapshots} snapshots vs {restores} "
                 f"restores (expected equal or off by one)",
             )
+
+        # -- Validate synthetic trace is also produced and well-formed --
+        synthetic_path = os.path.join(trace_dir, "torchmux_synthetic.json")
+        self.assertTrue(os.path.exists(synthetic_path))
+
+        with open(synthetic_path) as f:
+            synthetic = json.load(f)
+
+        syn_events = [
+            e for e in synthetic["traceEvents"] if e.get("ph") == "X"
+        ]
+        self.assertGreater(len(syn_events), 0, "no synthetic trace events")
+
+        for e in syn_events:
+            for field in ("cat", "name", "pid", "tid", "ts", "dur"):
+                self.assertIn(
+                    field, e, f"synthetic event missing '{field}': {e}"
+                )
+            self.assertGreaterEqual(e["ts"], 0)
+            self.assertGreaterEqual(e["dur"], 0)
+
+        syn_mux = [e for e in syn_events if e["cat"] == "mux"]
+        self.assertEqual(
+            len(syn_mux), 0,
+            "synthetic trace should not contain snapshot/restore events",
+        )
 
 
 @unittest.skipIf(not torch.cuda.is_available(), "CUDA not available")
@@ -1055,6 +1085,69 @@ class TestVNCCLWorldSize1(_VNCCLTestBase):
         results = self._run_on_pgs(pgs, _work)
         self.assertEqual(results[0][0], torch.full((2,), 7.0))
 
+    def test_broadcast_single_rank(self):
+        from torch._C._distributed_c10d import BroadcastOptions
+
+        self._world_size = 1
+        pgs = self._make_pgs()
+
+        def _work(rank, pg):
+            t = [torch.full((4,), 55.0)]
+            opts = BroadcastOptions()
+            opts.rootRank = 0
+            pg.broadcast(t, opts)
+            return t[0]
+
+        results = self._run_on_pgs(pgs, _work)
+        self.assertEqual(results[0], torch.full((4,), 55.0))
+
+    def test_reduce_scatter_single_rank(self):
+        self._world_size = 1
+        pgs = self._make_pgs()
+
+        def _work(rank, pg):
+            inp = torch.full((2,), 5.0)
+            out = torch.zeros(2)
+            pg._reduce_scatter_base(out, inp)
+            return out
+
+        results = self._run_on_pgs(pgs, _work)
+        self.assertEqual(results[0], torch.full((2,), 5.0))
+
+    def test_scatter_single_rank(self):
+        from torch._C._distributed_c10d import ScatterOptions
+
+        self._world_size = 1
+        pgs = self._make_pgs()
+
+        def _work(rank, pg):
+            src = [torch.full((2,), 3.0)]
+            out = [torch.zeros(2)]
+            opts = ScatterOptions()
+            opts.rootRank = 0
+            pg.scatter(out, [src], opts)
+            return out[0]
+
+        results = self._run_on_pgs(pgs, _work)
+        self.assertEqual(results[0], torch.full((2,), 3.0))
+
+    def test_gather_single_rank(self):
+        from torch._C._distributed_c10d import ScatterOptions
+
+        self._world_size = 1
+        pgs = self._make_pgs()
+
+        def _work(rank, pg):
+            inp = [torch.full((2,), 9.0)]
+            out = [[torch.zeros(2)]]
+            opts = ScatterOptions()
+            opts.rootRank = 0
+            pg.gather(out, inp, opts)
+            return out[0]
+
+        results = self._run_on_pgs(pgs, _work)
+        self.assertEqual(results[0][0], torch.full((2,), 9.0))
+
 
 class TestVNCCLNonContiguous(_VNCCLTestBase):
     """Verify vnccl handles non-contiguous tensor inputs."""
@@ -1440,6 +1533,139 @@ class TestTorchmuxAVGCorrectness(TestCase):
                 results = json.load(f)
             for op_name, passed in results.items():
                 self.assertTrue(passed, f"rank {rank}: {op_name} failed")
+
+
+@unittest.skipIf(not torch.cuda.is_available(), "CUDA not available")
+class TestTorchmuxCoalescedCollectives(TestCase):
+    """Test allgather_into_tensor_coalesced and reduce_scatter_tensor_coalesced
+    through the full torchmux subprocess path."""
+
+    def setUp(self):
+        super().setUp()
+        self._tmpdir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self._tmpdir, True)
+
+    def test_coalesced_correctness(self):
+        script = os.path.join(self._tmpdir, "coalesced.py")
+        with open(script, "w") as f:
+            f.write(
+                "import json, os, torch, torch.distributed as dist\n"
+                "from torch.distributed import ReduceOp\n"
+                "dist.init_process_group()\n"
+                "rank = dist.get_rank()\n"
+                "ws = dist.get_world_size()\n"
+                "device = f\"cuda:{rank % int(os.environ.get('TORCHMUX_NGPUS', '1'))}\"\n"
+                "torch.cuda.set_device(device)\n"
+                "results = {}\n"
+                "\n"
+                "# allgather_into_tensor_coalesced via _allgather_base path\n"
+                "inp = torch.full((2,), float(rank), device=device)\n"
+                "out = torch.zeros(2 * ws, device=device)\n"
+                "dist.all_gather_into_tensor(out, inp)\n"
+                "expected = torch.cat([torch.full((2,), float(r), device=device) for r in range(ws)])\n"
+                "results['allgather_base'] = torch.allclose(out, expected)\n"
+                "\n"
+                "# reduce_scatter_tensor via _reduce_scatter_base path\n"
+                "full = torch.full((ws * 2,), float(rank + 1), device=device)\n"
+                "out2 = torch.zeros(2, device=device)\n"
+                "dist.reduce_scatter_tensor(out2, full)\n"
+                "expected_rs = ws * (ws + 1) / 2\n"
+                "results['reduce_scatter_base'] = torch.allclose(out2, torch.full_like(out2, expected_rs))\n"
+                "\n"
+                "dist.destroy_process_group()\n"
+                "path = os.path.join(os.environ['TORCHMUX_RESULTS_DIR'], f'rank{rank}.json')\n"
+                "with open(path, 'w') as f:\n"
+                "    json.dump({k: bool(v) for k, v in results.items()}, f)\n"
+            )
+
+        results_dir = os.path.join(self._tmpdir, "results")
+        os.makedirs(results_dir)
+        env = os.environ.copy()
+        env["TORCHMUX_NGPUS"] = "1"
+        env["TORCHMUX_RESULTS_DIR"] = results_dir
+        env["TORCHMUX_TRACE_DIR"] = self._tmpdir
+
+        result = subprocess.run(
+            [
+                sys.executable, "-m", "torch.distributed.torchmux",
+                "--nproc-per-node", "2", script,
+            ],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        self.assertEqual(
+            result.returncode, 0,
+            f"torchmux coalesced test failed (rc={result.returncode}):\n"
+            f"stdout: {result.stdout}\nstderr: {result.stderr}",
+        )
+
+        for rank in range(2):
+            rpath = os.path.join(results_dir, f"rank{rank}.json")
+            self.assertTrue(os.path.exists(rpath))
+            with open(rpath) as f:
+                results = json.load(f)
+            for op_name, passed in results.items():
+                self.assertTrue(passed, f"rank {rank}: {op_name} failed")
+
+
+class TestVNCCLSequenceNumbering(_VNCCLTestBase):
+    """Verify that the sequence-number fix for _active dict prevents
+    collective mismatch when ranks arrive at different speeds."""
+
+    def test_rapid_sequential_collectives(self):
+        pgs = self._make_pgs()
+
+        def _work(rank, pg):
+            results = []
+            for i in range(10):
+                t = [torch.full((4,), float(rank + i))]
+                pg.allreduce(t)
+                results.append(t[0].clone())
+            return results
+
+        results = self._run_on_pgs(pgs, _work)
+        for i in range(10):
+            expected = sum(r + i for r in range(self._world_size))
+            for r in range(self._world_size):
+                self.assertEqual(
+                    results[r][i],
+                    torch.full((4,), float(expected)),
+                )
+
+    def test_mixed_collective_types(self):
+        from torch._C._distributed_c10d import BroadcastOptions
+
+        pgs = self._make_pgs()
+
+        def _work(rank, pg):
+            results = []
+
+            t = [torch.full((4,), float(rank + 1))]
+            pg.allreduce(t)
+            results.append(t[0].clone())
+
+            t = [torch.full((4,), 77.0) if rank == 0 else torch.zeros(4)]
+            opts = BroadcastOptions()
+            opts.rootRank = 0
+            pg.broadcast(t, opts)
+            results.append(t[0].clone())
+
+            t = [torch.full((4,), float(rank + 10))]
+            pg.allreduce(t)
+            results.append(t[0].clone())
+
+            return results
+
+        results = self._run_on_pgs(pgs, _work)
+        ws = self._world_size
+        expected_ar1 = ws * (ws + 1) / 2
+        expected_ar2 = sum(r + 10 for r in range(ws))
+        for r in range(ws):
+            self.assertEqual(results[r][0], torch.full((4,), expected_ar1))
+            self.assertEqual(results[r][1], torch.full((4,), 77.0))
+            self.assertEqual(results[r][2], torch.full((4,), float(expected_ar2)))
 
 
 if __name__ == "__main__":

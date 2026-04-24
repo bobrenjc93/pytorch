@@ -18,7 +18,7 @@ Typically used via torchmux rather than directly.
 
 Note: this is distinct from multi_threaded_pg.ProcessLocalGroup in
 torch/testing/_internal/ which serves a similar purpose for testing.
-vnccl adds cooperative scheduling (exec_lock), deterministic rank
+vnccl adds cooperative scheduling (_exec_lock), deterministic rank
 ordering for trace reproducibility, per-worker RNG isolation, and
 pairwise reduction to match NCCL's bitwise reduction order.
 """
@@ -30,12 +30,12 @@ from functools import partial
 
 import torch
 
+__all__ = ["VNCCLProcessGroup"]
 
 # Cooperative scheduling lock. When held, only one worker thread runs.
 # Workers release it inside _do() before blocking on a collective
-# barrier, allowing the next worker to run. torchmux imports this lock
-# and acquires it around each worker's execution.
-exec_lock = threading.Lock()
+# barrier, allowing the next worker to run.
+_exec_lock = threading.Lock()
 _exec_lock_holder = threading.local()
 
 # Deterministic rank ordering. After a collective resolves, rank 0
@@ -50,7 +50,7 @@ _next_rank_cond = threading.Condition()
 def _acquire_exec_lock_ordered(rank, world_size):
     with _next_rank_cond:
         _next_rank_cond.wait_for(lambda: _next_rank == rank)
-    exec_lock.acquire()
+    _exec_lock.acquire()
     _exec_lock_holder.held = True
 
 
@@ -60,7 +60,7 @@ def _release_exec_lock_ordered(rank, world_size):
     with _next_rank_cond:
         _next_rank = (rank + 1) % world_size
         _next_rank_cond.notify_all()
-    exec_lock.release()
+    _exec_lock.release()
 
 
 # Per-worker RNG state. Saved before yielding, restored after resuming.
@@ -321,17 +321,17 @@ class VNCCLProcessGroup(dist.ProcessGroup):
     _active = {}
 
     @classmethod
-    def _enter(cls, op, pg):
+    def _enter(cls, op, pg, seq):
         with cls._lock:
-            key = pg.pg_name
+            key = (pg.pg_name, seq)
             if key not in cls._active:
                 cls._active[key] = _CollSync(pg.size(), op)
             return cls._active[key]
 
     @classmethod
-    def _leave(cls, sync, pg):
+    def _leave(cls, sync, pg, seq):
         with cls._lock:
-            key = pg.pg_name
+            key = (pg.pg_name, seq)
             if cls._active.get(key) is sync:
                 del cls._active[key]
 
@@ -339,6 +339,7 @@ class VNCCLProcessGroup(dist.ProcessGroup):
         super().__init__(rank, world_size)
         self._rank = rank
         self._world_size = world_size
+        self._coll_seq = 0
 
         world = dist.distributed_c10d._world
         # ThreadLocalWorld wraps _World for thread-based PGs; unwrap to
@@ -348,16 +349,18 @@ class VNCCLProcessGroup(dist.ProcessGroup):
         self._world = weakref.ref(world)
 
     def _do(self, op, data):
+        seq = self._coll_seq
+        self._coll_seq += 1
         held = getattr(_exec_lock_holder, "held", False)
         if held:
             _rng_states[self._rank] = _save_rng()
             _release_exec_lock_ordered(self._rank, self._world_size)
         try:
-            sync = VNCCLProcessGroup._enter(op, self)
+            sync = VNCCLProcessGroup._enter(op, self, seq)
             try:
                 result = sync.join(self._rank, data)
             finally:
-                VNCCLProcessGroup._leave(sync, self)
+                VNCCLProcessGroup._leave(sync, self, seq)
         finally:
             if held:
                 _acquire_exec_lock_ordered(self._rank, self._world_size)
@@ -454,4 +457,5 @@ def _create_vnccl(prefix_store, rank, world_size, timeout):
     return pg
 
 
-dist.Backend.register_backend("vnccl", _create_vnccl, devices=["cpu", "cuda"])
+if "vnccl" not in dist.Backend.backend_list:
+    dist.Backend.register_backend("vnccl", _create_vnccl, devices=["cpu", "cuda"])
