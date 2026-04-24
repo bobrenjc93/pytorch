@@ -30,6 +30,7 @@ import torch
 # barrier, allowing the next worker to run. torchmux imports this lock
 # and acquires it around each worker's execution.
 exec_lock = threading.Lock()
+_exec_lock_holder = threading.local()
 
 # Deterministic rank ordering. After a collective resolves, rank 0
 # runs first, then 1, 2, ..., producing a clean staircase in traces.
@@ -41,10 +42,12 @@ def _acquire_exec_lock_ordered(rank, world_size):
     with _next_rank_cond:
         _next_rank_cond.wait_for(lambda: _next_rank == rank)
     exec_lock.acquire()
+    _exec_lock_holder.held = True
 
 
 def _release_exec_lock_ordered(rank, world_size):
     global _next_rank
+    _exec_lock_holder.held = False
     with _next_rank_cond:
         _next_rank = (rank + 1) % world_size
         _next_rank_cond.notify_all()
@@ -310,13 +313,9 @@ class VNCCLProcessGroup(dist.ProcessGroup):
         if hasattr(world, "_get_world"):
             world = world._get_world()
         self._world = weakref.ref(world)
-        self._ctx = torch.autograd.set_multithreading_enabled(False)
 
     def _do(self, op, data):
-        # locked() returns True if ANY thread holds the lock, but
-        # cooperative scheduling guarantees exactly one thread runs at a
-        # time, so the holder is always the calling thread.
-        held = exec_lock.locked()
+        held = getattr(_exec_lock_holder, "held", False)
         if held:
             _rng_states[self._rank] = _save_rng()
             _release_exec_lock_ordered(self._rank, self._world_size)

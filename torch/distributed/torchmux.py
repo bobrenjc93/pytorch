@@ -92,17 +92,21 @@ class _SharedInt:
 
     def __del__(self):
         try:
-            self._mm.close()
+            if self._mm is not None:
+                self._mm.close()
         except Exception:
             pass
         try:
-            self._fd.close()
+            if self._fd is not None:
+                self._fd.close()
         except Exception:
             pass
 
     def cleanup(self):
         self._mm.close()
+        self._mm = None
         self._fd.close()
+        self._fd = None
         os.unlink(self._path)
 
     def __getstate__(self):
@@ -209,6 +213,8 @@ def _restore_gpu():
 
 def _yield_and_wait(check_fn):
     """Release token (snapshots GPU), wait, reacquire (restores GPU)."""
+    if check_fn():
+        return
     if _held:
         _release()
     delay = 1e-5
@@ -280,6 +286,21 @@ _REDUCE_FNS = {
 }
 
 
+def _get_reduce_fn(op):
+    # opts.reduceOp can return either a C++ ReduceOp enum value or a
+    # Python ReduceOp wrapper (which has an .op attribute holding the
+    # underlying C++ enum). Normalize before lookup.
+    if hasattr(op, "op"):
+        op = op.op
+    return _REDUCE_FNS[op]
+
+
+def _is_avg(op):
+    if hasattr(op, "op"):
+        op = op.op
+    return op == ReduceOp.AVG
+
+
 class _MuxPG(dist.ProcessGroup):
     """Resolves collectives by bookkeeping tensors on disk.
 
@@ -305,8 +326,12 @@ class _MuxPG(dist.ProcessGroup):
     def _next_coll(self):
         cid = self._coll_id
         self._coll_id += 1
-        if cid >= 1:
-            self._cleanup_coll(cid - 1)
+        # Clean up cid-2, not cid-1: by the time rank R starts
+        # collective N, another rank may still be reading output
+        # files from collective N-1. Collective N-2 is safe because
+        # all ranks must have finished N-1 (and thus N-2) to reach N.
+        if cid >= 2:
+            self._cleanup_coll(cid - 2)
         return cid
 
     def _cleanup_coll(self, cid):
@@ -382,12 +407,12 @@ class _MuxPG(dist.ProcessGroup):
                 _save_tensor(self._in_path(cid, self._rank, i), t)
             self._mark_ready(cid)
             if self._all_ready(cid) and self._try_claim_resolver(cid):
-                reduce_fn = _REDUCE_FNS[op]
+                reduce_fn = _get_reduce_fn(op)
                 for i in range(len(tensor_list)):
                     acc = _load_tensor(self._in_path(cid, 0, i)).clone()
                     for r in range(1, self._ws):
                         reduce_fn(acc, _load_tensor(self._in_path(cid, r, i)))
-                    if op == ReduceOp.AVG:
+                    if _is_avg(op):
                         acc.div_(self._ws)
                     for r in range(self._ws):
                         _save_tensor(self._out_path(cid, r, i), acc)
@@ -477,11 +502,11 @@ class _MuxPG(dist.ProcessGroup):
             _save_tensor(self._in_path(cid, self._rank, 0), input)
             self._mark_ready(cid)
             if self._all_ready(cid) and self._try_claim_resolver(cid):
-                reduce_fn = _REDUCE_FNS[op]
+                reduce_fn = _get_reduce_fn(op)
                 acc = _load_tensor(self._in_path(cid, 0, 0)).clone()
                 for r in range(1, self._ws):
                     reduce_fn(acc, _load_tensor(self._in_path(cid, r, 0)))
-                if op == ReduceOp.AVG:
+                if _is_avg(op):
                     acc.div_(self._ws)
                 chunk_size = acc.size(0) // self._ws
                 for r in range(self._ws):
@@ -504,7 +529,7 @@ class _MuxPG(dist.ProcessGroup):
         def _run():
             cid = self._next_coll()
             op = opts.reduceOp if hasattr(opts, "reduceOp") else ReduceOp.SUM
-            reduce_fn = _REDUCE_FNS[op]
+            reduce_fn = _get_reduce_fn(op)
             for i, chunks in enumerate(scatter_list):
                 for r, chunk in enumerate(chunks):
                     _save_tensor(
@@ -527,7 +552,7 @@ class _MuxPG(dist.ProcessGroup):
                                     )
                                 ),
                             )
-                        if op == ReduceOp.AVG:
+                        if _is_avg(op):
                             acc.div_(self._ws)
                         _save_tensor(self._out_path(cid, dst, i), acc)
                 self._mark_done(cid)

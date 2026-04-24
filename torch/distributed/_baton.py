@@ -80,12 +80,19 @@ class CudaBaton:
     def checkpoint(self, pid: int, timeout_ms: int = 30000) -> None:
         """Lock + checkpoint: VRAM is freed, process cannot use CUDA."""
         self.lock(pid, timeout_ms)
-        cuda = _get_cuda()
-        args = _CheckpointArgs()
-        _check(
-            cuda.cuCheckpointProcessCheckpoint(pid, ctypes.byref(args)),
-            "Checkpoint",
-        )
+        try:
+            cuda = _get_cuda()
+            args = _CheckpointArgs()
+            _check(
+                cuda.cuCheckpointProcessCheckpoint(pid, ctypes.byref(args)),
+                "Checkpoint",
+            )
+        except Exception:
+            try:
+                self.unlock(pid)
+            except Exception:
+                pass
+            raise
 
     def restore(self, pid: int) -> None:
         """Restore from last checkpoint (process enters LOCKED state)."""
@@ -113,9 +120,17 @@ class CudaBaton:
             # If unlock fails after a successful restore, the process is
             # stuck in LOCKED state. Re-checkpoint to return it to a known
             # state before propagating.
-            cuda = _get_cuda()
-            args = _CheckpointArgs()
-            cuda.cuCheckpointProcessCheckpoint(pid, ctypes.byref(args))
+            try:
+                cuda = _get_cuda()
+                args = _CheckpointArgs()
+                _check(
+                    cuda.cuCheckpointProcessCheckpoint(pid, ctypes.byref(args)),
+                    "Recovery-Checkpoint",
+                )
+            except RuntimeError as recovery_err:
+                raise RuntimeError(
+                    f"unlock failed and recovery checkpoint also failed: {recovery_err}"
+                ) from recovery_err
             raise
 
     def get_state(self, pid: int) -> int:

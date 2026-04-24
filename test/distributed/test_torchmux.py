@@ -95,13 +95,10 @@ class TestTorchmuxTraceOrdering(TestCase):
     def setUp(self):
         super().setUp()
         self._tmpdir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self._tmpdir, True)
         self._script = os.path.join(self._tmpdir, "train.py")
         with open(self._script, "w") as f:
             f.write(TRAIN_SCRIPT)
-
-    def tearDown(self):
-        shutil.rmtree(self._tmpdir, ignore_errors=True)
-        super().tearDown()
 
     def _run_torchmux(self, nproc, script, env_extra=None):
         trace_dir = os.path.join(self._tmpdir, "traces")
@@ -257,10 +254,7 @@ class TestTorchmuxCollectiveCorrectness(TestCase):
     def setUp(self):
         super().setUp()
         self._tmpdir = tempfile.mkdtemp()
-
-    def tearDown(self):
-        shutil.rmtree(self._tmpdir, ignore_errors=True)
-        super().tearDown()
+        self.addCleanup(shutil.rmtree, self._tmpdir, True)
 
     def test_collective_correctness_2workers(self):
         script_path = os.path.join(self._tmpdir, "correctness.py")
@@ -304,10 +298,7 @@ class TestTorchmuxSyntheticTrace(TestCase):
     def setUp(self):
         super().setUp()
         self._tmpdir = tempfile.mkdtemp()
-
-    def tearDown(self):
-        shutil.rmtree(self._tmpdir, ignore_errors=True)
-        super().tearDown()
+        self.addCleanup(shutil.rmtree, self._tmpdir, True)
 
     def test_synthetic_trace_structure(self):
         from torch.distributed.torchmux_trace import export_synthetic
@@ -388,6 +379,20 @@ class TestTorchmuxSyntheticTrace(TestCase):
         ts_values = sorted(e["ts"] for e in x_events)
         self.assertEqual(ts_values[0], 0)
 
+    def test_empty_events(self):
+        from torch.distributed.torchmux_trace import export_natural, export_synthetic
+
+        path_n = os.path.join(self._tmpdir, "empty_natural.json")
+        path_s = os.path.join(self._tmpdir, "empty_synthetic.json")
+        export_natural({}, path_n, 2)
+        export_synthetic({}, path_s, 2)
+
+        for path in (path_n, path_s):
+            with open(path) as f:
+                trace = json.load(f)
+            x_events = [e for e in trace["traceEvents"] if e.get("ph") == "X"]
+            self.assertEqual(len(x_events), 0)
+
 
 class TestMuxDevice(TestCase):
     def test_cuda_index_remapping(self):
@@ -420,14 +425,35 @@ class TestMuxDevice(TestCase):
         d = _MuxDevice("cpu")
         self.assertIsInstance(d, _OrigDevice)
 
+    def test_cuda_no_index_passthrough(self):
+        from torch.distributed.torchmux import _MuxDevice, _OrigDevice
 
-class TestVNCCL(TestCase):
-    """Tests vnccl collective correctness using direct PG method calls.
+        import torch.distributed.torchmux as tm
+        orig_ngpus = tm._ngpus
+        try:
+            tm._ngpus = 2
+            d = _MuxDevice("cuda")
+            self.assertEqual(d, _OrigDevice("cuda"))
+            self.assertIsNone(d.index)
+        finally:
+            tm._ngpus = orig_ngpus
 
-    Each test creates VNCCLProcessGroup instances directly and runs
-    collective operations from separate threads, bypassing
-    dist.init_process_group to avoid global state conflicts.
-    """
+    def test_remapping_single_gpu(self):
+        from torch.distributed.torchmux import _MuxDevice, _OrigDevice
+
+        import torch.distributed.torchmux as tm
+        orig_ngpus = tm._ngpus
+        try:
+            tm._ngpus = 1
+            for idx in range(8):
+                d = _MuxDevice(f"cuda:{idx}")
+                self.assertEqual(d, _OrigDevice("cuda:0"))
+        finally:
+            tm._ngpus = orig_ngpus
+
+
+class _VNCCLTestBase(TestCase):
+    """Shared base class for vnccl tests with common setup/teardown."""
 
     def setUp(self):
         super().setUp()
@@ -435,21 +461,24 @@ class TestVNCCL(TestCase):
         self._pgs = []
 
     def tearDown(self):
+        import torch.distributed.vnccl as vnccl
         from torch.distributed.vnccl import VNCCLProcessGroup
 
         VNCCLProcessGroup._active.clear()
         for pg in self._pgs:
             dist.distributed_c10d._world.pg_names.pop(pg, None)
         self._pgs = []
+        vnccl._next_rank = 0
+        vnccl._rng_states.clear()
         super().tearDown()
 
-    def _make_pgs(self):
+    def _make_pgs(self, pg_name="vnccl_test"):
         from torch.distributed.vnccl import VNCCLProcessGroup
 
         pgs = []
         for r in range(self._world_size):
             pg = VNCCLProcessGroup(r, self._world_size)
-            dist.distributed_c10d._world.pg_names[pg] = "vnccl_test"
+            dist.distributed_c10d._world.pg_names[pg] = pg_name
             pgs.append(pg)
         self._pgs = pgs
         return pgs
@@ -477,12 +506,127 @@ class TestVNCCL(TestCase):
                 raise RuntimeError(f"rank {r} failed") from e
         return results
 
+
+class TestVNCCL(_VNCCLTestBase):
+    """Tests vnccl collective correctness using direct PG method calls.
+
+    Each test creates VNCCLProcessGroup instances directly and runs
+    collective operations from separate threads, bypassing
+    dist.init_process_group to avoid global state conflicts.
+    """
+
     def test_allreduce_sum(self):
         pgs = self._make_pgs()
 
         def _work(rank, pg):
             t = [torch.full((4,), float(rank + 1))]
             pg.allreduce(t)
+            return t[0]
+
+        results = self._run_on_pgs(pgs, _work)
+        expected = self._world_size * (self._world_size + 1) / 2
+        for r, t in enumerate(results):
+            self.assertEqual(t, torch.full((4,), expected))
+
+    def test_allreduce_avg(self):
+        from torch._C._distributed_c10d import AllreduceOptions, ReduceOp
+
+        pgs = self._make_pgs()
+
+        def _work(rank, pg):
+            t = [torch.full((4,), float(rank + 1))]
+            opts = AllreduceOptions()
+            opts.reduceOp = ReduceOp.AVG
+            pg.allreduce(t, opts)
+            return t[0]
+
+        results = self._run_on_pgs(pgs, _work)
+        expected = (self._world_size + 1) / 2.0
+        for r, t in enumerate(results):
+            self.assertTrue(torch.allclose(t, torch.full((4,), expected)))
+
+    def test_allreduce_product(self):
+        from torch._C._distributed_c10d import AllreduceOptions, ReduceOp
+
+        pgs = self._make_pgs()
+
+        def _work(rank, pg):
+            t = [torch.full((4,), float(rank + 1))]
+            opts = AllreduceOptions()
+            opts.reduceOp = ReduceOp.PRODUCT
+            pg.allreduce(t, opts)
+            return t[0]
+
+        results = self._run_on_pgs(pgs, _work)
+        expected = 1.0
+        for r in range(self._world_size):
+            expected *= r + 1
+        for r, t in enumerate(results):
+            self.assertEqual(t, torch.full((4,), expected))
+
+    def test_allreduce_min(self):
+        from torch._C._distributed_c10d import AllreduceOptions, ReduceOp
+
+        pgs = self._make_pgs()
+
+        def _work(rank, pg):
+            t = [torch.full((4,), float(rank + 1))]
+            opts = AllreduceOptions()
+            opts.reduceOp = ReduceOp.MIN
+            pg.allreduce(t, opts)
+            return t[0]
+
+        results = self._run_on_pgs(pgs, _work)
+        for r, t in enumerate(results):
+            self.assertEqual(t, torch.full((4,), 1.0))
+
+    def test_allreduce_max(self):
+        from torch._C._distributed_c10d import AllreduceOptions, ReduceOp
+
+        pgs = self._make_pgs()
+
+        def _work(rank, pg):
+            t = [torch.full((4,), float(rank + 1))]
+            opts = AllreduceOptions()
+            opts.reduceOp = ReduceOp.MAX
+            pg.allreduce(t, opts)
+            return t[0]
+
+        results = self._run_on_pgs(pgs, _work)
+        for r, t in enumerate(results):
+            self.assertEqual(t, torch.full((4,), float(self._world_size)))
+
+    def test_allreduce_bitwise_ops(self):
+        from torch._C._distributed_c10d import AllreduceOptions, ReduceOp
+
+        pgs = self._make_pgs()
+
+        for op, expected_fn in [
+            (ReduceOp.BAND, lambda vals: vals[0] & vals[1] & vals[2]),
+            (ReduceOp.BOR, lambda vals: vals[0] | vals[1] | vals[2]),
+            (ReduceOp.BXOR, lambda vals: vals[0] ^ vals[1] ^ vals[2]),
+        ]:
+            pgs = self._make_pgs()
+
+            def _work(rank, pg, _op=op):
+                t = [torch.tensor([rank + 1, rank + 10], dtype=torch.int64)]
+                opts = AllreduceOptions()
+                opts.reduceOp = _op
+                pg.allreduce(t, opts)
+                return t[0]
+
+            results = self._run_on_pgs(pgs, _work)
+            vals = [torch.tensor([r + 1, r + 10], dtype=torch.int64) for r in range(self._world_size)]
+            expected = expected_fn(vals)
+            for r, t in enumerate(results):
+                self.assertEqual(t, expected)
+
+    def test_allreduce_coalesced(self):
+        pgs = self._make_pgs()
+
+        def _work(rank, pg):
+            t = [torch.full((4,), float(rank + 1))]
+            pg.allreduce_coalesced(t)
             return t[0]
 
         results = self._run_on_pgs(pgs, _work)
@@ -506,6 +650,22 @@ class TestVNCCL(TestCase):
         for r, t in enumerate(results):
             self.assertEqual(t, torch.full((4,), 99.0))
 
+    def test_broadcast_non_root(self):
+        pgs = self._make_pgs()
+
+        from torch._C._distributed_c10d import BroadcastOptions
+
+        def _work(rank, pg):
+            t = [torch.full((4,), 77.0) if rank == 2 else torch.zeros(4)]
+            opts = BroadcastOptions()
+            opts.rootRank = 2
+            pg.broadcast(t, opts)
+            return t[0]
+
+        results = self._run_on_pgs(pgs, _work)
+        for r, t in enumerate(results):
+            self.assertEqual(t, torch.full((4,), 77.0))
+
     def test_allgather(self):
         pgs = self._make_pgs()
 
@@ -520,16 +680,42 @@ class TestVNCCL(TestCase):
             for src, t in enumerate(gathered):
                 self.assertEqual(t, torch.full((2,), float(src)))
 
-    def test_reduce_scatter(self):
+    def test_allgather_base(self):
         pgs = self._make_pgs()
 
-        from torch._C._distributed_c10d import ReduceScatterOptions
+        def _work(rank, pg):
+            inp = torch.full((2,), float(rank))
+            out = torch.zeros(2 * self._world_size)
+            pg._allgather_base(out, inp)
+            return out
+
+        results = self._run_on_pgs(pgs, _work)
+        expected = torch.cat([torch.full((2,), float(r)) for r in range(self._world_size)])
+        for r, t in enumerate(results):
+            self.assertEqual(t, expected)
+
+    def test_reduce_scatter(self):
+        pgs = self._make_pgs()
 
         def _work(rank, pg):
             chunks = [torch.full((2,), float(rank + 1)) for _ in range(self._world_size)]
             out = [torch.zeros(2)]
             pg.reduce_scatter(out, [chunks])
             return out[0]
+
+        results = self._run_on_pgs(pgs, _work)
+        expected = self._world_size * (self._world_size + 1) / 2
+        for r, t in enumerate(results):
+            self.assertEqual(t, torch.full((2,), expected))
+
+    def test_reduce_scatter_base(self):
+        pgs = self._make_pgs()
+
+        def _work(rank, pg):
+            inp = torch.full((2 * self._world_size,), float(rank + 1))
+            out = torch.zeros(2)
+            pg._reduce_scatter_base(out, inp)
+            return out
 
         results = self._run_on_pgs(pgs, _work)
         expected = self._world_size * (self._world_size + 1) / 2
@@ -620,16 +806,223 @@ class TestVNCCL(TestCase):
         for r, t in enumerate(results):
             self.assertEqual(t, torch.full((4,), expected))
 
+    def test_multiple_collectives_in_sequence(self):
+        pgs = self._make_pgs()
+
+        def _work(rank, pg):
+            results = []
+            for i in range(5):
+                t = [torch.full((4,), float(rank + i))]
+                pg.allreduce(t)
+                results.append(t[0].clone())
+            return results
+
+        results = self._run_on_pgs(pgs, _work)
+        for i in range(5):
+            expected = sum(r + i for r in range(self._world_size))
+            for r in range(self._world_size):
+                self.assertEqual(
+                    results[r][i],
+                    torch.full((4,), float(expected)),
+                )
+
+    def test_single_element_tensor(self):
+        pgs = self._make_pgs()
+
+        def _work(rank, pg):
+            t = [torch.tensor([float(rank + 1)])]
+            pg.allreduce(t)
+            return t[0]
+
+        results = self._run_on_pgs(pgs, _work)
+        expected = self._world_size * (self._world_size + 1) / 2
+        for r, t in enumerate(results):
+            self.assertEqual(t, torch.tensor([expected]))
+
+    def test_float64_dtype(self):
+        pgs = self._make_pgs()
+
+        def _work(rank, pg):
+            t = [torch.full((4,), float(rank + 1), dtype=torch.float64)]
+            pg.allreduce(t)
+            return t[0]
+
+        results = self._run_on_pgs(pgs, _work)
+        expected = self._world_size * (self._world_size + 1) / 2
+        for r, t in enumerate(results):
+            self.assertEqual(t.dtype, torch.float64)
+            self.assertEqual(t, torch.full((4,), expected, dtype=torch.float64))
+
+    def test_int_dtype_with_sum(self):
+        pgs = self._make_pgs()
+
+        def _work(rank, pg):
+            t = [torch.full((4,), rank + 1, dtype=torch.int64)]
+            pg.allreduce(t)
+            return t[0]
+
+        results = self._run_on_pgs(pgs, _work)
+        expected = self._world_size * (self._world_size + 1) // 2
+        for r, t in enumerate(results):
+            self.assertEqual(t.dtype, torch.int64)
+            self.assertEqual(t, torch.full((4,), expected, dtype=torch.int64))
+
+    def test_world_size_2(self):
+        self._world_size = 2
+        pgs = self._make_pgs()
+
+        def _work(rank, pg):
+            t = [torch.full((4,), float(rank + 1))]
+            pg.allreduce(t)
+            return t[0]
+
+        results = self._run_on_pgs(pgs, _work)
+        expected = 3.0
+        for r, t in enumerate(results):
+            self.assertEqual(t, torch.full((4,), expected))
+
+
+class TestVNCCLReduceScatterOps(_VNCCLTestBase):
+    """Verify vnccl reduce_scatter works with non-SUM reduce ops."""
+
+    def test_reduce_scatter_product(self):
+        from torch._C._distributed_c10d import ReduceOp, ReduceScatterOptions
+
+        pgs = self._make_pgs()
+
+        def _work(rank, pg):
+            chunks = [torch.full((2,), float(rank + 1)) for _ in range(self._world_size)]
+            out = [torch.zeros(2)]
+            opts = ReduceScatterOptions()
+            opts.reduceOp = ReduceOp.PRODUCT
+            pg.reduce_scatter(out, [chunks], opts)
+            return out[0]
+
+        results = self._run_on_pgs(pgs, _work)
+        expected = 1.0
+        for r in range(self._world_size):
+            expected *= r + 1
+        for r, t in enumerate(results):
+            self.assertEqual(t, torch.full((2,), expected))
+
+    def test_reduce_scatter_max(self):
+        from torch._C._distributed_c10d import ReduceOp, ReduceScatterOptions
+
+        pgs = self._make_pgs()
+
+        def _work(rank, pg):
+            chunks = [torch.full((2,), float(rank + 1)) for _ in range(self._world_size)]
+            out = [torch.zeros(2)]
+            opts = ReduceScatterOptions()
+            opts.reduceOp = ReduceOp.MAX
+            pg.reduce_scatter(out, [chunks], opts)
+            return out[0]
+
+        results = self._run_on_pgs(pgs, _work)
+        expected = float(self._world_size)
+        for r, t in enumerate(results):
+            self.assertEqual(t, torch.full((2,), expected))
+
+    def test_reduce_scatter_min(self):
+        from torch._C._distributed_c10d import ReduceOp, ReduceScatterOptions
+
+        pgs = self._make_pgs()
+
+        def _work(rank, pg):
+            chunks = [torch.full((2,), float(rank + 1)) for _ in range(self._world_size)]
+            out = [torch.zeros(2)]
+            opts = ReduceScatterOptions()
+            opts.reduceOp = ReduceOp.MIN
+            pg.reduce_scatter(out, [chunks], opts)
+            return out[0]
+
+        results = self._run_on_pgs(pgs, _work)
+        for r, t in enumerate(results):
+            self.assertEqual(t, torch.full((2,), 1.0))
+
+    def test_reduce_scatter_avg(self):
+        from torch._C._distributed_c10d import ReduceOp, ReduceScatterOptions
+
+        pgs = self._make_pgs()
+
+        def _work(rank, pg):
+            chunks = [torch.full((2,), float(rank + 1)) for _ in range(self._world_size)]
+            out = [torch.zeros(2)]
+            opts = ReduceScatterOptions()
+            opts.reduceOp = ReduceOp.AVG
+            pg.reduce_scatter(out, [chunks], opts)
+            return out[0]
+
+        results = self._run_on_pgs(pgs, _work)
+        expected = (self._world_size + 1) / 2.0
+        for r, t in enumerate(results):
+            self.assertTrue(torch.allclose(t, torch.full((2,), expected)))
+
+
+class TestMuxPGNotImplemented(TestCase):
+    def test_scatter_raises(self):
+        from torch.distributed.torchmux import _MuxPG
+
+        pg = _MuxPG(0, 2)
+        with self.assertRaisesRegex(NotImplementedError, "_MuxPG.scatter"):
+            pg.scatter(None, None)
+
+    def test_gather_raises(self):
+        from torch.distributed.torchmux import _MuxPG
+
+        pg = _MuxPG(0, 2)
+        with self.assertRaisesRegex(NotImplementedError, "_MuxPG.gather"):
+            pg.gather(None, None)
+
+    def test_alltoall_raises(self):
+        from torch.distributed.torchmux import _MuxPG
+
+        pg = _MuxPG(0, 2)
+        with self.assertRaisesRegex(NotImplementedError, "_MuxPG.alltoall"):
+            pg.alltoall(None, None)
+
+
+class TestSharedInt(TestCase):
+    def test_basic_read_write(self):
+        from torch.distributed.torchmux import _SharedInt
+
+        si = _SharedInt()
+        self.addCleanup(si.cleanup)
+        self.assertEqual(si.value, 0)
+        si.value = 42
+        self.assertEqual(si.value, 42)
+        si.value = -1
+        self.assertEqual(si.value, -1)
+
+    def test_pickle_roundtrip(self):
+        import pickle
+
+        from torch.distributed.torchmux import _SharedInt
+
+        si = _SharedInt()
+        self.addCleanup(si.cleanup)
+        si.value = 123
+
+        data = pickle.dumps(si)
+        si2 = pickle.loads(data)
+        self.assertEqual(si2.value, 123)
+        si2.value = 456
+        self.assertEqual(si.value, 456)
+
+    def test_cleanup_then_del_no_error(self):
+        from torch.distributed.torchmux import _SharedInt
+
+        si = _SharedInt()
+        si.cleanup()
+        del si
+
 
 @unittest.skipIf(not torch.cuda.is_available(), "CUDA not available")
 class TestTorchmuxSingleWorker(TestCase):
     def setUp(self):
         super().setUp()
         self._tmpdir = tempfile.mkdtemp()
-
-    def tearDown(self):
-        shutil.rmtree(self._tmpdir, ignore_errors=True)
-        super().tearDown()
+        self.addCleanup(shutil.rmtree, self._tmpdir, True)
 
     def test_nproc_1(self):
         script = os.path.join(self._tmpdir, "single.py")
@@ -673,10 +1066,7 @@ class TestTorchmuxErrorHandling(TestCase):
     def setUp(self):
         super().setUp()
         self._tmpdir = tempfile.mkdtemp()
-
-    def tearDown(self):
-        shutil.rmtree(self._tmpdir, ignore_errors=True)
-        super().tearDown()
+        self.addCleanup(shutil.rmtree, self._tmpdir, True)
 
     def test_worker_crash_propagates(self):
         script = os.path.join(self._tmpdir, "crash.py")
@@ -703,96 +1093,6 @@ class TestTorchmuxErrorHandling(TestCase):
             timeout=120,
         )
         self.assertNotEqual(result.returncode, 0)
-
-
-class TestTorchmuxVNCCLReduceScatterOps(TestCase):
-    """Verify vnccl reduce_scatter works with non-SUM reduce ops."""
-
-    def setUp(self):
-        super().setUp()
-        self._world_size = 3
-        self._pgs = []
-
-    def tearDown(self):
-        from torch.distributed.vnccl import VNCCLProcessGroup
-
-        VNCCLProcessGroup._active.clear()
-        for pg in self._pgs:
-            dist.distributed_c10d._world.pg_names.pop(pg, None)
-        self._pgs = []
-        super().tearDown()
-
-    def _make_pgs(self):
-        from torch.distributed.vnccl import VNCCLProcessGroup
-
-        pgs = []
-        for r in range(self._world_size):
-            pg = VNCCLProcessGroup(r, self._world_size)
-            dist.distributed_c10d._world.pg_names[pg] = "vnccl_rs_test"
-            pgs.append(pg)
-        self._pgs = pgs
-        return pgs
-
-    def _run_on_pgs(self, pgs, fn):
-        results = [None] * self._world_size
-        errors = [None] * self._world_size
-
-        def _worker(rank):
-            try:
-                results[rank] = fn(rank, pgs[rank])
-            except Exception as e:
-                errors[rank] = e
-
-        threads = [
-            threading.Thread(target=_worker, args=(r,))
-            for r in range(self._world_size)
-        ]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join(timeout=30)
-        for r, e in enumerate(errors):
-            if e is not None:
-                raise RuntimeError(f"rank {r} failed") from e
-        return results
-
-    def test_reduce_scatter_product(self):
-        from torch._C._distributed_c10d import ReduceOp, ReduceScatterOptions
-
-        pgs = self._make_pgs()
-
-        def _work(rank, pg):
-            chunks = [torch.full((2,), float(rank + 1)) for _ in range(self._world_size)]
-            out = [torch.zeros(2)]
-            opts = ReduceScatterOptions()
-            opts.reduceOp = ReduceOp.PRODUCT
-            pg.reduce_scatter(out, [chunks], opts)
-            return out[0]
-
-        results = self._run_on_pgs(pgs, _work)
-        expected = 1.0
-        for r in range(self._world_size):
-            expected *= r + 1
-        for r, t in enumerate(results):
-            self.assertEqual(t, torch.full((2,), expected))
-
-    def test_reduce_scatter_max(self):
-        from torch._C._distributed_c10d import ReduceOp, ReduceScatterOptions
-
-        pgs = self._make_pgs()
-
-        def _work(rank, pg):
-            chunks = [torch.full((2,), float(rank + 1)) for _ in range(self._world_size)]
-            out = [torch.zeros(2)]
-            opts = ReduceScatterOptions()
-            opts.reduceOp = ReduceOp.MAX
-            pg.reduce_scatter(out, [chunks], opts)
-            return out[0]
-
-        results = self._run_on_pgs(pgs, _work)
-        expected = float(self._world_size)
-        for r, t in enumerate(results):
-            self.assertEqual(t, torch.full((2,), expected))
 
 
 if __name__ == "__main__":
