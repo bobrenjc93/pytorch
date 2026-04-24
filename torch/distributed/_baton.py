@@ -116,25 +116,7 @@ class CudaBaton:
     def restore_and_unlock(self, pid: int) -> None:
         """Restore + unlock: process can resume CUDA calls."""
         self.restore(pid)
-        try:
-            self.unlock(pid)
-        except Exception as unlock_err:
-            # If unlock fails after a successful restore, the process is
-            # stuck in LOCKED state. Re-checkpoint to return it to a known
-            # state before propagating.
-            try:
-                cuda = _get_cuda()
-                args = _CheckpointArgs()
-                _check(
-                    cuda.cuCheckpointProcessCheckpoint(pid, ctypes.byref(args)),
-                    "Recovery-Checkpoint",
-                )
-            except Exception as recovery_err:
-                raise RuntimeError(
-                    f"unlock failed ({unlock_err}) and recovery checkpoint "
-                    f"also failed: {recovery_err}"
-                ) from unlock_err
-            raise
+        self.unlock(pid)
 
     def get_state(self, pid: int) -> int:
         cuda = _get_cuda()

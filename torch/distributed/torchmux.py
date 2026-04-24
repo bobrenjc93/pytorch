@@ -88,7 +88,6 @@ class _SharedInt:
     def value(self, v):
         self._mm.seek(0)
         self._mm.write(struct.pack("i", v))
-        self._mm.flush()
 
     def __del__(self):
         try:
@@ -103,11 +102,18 @@ class _SharedInt:
             pass
 
     def cleanup(self):
-        self._mm.close()
-        self._mm = None
-        self._fd.close()
-        self._fd = None
-        os.unlink(self._path)
+        if self._mm is not None:
+            self._mm.close()
+            self._mm = None
+        if self._fd is not None:
+            self._fd.close()
+            self._fd = None
+        if self._path is not None:
+            try:
+                os.unlink(self._path)
+            except FileNotFoundError:
+                pass
+            self._path = None
 
     def __getstate__(self):
         return self._path
@@ -219,8 +225,14 @@ def _yield_and_wait(check_fn):
         return
     if _held:
         _release()
+    deadline = time.monotonic() + _ACQUIRE_TIMEOUT_S
     delay = 1e-5
     while not check_fn():
+        if time.monotonic() > deadline:
+            raise RuntimeError(
+                f"rank {_rank}: timed out waiting for collective to resolve "
+                f"after {_ACQUIRE_TIMEOUT_S}s (likely a worker crash)"
+            )
         time.sleep(delay)
         delay = min(delay * 2, 1e-2)
     _acquire()
@@ -673,10 +685,6 @@ def _worker(
     torch.device = _MuxDevice
     _orig_cuda_set_device = torch.cuda.set_device
     torch.cuda.set_device = lambda *a, **kw: _orig_cuda_set_device(rank % ngpus)
-
-    import ctypes
-
-    ctypes.CDLL("libcuda.so.1").cuInit(0)
 
     from torch.distributed._baton import CudaBaton
 

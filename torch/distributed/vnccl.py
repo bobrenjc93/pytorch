@@ -40,6 +40,9 @@ _exec_lock_holder = threading.local()
 
 # Deterministic rank ordering. After a collective resolves, rank 0
 # runs first, then 1, 2, ..., producing a clean staircase in traces.
+# NB: this is module-global, so it is only safe when a single process
+# group is active at a time (the torchmux use case). Multiple concurrent
+# groups would need per-group ordering state.
 _next_rank = 0
 _next_rank_cond = threading.Condition()
 
@@ -364,7 +367,13 @@ class VNCCLProcessGroup(dist.ProcessGroup):
 
     @property
     def pg_name(self):
-        return self._world().pg_names[self]
+        world = self._world()
+        if world is None:
+            raise RuntimeError(
+                "vnccl: distributed world has been destroyed; "
+                "cannot use process group after teardown"
+            )
+        return world.pg_names[self]
 
     @property
     def group_name(self):
@@ -395,6 +404,9 @@ class VNCCLProcessGroup(dist.ProcessGroup):
         return self.allgather([chunks], [input], opts)
 
     def allgather_into_tensor_coalesced(self, outputs, inputs, opts=AllgatherOptions()):
+        # Each tensor pair is a separate collective barrier rather than a
+        # single batched operation. Correct but not performance-equivalent
+        # to real NCCL's coalesced implementation.
         res = None
         for o, i in zip(outputs, inputs):
             res = self._allgather_base(o, i)
@@ -416,6 +428,9 @@ class VNCCLProcessGroup(dist.ProcessGroup):
     def reduce_scatter_tensor_coalesced(
         self, outputs, inputs, opts=ReduceScatterOptions()
     ):
+        # Each tensor pair is a separate collective barrier rather than a
+        # single batched operation. Correct but not performance-equivalent
+        # to real NCCL's coalesced implementation.
         works = [self._reduce_scatter_base(o, i, opts) for o, i in zip(outputs, inputs)]
         for w in works[:-1]:
             w.wait()
