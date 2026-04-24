@@ -2,8 +2,8 @@
 torchmux: Simulate N-GPU distributed training on M GPUs (M ≤ N).
 
 Usage:
-    python -m torch.distributed.torchmux --nproc 8 train.py [args...]
-    python -m torch.distributed.torchmux --nproc 8 --ngpus 2 train.py [args...]
+    python -m torch.distributed.torchmux --nproc-per-node 8 train.py [args...]
+    python -m torch.distributed.torchmux --nproc-per-node 8 --ngpus 2 train.py [args...]
 
 Launches N worker processes mapped round-robin onto M physical GPUs.
 Workers execute cooperatively: only one runs per GPU at a time, yielding
@@ -640,13 +640,61 @@ def _worker(
 # ---- Entry point ----
 
 
+def _print_timing_summary(events_by_rank):
+    header = f"{'Worker':>8} {'Wall(s)':>9} {'Compute%':>9} {'Snap%':>9} {'Restore%':>9} {'Overhead%':>9}"
+    print(f"\ntorchmux: timing overview\n{header}", flush=True)
+
+    sum_wall = 0
+    sum_compute = 0
+    sum_snap = 0
+    sum_restore = 0
+
+    for r in sorted(events_by_rank):
+        evts = events_by_rank[r]
+        wall = max(s + d for _, _, s, d in evts) - min(s for _, _, s, d in evts)
+        compute = sum(d for cat, _, _, d in evts if cat == "compute")
+        snap = sum(d for _, name, _, d in evts if name == "snapshot")
+        restore = sum(d for _, name, _, d in evts if name == "restore")
+        overhead = snap + restore
+
+        sum_wall += wall
+        sum_compute += compute
+        sum_snap += snap
+        sum_restore += restore
+
+        print(
+            f"{'R' + str(r):>8} {wall / 1e6:>8.1f}s"
+            f" {compute / wall * 100:>8.1f}%"
+            f" {snap / wall * 100:>8.1f}%"
+            f" {restore / wall * 100:>8.1f}%"
+            f" {overhead / wall * 100:>8.1f}%",
+            flush=True,
+        )
+
+    if len(events_by_rank) > 1:
+        avg_wall = sum_wall / len(events_by_rank)
+        print(
+            f"{'Avg':>8} {avg_wall / 1e6:>8.1f}s"
+            f" {sum_compute / sum_wall * 100:>8.1f}%"
+            f" {sum_snap / sum_wall * 100:>8.1f}%"
+            f" {sum_restore / sum_wall * 100:>8.1f}%"
+            f" {(sum_snap + sum_restore) / sum_wall * 100:>8.1f}%",
+            flush=True,
+        )
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog="torchmux",
         description="Simulate N-GPU distributed training on M GPUs",
     )
     parser.add_argument(
-        "--nproc", type=int, required=True, help="Number of simulated workers"
+        "--nproc-per-node",
+        "--nproc_per_node",
+        type=int,
+        required=True,
+        dest="nproc_per_node",
+        help="Number of simulated workers",
     )
     parser.add_argument(
         "--ngpus",
@@ -655,13 +703,17 @@ def main():
         help="Number of physical GPUs (default 1)",
     )
     parser.add_argument(
-        "-m", action="store_true", dest="module", help="Run script as a Python module"
+        "-m",
+        "--module",
+        action="store_true",
+        dest="module",
+        help="Run script as a Python module",
     )
-    parser.add_argument("script", help="Training script or module name")
-    parser.add_argument("script_args", nargs=argparse.REMAINDER)
+    parser.add_argument("training_script", help="Training script or module name")
+    parser.add_argument("training_script_args", nargs=argparse.REMAINDER)
     args = parser.parse_args()
 
-    nproc = args.nproc
+    nproc = args.nproc_per_node
     ngpus = args.ngpus
     assert nproc >= 1
     assert ngpus >= 1
@@ -676,7 +728,7 @@ def main():
 
     gpu_desc = "GPU 0" if ngpus == 1 else f"{ngpus} GPUs"
     print(
-        f"torchmux: {nproc} workers on {gpu_desc}, script={args.script}",
+        f"torchmux: {nproc} workers on {gpu_desc}, script={args.training_script}",
         flush=True,
     )
 
@@ -689,8 +741,8 @@ def main():
                 sched,
                 port,
                 coll_dir,
-                args.script,
-                args.script_args,
+                args.training_script,
+                args.training_script_args,
                 args.module,
             ),
             nprocs=nproc,
@@ -722,6 +774,8 @@ def main():
                 f"torchmux: traces written to {natural_path} and {synthetic_path}",
                 flush=True,
             )
+
+            _print_timing_summary(events_by_rank)
 
         sched.cleanup()
         shutil.rmtree(coll_dir, ignore_errors=True)
