@@ -25,7 +25,14 @@ _cuda = None
 def _get_cuda():
     global _cuda
     if _cuda is None:
-        _cuda = ctypes.CDLL("libcuda.so.1")
+        try:
+            _cuda = ctypes.CDLL("libcuda.so.1")
+        except OSError as e:
+            raise RuntimeError(
+                "torchmux requires the CUDA driver library (libcuda.so.1). "
+                "Ensure CUDA drivers are installed and libcuda.so.1 is on "
+                "the library search path."
+            ) from e
     return _cuda
 
 
@@ -100,7 +107,16 @@ class CudaBaton:
     def restore_and_unlock(self, pid: int) -> None:
         """Restore + unlock: process can resume CUDA calls."""
         self.restore(pid)
-        self.unlock(pid)
+        try:
+            self.unlock(pid)
+        except RuntimeError:
+            # If unlock fails after a successful restore, the process is
+            # stuck in LOCKED state. Re-checkpoint to return it to a known
+            # state before propagating.
+            cuda = _get_cuda()
+            args = _CheckpointArgs()
+            cuda.cuCheckpointProcessCheckpoint(pid, ctypes.byref(args))
+            raise
 
     def get_state(self, pid: int) -> int:
         cuda = _get_cuda()

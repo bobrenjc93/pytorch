@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import unittest
 
 import torch
 import torch.distributed as dist
@@ -88,11 +89,10 @@ with open(output_path, "w") as f:
 """
 
 
+@unittest.skipIf(not torch.cuda.is_available(), "CUDA not available")
 class TestTorchmuxTraceOrdering(TestCase):
     def setUp(self):
         super().setUp()
-        if not torch.cuda.is_available():
-            self.skipTest("CUDA not available")
         self._tmpdir = tempfile.mkdtemp()
         self._script = os.path.join(self._tmpdir, "train.py")
         with open(self._script, "w") as f:
@@ -251,11 +251,10 @@ class TestTorchmuxTraceOrdering(TestCase):
             )
 
 
+@unittest.skipIf(not torch.cuda.is_available(), "CUDA not available")
 class TestTorchmuxCollectiveCorrectness(TestCase):
     def setUp(self):
         super().setUp()
-        if not torch.cuda.is_available():
-            self.skipTest("CUDA not available")
         self._tmpdir = tempfile.mkdtemp()
 
     def tearDown(self):
@@ -605,6 +604,67 @@ class TestVNCCL(TestCase):
         results = self._run_on_pgs(pgs, _work)
         for r, v in enumerate(results):
             self.assertTrue(v, f"rank {r}: barrier failed")
+
+    @unittest.skipIf(not torch.cuda.is_available(), "CUDA not available")
+    def test_allreduce_cuda(self):
+        pgs = self._make_pgs()
+
+        def _work(rank, pg):
+            t = [torch.full((4,), float(rank + 1), device="cuda")]
+            pg.allreduce(t)
+            return t[0].cpu()
+
+        results = self._run_on_pgs(pgs, _work)
+        expected = self._world_size * (self._world_size + 1) / 2
+        for r, t in enumerate(results):
+            self.assertEqual(t, torch.full((4,), expected))
+
+
+@unittest.skipIf(not torch.cuda.is_available(), "CUDA not available")
+class TestTorchmuxSingleWorker(TestCase):
+    def setUp(self):
+        super().setUp()
+        self._tmpdir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self._tmpdir, ignore_errors=True)
+        super().tearDown()
+
+    def test_nproc_1(self):
+        script = os.path.join(self._tmpdir, "single.py")
+        with open(script, "w") as f:
+            f.write(
+                "import os, torch, torch.distributed as dist\n"
+                "dist.init_process_group()\n"
+                "assert dist.get_rank() == 0\n"
+                "assert dist.get_world_size() == 1\n"
+                "device = f\"cuda:{0 % int(os.environ.get('TORCHMUX_NGPUS', '1'))}\"\n"
+                "torch.cuda.set_device(device)\n"
+                "x = torch.ones(4, device=device)\n"
+                "dist.all_reduce(x)\n"
+                "assert torch.allclose(x, torch.ones(4, device=device))\n"
+                "dist.destroy_process_group()\n"
+            )
+        trace_dir = os.path.join(self._tmpdir, "traces")
+        os.makedirs(trace_dir)
+        env = os.environ.copy()
+        env["TORCHMUX_TRACE_DIR"] = trace_dir
+        env["TORCHMUX_NGPUS"] = "1"
+        result = subprocess.run(
+            [
+                sys.executable, "-m", "torch.distributed.torchmux",
+                "--nproc-per-node", "1", script,
+            ],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        self.assertEqual(
+            result.returncode, 0,
+            f"torchmux nproc=1 failed (rc={result.returncode}):\n"
+            f"stdout: {result.stdout}\nstderr: {result.stderr}",
+        )
 
 
 if __name__ == "__main__":

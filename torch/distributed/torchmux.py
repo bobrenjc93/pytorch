@@ -16,6 +16,12 @@ Produces two chrome://tracing traces (set TORCHMUX_TRACE_DIR, default
 /tmp): a natural trace showing actual serial execution with
 snapshot/restore overhead, and a synthetic trace reconstructing what
 parallel execution would look like.
+
+Note: each worker process monkeypatches torch.device and
+torch.cuda.set_device to transparently remap virtual CUDA device
+indices (e.g. cuda:5) onto physical GPUs (e.g. cuda:1 when ngpus=2).
+This only affects Python-level constructor calls within the worker;
+C++ internals are unaffected.
 """
 
 import argparse
@@ -278,6 +284,9 @@ class _MuxPG(dist.ProcessGroup):
     load the collective result.
     """
 
+    # Per-process counter (not globally unique). Each forked worker gets
+    # its own copy, but that's fine: collective data paths include both
+    # pg_id and rank, so there are no cross-process collisions.
     _next_pg_id = 0
 
     def __init__(self, rank, world_size):
@@ -296,8 +305,11 @@ class _MuxPG(dist.ProcessGroup):
     def _ready_path(self, cid, rank):
         return _coll_path(self._pg_id, cid, f"ready_{rank}")
 
-    def _resolved_path(self, cid):
-        return _coll_path(self._pg_id, cid, "resolved")
+    def _claim_path(self, cid):
+        return _coll_path(self._pg_id, cid, "claimed")
+
+    def _done_path(self, cid):
+        return _coll_path(self._pg_id, cid, "done")
 
     def _mark_ready(self, cid):
         p = self._ready_path(cid, self._rank)
@@ -307,14 +319,30 @@ class _MuxPG(dist.ProcessGroup):
     def _all_ready(self, cid):
         return all(os.path.exists(self._ready_path(cid, r)) for r in range(self._ws))
 
-    def _is_resolved(self, cid):
-        return os.path.exists(self._resolved_path(cid))
+    def _try_claim_resolver(self, cid):
+        """Atomically claim the resolver role for collective cid.
 
-    def _mark_resolved(self, cid):
-        open(self._resolved_path(cid), "w").close()
+        Uses O_CREAT|O_EXCL so exactly one process wins the race when
+        multiple processes see _all_ready() == True simultaneously.
+        Returns True for the winner, False for losers.
+        """
+        p = self._claim_path(cid)
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        try:
+            fd = os.open(p, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            os.close(fd)
+            return True
+        except FileExistsError:
+            return False
 
-    def _wait_for_resolved(self, cid):
-        _yield_and_wait(lambda: self._is_resolved(cid))
+    def _mark_done(self, cid):
+        open(self._done_path(cid), "w").close()
+
+    def _is_done(self, cid):
+        return os.path.exists(self._done_path(cid))
+
+    def _wait_for_done(self, cid):
+        _yield_and_wait(lambda: self._is_done(cid))
 
     def _in_path(self, cid, rank, idx):
         return _coll_path(self._pg_id, cid, f"in_r{rank}_t{idx}.pt")
@@ -342,7 +370,7 @@ class _MuxPG(dist.ProcessGroup):
             for i, t in enumerate(tensor_list):
                 _save_tensor(self._in_path(cid, self._rank, i), t)
             self._mark_ready(cid)
-            if self._all_ready(cid):
+            if self._all_ready(cid) and self._try_claim_resolver(cid):
                 reduce_fn = _REDUCE_FNS[op]
                 for i in range(len(tensor_list)):
                     acc = _load_tensor(self._in_path(cid, 0, i)).clone()
@@ -352,9 +380,9 @@ class _MuxPG(dist.ProcessGroup):
                         acc.div_(self._ws)
                     for r in range(self._ws):
                         _save_tensor(self._out_path(cid, r, i), acc)
-                self._mark_resolved(cid)
+                self._mark_done(cid)
             else:
-                self._wait_for_resolved(cid)
+                self._wait_for_done(cid)
             for i, t in enumerate(tensor_list):
                 t.copy_(_load_tensor(self._out_path(cid, self._rank, i)).to(t.device))
             return _completed_work()
@@ -374,10 +402,10 @@ class _MuxPG(dist.ProcessGroup):
                 for i, t in enumerate(tensor_list):
                     _save_tensor(self._in_path(cid, root, i), t)
             self._mark_ready(cid)
-            if self._all_ready(cid):
-                self._mark_resolved(cid)
+            if self._all_ready(cid) and self._try_claim_resolver(cid):
+                self._mark_done(cid)
             else:
-                self._wait_for_resolved(cid)
+                self._wait_for_done(cid)
             if self._rank != root:
                 for i, t in enumerate(tensor_list):
                     t.copy_(_load_tensor(self._in_path(cid, root, i)).to(t.device))
@@ -392,10 +420,10 @@ class _MuxPG(dist.ProcessGroup):
             for i, t in enumerate(input_tensor):
                 _save_tensor(self._in_path(cid, self._rank, i), t)
             self._mark_ready(cid)
-            if self._all_ready(cid):
-                self._mark_resolved(cid)
+            if self._all_ready(cid) and self._try_claim_resolver(cid):
+                self._mark_done(cid)
             else:
-                self._wait_for_resolved(cid)
+                self._wait_for_done(cid)
             for i, out_list in enumerate(output_tensors):
                 for r in range(self._ws):
                     out_list[r].copy_(
@@ -411,14 +439,14 @@ class _MuxPG(dist.ProcessGroup):
             cid = self._next_coll()
             _save_tensor(self._in_path(cid, self._rank, 0), input)
             self._mark_ready(cid)
-            if self._all_ready(cid):
+            if self._all_ready(cid) and self._try_claim_resolver(cid):
                 chunks = [
                     _load_tensor(self._in_path(cid, r, 0)) for r in range(self._ws)
                 ]
                 _save_tensor(self._out_path(cid, 0, 0), torch.cat(chunks, dim=0))
-                self._mark_resolved(cid)
+                self._mark_done(cid)
             else:
-                self._wait_for_resolved(cid)
+                self._wait_for_done(cid)
             output.copy_(_load_tensor(self._out_path(cid, 0, 0)).to(output.device))
             return _completed_work()
 
@@ -437,7 +465,7 @@ class _MuxPG(dist.ProcessGroup):
             op = opts.reduceOp if hasattr(opts, "reduceOp") else ReduceOp.SUM
             _save_tensor(self._in_path(cid, self._rank, 0), input)
             self._mark_ready(cid)
-            if self._all_ready(cid):
+            if self._all_ready(cid) and self._try_claim_resolver(cid):
                 reduce_fn = _REDUCE_FNS[op]
                 acc = _load_tensor(self._in_path(cid, 0, 0)).clone()
                 for r in range(1, self._ws):
@@ -450,9 +478,9 @@ class _MuxPG(dist.ProcessGroup):
                         self._out_path(cid, r, 0),
                         acc[r * chunk_size : (r + 1) * chunk_size].contiguous(),
                     )
-                self._mark_resolved(cid)
+                self._mark_done(cid)
             else:
-                self._wait_for_resolved(cid)
+                self._wait_for_done(cid)
             output.copy_(
                 _load_tensor(self._out_path(cid, self._rank, 0)).to(output.device)
             )
@@ -473,7 +501,7 @@ class _MuxPG(dist.ProcessGroup):
                         chunk,
                     )
             self._mark_ready(cid)
-            if self._all_ready(cid):
+            if self._all_ready(cid) and self._try_claim_resolver(cid):
                 for dst in range(self._ws):
                     for i in range(len(output_tensor)):
                         acc = _load_tensor(
@@ -491,9 +519,9 @@ class _MuxPG(dist.ProcessGroup):
                         if op == ReduceOp.AVG:
                             acc.div_(self._ws)
                         _save_tensor(self._out_path(cid, dst, i), acc)
-                self._mark_resolved(cid)
+                self._mark_done(cid)
             else:
-                self._wait_for_resolved(cid)
+                self._wait_for_done(cid)
             for i, t in enumerate(output_tensor):
                 t.copy_(_load_tensor(self._out_path(cid, self._rank, i)).to(t.device))
             return _completed_work()
@@ -525,10 +553,10 @@ class _MuxPG(dist.ProcessGroup):
         def _run():
             cid = self._next_coll()
             self._mark_ready(cid)
-            if not self._all_ready(cid):
-                self._wait_for_resolved(cid)
+            if not self._all_ready(cid) or not self._try_claim_resolver(cid):
+                self._wait_for_done(cid)
             else:
-                self._mark_resolved(cid)
+                self._mark_done(cid)
             return _completed_work()
 
         return self._do_collective("barrier", _run)
