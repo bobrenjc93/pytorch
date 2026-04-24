@@ -33,6 +33,31 @@ def _get_cuda():
                 "Ensure CUDA drivers are installed and libcuda.so.1 is on "
                 "the library search path."
             ) from e
+
+        _ptr = ctypes.POINTER
+        _c_int = ctypes.c_int
+
+        lib.cuInit.restype = _c_int
+        lib.cuInit.argtypes = [ctypes.c_uint]
+
+        lib.cuGetErrorString.restype = _c_int
+        lib.cuGetErrorString.argtypes = [_c_int, _ptr(ctypes.c_char_p)]
+
+        lib.cuCheckpointProcessLock.restype = _c_int
+        lib.cuCheckpointProcessLock.argtypes = [_c_int, _ptr(_LockArgs)]
+
+        lib.cuCheckpointProcessCheckpoint.restype = _c_int
+        lib.cuCheckpointProcessCheckpoint.argtypes = [_c_int, _ptr(_CheckpointArgs)]
+
+        lib.cuCheckpointProcessRestore.restype = _c_int
+        lib.cuCheckpointProcessRestore.argtypes = [_c_int, _ptr(_RestoreArgs)]
+
+        lib.cuCheckpointProcessUnlock.restype = _c_int
+        lib.cuCheckpointProcessUnlock.argtypes = [_c_int, _ptr(_UnlockArgs)]
+
+        lib.cuCheckpointProcessGetState.restype = _c_int
+        lib.cuCheckpointProcessGetState.argtypes = [_c_int, _ptr(_c_int)]
+
         lib.cuInit(0)
         _cuda = lib
     return _cuda

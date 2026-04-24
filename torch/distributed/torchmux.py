@@ -428,13 +428,12 @@ class _MuxPG(dist.ProcessGroup):
                         reduce_fn(acc, _load_tensor(self._in_path(cid, r, i)))
                     if _is_avg(op):
                         acc.div_(self._ws)
-                    for r in range(self._ws):
-                        _save_tensor(self._out_path(cid, r, i), acc)
+                    _save_tensor(self._out_path(cid, 0, i), acc)
                 self._mark_done(cid)
             else:
                 self._wait_for_done(cid)
             for i, t in enumerate(tensor_list):
-                t.copy_(_load_tensor(self._out_path(cid, self._rank, i)).to(t.device))
+                t.copy_(_load_tensor(self._out_path(cid, 0, i)).to(t.device))
             return _completed_work()
 
         return self._do_collective("allreduce", _run)
@@ -844,6 +843,10 @@ def main():
         parser.error("--nproc-per-node must be >= 1")
     if ngpus < 1:
         parser.error("--ngpus must be >= 1")
+    if ngpus > nproc:
+        parser.error(
+            f"--ngpus ({ngpus}) must be <= --nproc-per-node ({nproc})"
+        )
 
     with socket.socket() as s:
         s.bind(("", 0))

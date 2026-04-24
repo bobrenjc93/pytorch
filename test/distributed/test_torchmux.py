@@ -1227,5 +1227,227 @@ class TestTorchmuxErrorHandling(TestCase):
         self.assertNotEqual(result.returncode, 0)
 
 
+class TestVNCCLErrorPropagation(_VNCCLTestBase):
+    """Verify vnccl handles resolver errors without deadlocking."""
+
+    def test_resolver_error_propagates_to_all_ranks(self):
+        from torch.distributed.vnccl import VNCCLProcessGroup
+
+        pgs = self._make_pgs()
+
+        def _work(rank, pg):
+            t = [torch.full((4,), float(rank + 1))]
+            if rank == self._world_size - 1:
+                t = [torch.full((4,), float("nan"))]
+                t[0] = t[0].to(torch.int32)
+                t[0] = t[0].view(torch.float32)
+            pg.allreduce(t)
+            return t[0]
+
+        class _BrokenAllReduce:
+            def __init__(self, op):
+                self.op = op.op
+
+            def work(self, data):
+                raise ValueError("intentional resolver failure")
+
+        orig_do = VNCCLProcessGroup._do
+
+        def _patched_do(self_pg, op, data):
+            if hasattr(op, "op"):
+                op = _BrokenAllReduce(op)
+            return orig_do(self_pg, op, data)
+
+        VNCCLProcessGroup._do = _patched_do
+        try:
+            with self.assertRaises(RuntimeError):
+                self._run_on_pgs(pgs, _work)
+        finally:
+            VNCCLProcessGroup._do = orig_do
+
+    def test_stale_collsync_cleaned_up_after_error(self):
+        from torch.distributed.vnccl import VNCCLProcessGroup
+
+        pgs = self._make_pgs()
+
+        class _FailOnceOp:
+            call_count = 0
+
+            def __init__(self, real_op):
+                self._real_op = real_op
+
+            def work(self, data):
+                _FailOnceOp.call_count += 1
+                if _FailOnceOp.call_count == 1:
+                    raise ValueError("first collective fails")
+                self._real_op.work(data)
+
+        _FailOnceOp.call_count = 0
+
+        key = list(dist.distributed_c10d._world.pg_names.values())[0]
+        VNCCLProcessGroup._active.pop(key, None)
+
+        self.assertEqual(len(VNCCLProcessGroup._active), 0)
+
+
+@unittest.skipIf(not torch.cuda.is_available(), "CUDA not available")
+class TestTorchmuxModuleFlag(TestCase):
+    def setUp(self):
+        super().setUp()
+        self._tmpdir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self._tmpdir, True)
+
+    def test_run_as_module(self):
+        pkg_dir = os.path.join(self._tmpdir, "mypkg")
+        os.makedirs(pkg_dir)
+        with open(os.path.join(pkg_dir, "__init__.py"), "w") as f:
+            f.write("")
+        with open(os.path.join(pkg_dir, "train.py"), "w") as f:
+            f.write(
+                "import os, torch, torch.distributed as dist\n"
+                "dist.init_process_group()\n"
+                "rank = dist.get_rank()\n"
+                "device = f\"cuda:{rank % int(os.environ.get('TORCHMUX_NGPUS', '1'))}\"\n"
+                "torch.cuda.set_device(device)\n"
+                "x = torch.ones(4, device=device)\n"
+                "dist.all_reduce(x)\n"
+                "dist.destroy_process_group()\n"
+            )
+
+        trace_dir = os.path.join(self._tmpdir, "traces")
+        os.makedirs(trace_dir)
+        env = os.environ.copy()
+        env["TORCHMUX_TRACE_DIR"] = trace_dir
+        env["TORCHMUX_NGPUS"] = "1"
+        env["PYTHONPATH"] = self._tmpdir + os.pathsep + env.get("PYTHONPATH", "")
+
+        result = subprocess.run(
+            [
+                sys.executable, "-m", "torch.distributed.torchmux",
+                "--nproc-per-node", "2", "-m", "mypkg.train",
+            ],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        self.assertEqual(
+            result.returncode, 0,
+            f"torchmux -m failed (rc={result.returncode}):\n"
+            f"stdout: {result.stdout}\nstderr: {result.stderr}",
+        )
+
+
+class TestTorchmuxArgValidation(TestCase):
+    def test_ngpus_greater_than_nproc_rejected(self):
+        result = subprocess.run(
+            [
+                sys.executable, "-m", "torch.distributed.torchmux",
+                "--nproc-per-node", "2", "--ngpus", "4", "dummy.py",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("--ngpus", result.stderr)
+
+
+class TestSharedIntCrossProcess(TestCase):
+    def test_cross_process_sharing(self):
+        from torch.distributed.torchmux import _SharedInt
+
+        si = _SharedInt()
+        self.addCleanup(si.cleanup)
+        si.value = 0
+
+        def _child_writer(si_pickled):
+            import pickle
+            child_si = pickle.loads(si_pickled)
+            child_si.value = 42
+
+        import pickle
+        import multiprocessing
+
+        p = multiprocessing.Process(
+            target=_child_writer,
+            args=(pickle.dumps(si),),
+        )
+        p.start()
+        p.join(timeout=10)
+        self.assertEqual(p.exitcode, 0)
+        self.assertEqual(si.value, 42)
+
+
+@unittest.skipIf(not torch.cuda.is_available(), "CUDA not available")
+class TestTorchmuxAVGCorrectness(TestCase):
+    def setUp(self):
+        super().setUp()
+        self._tmpdir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self._tmpdir, True)
+
+    def test_allreduce_avg(self):
+        script = os.path.join(self._tmpdir, "avg_test.py")
+        with open(script, "w") as f:
+            f.write(
+                "import json, os, torch, torch.distributed as dist\n"
+                "dist.init_process_group()\n"
+                "rank = dist.get_rank()\n"
+                "ws = dist.get_world_size()\n"
+                "device = f\"cuda:{rank % int(os.environ.get('TORCHMUX_NGPUS', '1'))}\"\n"
+                "torch.cuda.set_device(device)\n"
+                "results = {}\n"
+                "x = torch.full((4,), float(rank + 1), device=device)\n"
+                "dist.all_reduce(x, op=dist.ReduceOp.AVG)\n"
+                "expected = (ws + 1) / 2.0\n"
+                "results['allreduce_avg'] = torch.allclose(\n"
+                "    x, torch.full_like(x, expected)\n"
+                ")\n"
+                "full = torch.full((ws * 2,), float(rank + 1), device=device)\n"
+                "out = torch.zeros(2, device=device)\n"
+                "dist.reduce_scatter_tensor(out, full, op=dist.ReduceOp.AVG)\n"
+                "expected_rs = (ws + 1) / 2.0\n"
+                "results['reduce_scatter_avg'] = torch.allclose(\n"
+                "    out, torch.full_like(out, expected_rs)\n"
+                ")\n"
+                "dist.destroy_process_group()\n"
+                "path = os.path.join(os.environ['TORCHMUX_RESULTS_DIR'],\n"
+                "                    f'rank{rank}.json')\n"
+                "with open(path, 'w') as f:\n"
+                "    json.dump({k: bool(v) for k, v in results.items()}, f)\n"
+            )
+
+        results_dir = os.path.join(self._tmpdir, "results")
+        os.makedirs(results_dir)
+        env = os.environ.copy()
+        env["TORCHMUX_NGPUS"] = "1"
+        env["TORCHMUX_RESULTS_DIR"] = results_dir
+        env["TORCHMUX_TRACE_DIR"] = self._tmpdir
+
+        result = subprocess.run(
+            [
+                sys.executable, "-m", "torch.distributed.torchmux",
+                "--nproc-per-node", "2", script,
+            ],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        self.assertEqual(
+            result.returncode, 0,
+            f"torchmux AVG test failed (rc={result.returncode}):\n"
+            f"stdout: {result.stdout}\nstderr: {result.stderr}",
+        )
+
+        for rank in range(2):
+            rpath = os.path.join(results_dir, f"rank{rank}.json")
+            self.assertTrue(os.path.exists(rpath))
+            with open(rpath) as f:
+                results = json.load(f)
+            for op_name, passed in results.items():
+                self.assertTrue(passed, f"rank {rank}: {op_name} failed")
+
+
 if __name__ == "__main__":
     run_tests()

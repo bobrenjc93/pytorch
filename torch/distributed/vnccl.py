@@ -291,10 +291,13 @@ class _CollSync:
                     self._op.work(self._data)
                 except Exception as e:
                     self._error = e
+                    global _next_rank
+                    with _next_rank_cond:
+                        _next_rank = 0
+                        _next_rank_cond.notify_all()
                     self._cond.notify_all()
                     raise
                 self._done = True
-                global _next_rank
                 with _next_rank_cond:
                     _next_rank = 0
                     _next_rank_cond.notify_all()
@@ -351,8 +354,10 @@ class VNCCLProcessGroup(dist.ProcessGroup):
             _release_exec_lock_ordered(self._rank, self._world_size)
         try:
             sync = VNCCLProcessGroup._enter(op, self)
-            result = sync.join(self._rank, data)
-            VNCCLProcessGroup._leave(sync, self)
+            try:
+                result = sync.join(self._rank, data)
+            finally:
+                VNCCLProcessGroup._leave(sync, self)
         finally:
             if held:
                 _acquire_exec_lock_ordered(self._rank, self._world_size)
@@ -431,10 +436,10 @@ class VNCCLProcessGroup(dist.ProcessGroup):
         # Each tensor pair is a separate collective barrier rather than a
         # single batched operation. Correct but not performance-equivalent
         # to real NCCL's coalesced implementation.
-        works = [self._reduce_scatter_base(o, i, opts) for o, i in zip(outputs, inputs)]
-        for w in works[:-1]:
-            w.wait()
-        return works[-1]
+        res = None
+        for o, i in zip(outputs, inputs):
+            res = self._reduce_scatter_base(o, i, opts)
+        return res
 
     def alltoall(self, output_list, input_list, opts=AllToAllOptions()):
         return self._do(_AllToAll(), (output_list, input_list))
