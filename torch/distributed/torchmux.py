@@ -31,7 +31,6 @@ devices via torch.device(...) at call sites.
 import argparse
 import json
 import logging
-import mmap
 import os
 import runpy
 import shutil
@@ -72,60 +71,50 @@ class _MuxDevice(metaclass=_DeviceMeta):
         return d
 
 
-# ---- Shared int via mmap (survives mp.spawn pickling) ----
+# ---- Shared int via POSIX shared memory (survives mp.spawn pickling) ----
 
 
 class _SharedInt:
     def __init__(self):
-        self._fd = tempfile.NamedTemporaryFile(delete=False)
-        self._path = self._fd.name
-        self._fd.write(struct.pack("i", 0))
-        self._fd.flush()
-        self._mm = mmap.mmap(self._fd.fileno(), 4)
+        from multiprocessing.shared_memory import SharedMemory
+
+        self._shm = SharedMemory(create=True, size=4)
+        struct.pack_into("i", self._shm.buf, 0, 0)
+        self._owner = True
 
     @property
     def value(self):
-        self._mm.seek(0)
-        return struct.unpack("i", self._mm.read(4))[0]
+        return struct.unpack_from("i", self._shm.buf, 0)[0]
 
     @value.setter
     def value(self, v):
-        self._mm.seek(0)
-        self._mm.write(struct.pack("i", v))
+        struct.pack_into("i", self._shm.buf, 0, v)
+
+    def cleanup(self):
+        try:
+            self._shm.close()
+        except Exception:
+            pass
+        if self._owner:
+            try:
+                self._shm.unlink()
+            except Exception:
+                pass
 
     def __del__(self):
         try:
-            if self._mm is not None:
-                self._mm.close()
+            self._shm.close()
         except Exception:
             pass
-        try:
-            if self._fd is not None:
-                self._fd.close()
-        except Exception:
-            pass
-
-    def cleanup(self):
-        if self._mm is not None:
-            self._mm.close()
-            self._mm = None
-        if self._fd is not None:
-            self._fd.close()
-            self._fd = None
-        if self._path is not None:
-            try:
-                os.unlink(self._path)
-            except FileNotFoundError:
-                pass
-            self._path = None
 
     def __getstate__(self):
-        return self._path
+        return self._shm.name
 
-    def __setstate__(self, path):
-        self._path = path
-        self._fd = open(path, "r+b")
-        self._mm = mmap.mmap(self._fd.fileno(), 4)
+    def __setstate__(self, name):
+        from multiprocessing.shared_memory import SharedMemory
+
+        self._shm = SharedMemory(name=name, create=False)
+        self._owner = False
 
 
 # ---- Cooperative scheduling ----
@@ -142,9 +131,6 @@ _ACQUIRE_TIMEOUT_S = float(os.environ.get("TORCHMUX_ACQUIRE_TIMEOUT", "300"))
 def _acquire(*, restore=True):
     global _held
     deadline = time.monotonic() + _ACQUIRE_TIMEOUT_S
-    # Aligned 4-byte reads are atomic on x86-64; on other architectures a
-    # torn read could occur but would just cause an extra spin iteration
-    # (the small value space 0..N-1 cannot alias _rank via partial writes).
     delay = 1e-5
     while _sched.value != _rank:
         if time.monotonic() > deadline:
@@ -368,7 +354,8 @@ class _MuxPG(dist.ProcessGroup):
     def _mark_ready(self, cid):
         p = self._ready_path(cid, self._rank)
         os.makedirs(os.path.dirname(p), exist_ok=True)
-        open(p, "w").close()
+        with open(p, "w"):
+            pass
 
     def _all_ready(self, cid):
         return all(os.path.exists(self._ready_path(cid, r)) for r in range(self._ws))
@@ -390,7 +377,8 @@ class _MuxPG(dist.ProcessGroup):
             return False
 
     def _mark_done(self, cid):
-        open(self._done_path(cid), "w").close()
+        with open(self._done_path(cid), "w"):
+            pass
 
     def _is_done(self, cid):
         return os.path.exists(self._done_path(cid))
@@ -675,9 +663,9 @@ def _worker(
     os.environ.update(
         {
             "RANK": str(rank),
-            "LOCAL_RANK": str(rank % ngpus),
+            "LOCAL_RANK": str(rank),
             "WORLD_SIZE": str(world_size),
-            "LOCAL_WORLD_SIZE": str(ngpus),
+            "LOCAL_WORLD_SIZE": str(world_size),
             "GROUP_RANK": "0",
             "MASTER_ADDR": "localhost",
             "MASTER_PORT": str(master_port),
