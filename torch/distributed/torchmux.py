@@ -521,7 +521,8 @@ def _create_mux_pg(store, rank, world_size, timeout):
     if _held:
         _release(snapshot=False)
     _store_based_barrier(rank, store, "", world_size, timeout)
-    _acquire(restore=False)
+    if not _held:
+        _acquire(restore=False)
     return pg
 
 
@@ -670,7 +671,8 @@ def main():
         port = s.getsockname()[1]
 
     sched = _SharedInt()
-    coll_dir = tempfile.mkdtemp(prefix="torchmux_colls_")
+    shm = "/dev/shm" if os.path.isdir("/dev/shm") else None
+    coll_dir = tempfile.mkdtemp(prefix="torchmux_colls_", dir=shm)
 
     gpu_desc = "GPU 0" if ngpus == 1 else f"{ngpus} GPUs"
     print(
