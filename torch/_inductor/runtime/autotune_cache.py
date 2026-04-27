@@ -114,6 +114,10 @@ class AutotuneCacheArtifact(CacheArtifact):
 
 @dataclasses.dataclass
 class AutotuneCache:
+    """
+    Coordinates local and remote autotune cache access for a single kernel.
+    """
+
     configs_hash: str
     local_cache: tuple[RemoteCache[JsonDataTy], str] | None = None
     remote_cache: tuple[RemoteCache[JsonDataTy], str] | None = None
@@ -161,13 +165,14 @@ class AutotuneCache:
         from ..codecache import torch_key
 
         updated_cache_key = AUTOTUNE_CACHE_KEY_STRATEGY.key(cache_key, torch_key())
-        return f"{dirname}/{updated_cache_key}.best_config"
+        return os.path.join(dirname, f"{updated_cache_key}.best_config")
 
     @staticmethod
     def _artifact_key_from_local_cache_key(local_cache_key: str) -> str:
         return os.path.join(*local_cache_key.split(os.sep)[-2:])
 
     def _record_artifact(self, data: JsonDataTy) -> None:
+        # Older pickled AutotuneCache instances may not have this field.
         if recorder := getattr(self, "artifact_recorder", None):
             recorder.record(data)
 
@@ -292,7 +297,7 @@ class AutotuneCache:
         found_by_coordesc: bool = False,
         triton_cache_hash: str | None = None,
     ) -> None:
-        data = {
+        data: dict[str, JsonDataTy] = {
             # pyrefly: ignore [missing-attribute]
             **config.kwargs,
             # pyrefly: ignore [missing-attribute]

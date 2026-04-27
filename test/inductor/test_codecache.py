@@ -65,6 +65,8 @@ from torch.compiler._cache import (
     CacheArtifact,
     CacheArtifactFactory,
     CacheArtifactManager,
+    CacheArtifactRecorder,
+    CacheInfo,
 )
 from torch.testing._internal.common_cuda import (
     SM80OrLater,
@@ -3497,29 +3499,31 @@ class TestAutotuneCache(TestCase):
             )
 
         self.assertIsNotNone(autotune_cache)
-        if autotune_cache is None:
-            raise AssertionError("Expected AutotuneCache.create() to return a cache")
+        autotune_cache = cast(AutotuneCache, autotune_cache)
         self.assertIsNone(autotune_cache.local_cache)
         self.assertIsNotNone(autotune_cache.remote_cache)
+        self.assertIsNotNone(autotune_cache.artifact_recorder)
+        artifact_recorder = cast(
+            CacheArtifactRecorder, autotune_cache.artifact_recorder
+        )
+        expected_artifact_key = artifact_recorder.key
 
         CacheArtifactManager.clear()
         autotune_cache.save(ConfigStub(), time_taken_ns=1_000_000)
 
         artifacts = torch.compiler.save_cache_artifacts()
         self.assertIsNotNone(artifacts)
-        if artifacts is None:
-            raise AssertionError("Expected autotune save to record a cache artifact")
+        artifacts = cast(tuple[bytes, CacheInfo], artifacts)
         _, cache_info = artifacts
-        self.assertEqual(len(cache_info.autotune_artifacts), 1)
+        self.assertEqual(cache_info.autotune_artifacts, [expected_artifact_key])
 
         CacheArtifactManager.clear()
         self.assertIsNotNone(autotune_cache._read())
         artifacts = torch.compiler.save_cache_artifacts()
         self.assertIsNotNone(artifacts)
-        if artifacts is None:
-            raise AssertionError("Expected autotune read to record a cache artifact")
+        artifacts = cast(tuple[bytes, CacheInfo], artifacts)
         _, cache_info = artifacts
-        self.assertEqual(len(cache_info.autotune_artifacts), 1)
+        self.assertEqual(cache_info.autotune_artifacts, [expected_artifact_key])
 
     @requires_cuda_and_triton
     @unittest.skipIf(not SM80OrLater, "Requires SM80+")
