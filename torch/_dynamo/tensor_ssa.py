@@ -12,6 +12,7 @@ from torch._subclasses.fake_tensor import FakeTensor
 from . import config
 from .utils import (
     _disable_saved_tensors_hooks_during_tracing,
+    ensure_graph_fake,
     proxy_args_kwargs,
     set_current_node,
     wrap_fake_exception,
@@ -167,13 +168,13 @@ def _compute_fake_value(
     args: Sequence[Any],
     kwargs: dict[str, Any],
 ) -> Any:
+    from .exc import Unsupported
+
     _t0 = time.time_ns()
     fake_mode = tx.fake_mode
     try:
         if fake_mode is None:
             return None
-
-        from .exc import Unsupported
 
         with (
             _disable_saved_tensors_hooks_during_tracing(),
@@ -261,6 +262,8 @@ def maybe_fastpath_tensor_stack_op(
         example_value = _compute_fake_value(
             tx, proxy.node, fn, normalized.fake_args, normalized.fake_kwargs
         )
+        if isinstance(example_value, torch.Tensor):
+            example_value = ensure_graph_fake(example_value, tx)
     except Exception:
         tx.output.remove_node(proxy.node)
         raise
@@ -313,6 +316,8 @@ def maybe_fastpath_tensor_method(
             fake_method_args,
             normalized.fake_kwargs,
         )
+        if isinstance(example_value, torch.Tensor):
+            example_value = ensure_graph_fake(example_value, tx)
     except Exception:
         tx.output.remove_node(proxy.node)
         raise
