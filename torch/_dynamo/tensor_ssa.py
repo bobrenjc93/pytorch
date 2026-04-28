@@ -1,0 +1,240 @@
+from __future__ import annotations
+
+import operator
+from collections.abc import Callable, Sequence  # noqa: TC003
+from typing import Any
+
+import torch
+from torch._dispatch.python import enable_python_dispatcher
+from torch._subclasses.fake_tensor import FakeTensor
+
+from . import config
+from .utils import (
+    _disable_saved_tensors_hooks_during_tracing,
+    proxy_args_kwargs,
+    wrap_fake_exception,
+)
+
+
+_BINARY_TENSOR_FNS: set[Callable[..., object]] = {
+    operator.add,
+    operator.sub,
+    operator.mul,
+    operator.truediv,
+    operator.floordiv,
+    operator.mod,
+    operator.pow,
+    operator.matmul,
+}
+
+_UNARY_TENSOR_FNS: set[Callable[..., object]] = {
+    operator.neg,
+    operator.pos,
+}
+
+_TENSOR_METHODS: set[str] = {
+    "abs",
+    "acos",
+    "asin",
+    "atan",
+    "ceil",
+    "clone",
+    "cos",
+    "cosh",
+    "erf",
+    "exp",
+    "expm1",
+    "floor",
+    "log",
+    "log1p",
+    "neg",
+    "reciprocal",
+    "relu",
+    "round",
+    "sigmoid",
+    "sin",
+    "sinh",
+    "sqrt",
+    "tan",
+    "tanh",
+    "trunc",
+}
+
+
+def _realize_lazy_tensor(value: Any) -> Any:
+    from .variables.lazy import LazyVariableTracker
+
+    if not isinstance(value, LazyVariableTracker):
+        return value
+    if value.is_realized():
+        return value.realize()
+
+    try:
+        value_type = value.peek_type()
+    except Exception:
+        return value
+
+    if isinstance(value_type, type) and issubclass(value_type, torch.Tensor):
+        return value.realize()
+    return value
+
+
+def _normalize_arg(tx: Any, value: Any) -> tuple[Any, Any, bool] | None:
+    from .variables.constant import ConstantVariable
+    from .variables.tensor import SymNodeVariable, TensorVariable
+
+    value = _realize_lazy_tensor(value)
+    if type(value) is TensorVariable and value.class_type is torch.Tensor:
+        example_value = value.as_proxy().node.meta.get("example_value")
+        if (
+            isinstance(example_value, FakeTensor)
+            and example_value.fake_mode is tx.fake_mode
+            and not example_value.is_sparse
+            and not example_value.is_nested
+        ):
+            return value, example_value, True
+        return None
+
+    if isinstance(value, ConstantVariable):
+        constant = value.as_python_constant()
+        if constant is None or type(constant) in (bool, int, float):
+            return value, constant, False
+        return None
+
+    if isinstance(value, SymNodeVariable):
+        return value, value.sym_num, False
+
+    return None
+
+
+def _normalize_args(
+    tx: Any,
+    args: Sequence[Any],
+    kwargs: dict[str, Any],
+) -> tuple[list[Any], dict[str, Any], list[Any], dict[str, Any], bool] | None:
+    normalized_args = []
+    fake_args = []
+    has_tensor_arg = False
+
+    for arg in args:
+        normalized = _normalize_arg(tx, arg)
+        if normalized is None:
+            return None
+        proxy_arg, fake_arg, is_tensor_arg = normalized
+        normalized_args.append(proxy_arg)
+        fake_args.append(fake_arg)
+        has_tensor_arg = has_tensor_arg or is_tensor_arg
+
+    normalized_kwargs = {}
+    fake_kwargs = {}
+    for key, value in kwargs.items():
+        normalized = _normalize_arg(tx, value)
+        if normalized is None:
+            return None
+        proxy_arg, fake_arg, is_tensor_arg = normalized
+        normalized_kwargs[key] = proxy_arg
+        fake_kwargs[key] = fake_arg
+        has_tensor_arg = has_tensor_arg or is_tensor_arg
+
+    return normalized_args, normalized_kwargs, fake_args, fake_kwargs, has_tensor_arg
+
+
+def _compute_fake_value(tx: Any, fn: Callable[..., Any], args: Any, kwargs: Any) -> Any:
+    fake_mode = tx.fake_mode
+    if fake_mode is None:
+        return None
+
+    try:
+        with (
+            _disable_saved_tensors_hooks_during_tracing(),
+            fake_mode,
+            enable_python_dispatcher(),
+        ):
+            return wrap_fake_exception(lambda: fn(*args, **kwargs))
+    except Exception:
+        return None
+
+
+def _can_use_fastpath(tx: Any, args: Sequence[Any], kwargs: dict[str, Any]) -> bool:
+    if not config.enable_tensor_ssa_fastpath:
+        return False
+
+    from .variables.torch_function import can_dispatch_torch_function
+
+    return not can_dispatch_torch_function(tx, args, kwargs)
+
+
+def maybe_fastpath_tensor_stack_op(
+    tx: Any,
+    fn: Callable[..., object],
+    args: Sequence[Any],
+) -> Any | None:
+    if fn not in _BINARY_TENSOR_FNS and fn not in _UNARY_TENSOR_FNS:
+        return None
+    if not _can_use_fastpath(tx, args, {}):
+        return None
+
+    normalized = _normalize_args(tx, args, {})
+    if normalized is None:
+        return None
+
+    proxy_args, proxy_kwargs, fake_args, fake_kwargs, has_tensor_arg = normalized
+    if not has_tensor_arg:
+        return None
+
+    example_value = _compute_fake_value(tx, fn, fake_args, fake_kwargs)
+    if not isinstance(example_value, torch.Tensor):
+        return None
+
+    from .variables.builder import wrap_fx_proxy_with_precomputed_value
+
+    proxy = tx.output.create_proxy(
+        "call_function",
+        fn,
+        *proxy_args_kwargs(proxy_args, proxy_kwargs),
+    )
+    return wrap_fx_proxy_with_precomputed_value(tx, proxy, example_value)
+
+
+def maybe_fastpath_tensor_method(
+    tx: Any,
+    tensor: Any,
+    name: str,
+    args: Sequence[Any],
+    kwargs: dict[str, Any],
+) -> Any | None:
+    if name not in _TENSOR_METHODS:
+        return None
+
+    all_args = [tensor, *args]
+    if not _can_use_fastpath(tx, all_args, kwargs):
+        return None
+
+    normalized = _normalize_args(tx, all_args, kwargs)
+    if normalized is None:
+        return None
+
+    proxy_args, proxy_kwargs, fake_args, fake_kwargs, has_tensor_arg = normalized
+    if not has_tensor_arg:
+        return None
+
+    fake_self, *fake_method_args = fake_args
+    example_value = _compute_fake_value(
+        tx,
+        lambda *method_args, **method_kwargs: getattr(fake_self, name)(
+            *method_args, **method_kwargs
+        ),
+        fake_method_args,
+        fake_kwargs,
+    )
+    if not isinstance(example_value, torch.Tensor):
+        return None
+
+    from .variables.builder import wrap_fx_proxy_with_precomputed_value
+
+    proxy = tx.output.create_proxy(
+        "call_method",
+        name,
+        *proxy_args_kwargs(proxy_args, proxy_kwargs),
+    )
+    return wrap_fx_proxy_with_precomputed_value(tx, proxy, example_value)

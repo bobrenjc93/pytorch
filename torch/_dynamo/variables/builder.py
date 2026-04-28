@@ -3219,6 +3219,36 @@ def wrap_fx_proxy_cls(
     return out
 
 
+def wrap_fx_proxy_with_precomputed_value(
+    tx: "InstructionTranslatorBase",
+    proxy: Any,
+    example_value: Any,
+    target_cls: type[VTTypeAlias] = TensorVariable,
+    subclass_type: type | None = None,
+    **options: Any,
+) -> VariableTracker:
+    out = handle_traced_output(
+        example_value,
+        tx,
+        proxy,
+        options,
+        subclass_type,
+        target_cls,
+    )
+    if (
+        isinstance(
+            out,
+            (
+                torch._dynamo.variables.TensorVariable,
+                torch._dynamo.variables.SymNodeVariable,
+            ),
+        )
+        and proxy.node.op != "placeholder"
+    ):
+        tx.output.current_tracer.record_proxyable_vt(out)
+    return out
+
+
 # This is 1 above (wrapping a preexisting tensor)
 def _wrap_fx_preexisting_tensor(
     target_cls: type[VTTypeAlias],
