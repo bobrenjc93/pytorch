@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import operator
 from collections.abc import Callable, Sequence  # noqa: TC003
-from typing import Any
+from typing import Any, NamedTuple, TYPE_CHECKING
 
 import torch
 from torch._dispatch.python import enable_python_dispatcher
@@ -12,9 +12,13 @@ from . import config
 from .utils import (
     _disable_saved_tensors_hooks_during_tracing,
     proxy_args_kwargs,
+    set_current_node,
     wrap_fake_exception,
 )
 
+
+if TYPE_CHECKING:
+    from .symbolic_convert import InstructionTranslator
 
 _BINARY_TENSOR_FNS: set[Callable[..., object]] = {
     operator.add,
@@ -61,6 +65,14 @@ _TENSOR_METHODS: set[str] = {
 }
 
 
+class NormalizedArgs(NamedTuple):
+    proxy_args: list[Any]
+    proxy_kwargs: dict[str, Any]
+    fake_args: list[Any]
+    fake_kwargs: dict[str, Any]
+    has_tensor_arg: bool
+
+
 def _realize_lazy_tensor(value: Any) -> Any:
     from .variables.lazy import LazyVariableTracker
 
@@ -79,7 +91,9 @@ def _realize_lazy_tensor(value: Any) -> Any:
     return value
 
 
-def _normalize_arg(tx: Any, value: Any) -> tuple[Any, Any, bool] | None:
+def _normalize_arg(
+    tx: InstructionTranslator, value: Any
+) -> tuple[Any, Any, bool] | None:
     from .variables.constant import ConstantVariable
     from .variables.tensor import SymNodeVariable, TensorVariable
 
@@ -108,10 +122,10 @@ def _normalize_arg(tx: Any, value: Any) -> tuple[Any, Any, bool] | None:
 
 
 def _normalize_args(
-    tx: Any,
+    tx: InstructionTranslator,
     args: Sequence[Any],
     kwargs: dict[str, Any],
-) -> tuple[list[Any], dict[str, Any], list[Any], dict[str, Any], bool] | None:
+) -> NormalizedArgs | None:
     normalized_args = []
     fake_args = []
     has_tensor_arg = False
@@ -136,26 +150,45 @@ def _normalize_args(
         fake_kwargs[key] = fake_arg
         has_tensor_arg = has_tensor_arg or is_tensor_arg
 
-    return normalized_args, normalized_kwargs, fake_args, fake_kwargs, has_tensor_arg
+    return NormalizedArgs(
+        normalized_args,
+        normalized_kwargs,
+        fake_args,
+        fake_kwargs,
+        has_tensor_arg,
+    )
 
 
-def _compute_fake_value(tx: Any, fn: Callable[..., Any], args: Any, kwargs: Any) -> Any:
+def _compute_fake_value(
+    tx: InstructionTranslator,
+    node: torch.fx.Node,
+    fn: Callable[..., Any],
+    args: Sequence[Any],
+    kwargs: dict[str, Any],
+) -> Any:
     fake_mode = tx.fake_mode
     if fake_mode is None:
         return None
 
+    from .exc import Unsupported
+
     try:
         with (
             _disable_saved_tensors_hooks_during_tracing(),
+            set_current_node(node),
             fake_mode,
             enable_python_dispatcher(),
         ):
             return wrap_fake_exception(lambda: fn(*args, **kwargs))
-    except Exception:
+    except Unsupported:
+        raise
+    except (RuntimeError, TypeError):
         return None
 
 
-def _can_use_fastpath(tx: Any, args: Sequence[Any], kwargs: dict[str, Any]) -> bool:
+def _can_use_fastpath(
+    tx: InstructionTranslator, args: Sequence[Any], kwargs: dict[str, Any]
+) -> bool:
     if not config.enable_tensor_ssa_fastpath:
         return False
 
@@ -165,7 +198,7 @@ def _can_use_fastpath(tx: Any, args: Sequence[Any], kwargs: dict[str, Any]) -> b
 
 
 def maybe_fastpath_tensor_stack_op(
-    tx: Any,
+    tx: InstructionTranslator,
     fn: Callable[..., object],
     args: Sequence[Any],
 ) -> Any | None:
@@ -178,26 +211,28 @@ def maybe_fastpath_tensor_stack_op(
     if normalized is None:
         return None
 
-    proxy_args, proxy_kwargs, fake_args, fake_kwargs, has_tensor_arg = normalized
-    if not has_tensor_arg:
+    if not normalized.has_tensor_arg:
         return None
-
-    example_value = _compute_fake_value(tx, fn, fake_args, fake_kwargs)
-    if not isinstance(example_value, torch.Tensor):
-        return None
-
-    from .variables.builder import wrap_fx_proxy_with_precomputed_value
 
     proxy = tx.output.create_proxy(
         "call_function",
         fn,
-        *proxy_args_kwargs(proxy_args, proxy_kwargs),
+        *proxy_args_kwargs(normalized.proxy_args, normalized.proxy_kwargs),
     )
-    return wrap_fx_proxy_with_precomputed_value(tx, proxy, example_value)
+    example_value = _compute_fake_value(
+        tx, proxy.node, fn, normalized.fake_args, normalized.fake_kwargs
+    )
+    if not isinstance(example_value, torch.Tensor):
+        tx.output.remove_node(proxy.node)
+        return None
+
+    from .variables.builder import wrap_fx_proxy
+
+    return wrap_fx_proxy(tx, proxy, precomputed_example_value=example_value)
 
 
 def maybe_fastpath_tensor_method(
-    tx: Any,
+    tx: InstructionTranslator,
     tensor: Any,
     name: str,
     args: Sequence[Any],
@@ -214,27 +249,28 @@ def maybe_fastpath_tensor_method(
     if normalized is None:
         return None
 
-    proxy_args, proxy_kwargs, fake_args, fake_kwargs, has_tensor_arg = normalized
-    if not has_tensor_arg:
+    if not normalized.has_tensor_arg:
         return None
-
-    fake_self, *fake_method_args = fake_args
-    example_value = _compute_fake_value(
-        tx,
-        lambda *method_args, **method_kwargs: getattr(fake_self, name)(
-            *method_args, **method_kwargs
-        ),
-        fake_method_args,
-        fake_kwargs,
-    )
-    if not isinstance(example_value, torch.Tensor):
-        return None
-
-    from .variables.builder import wrap_fx_proxy_with_precomputed_value
 
     proxy = tx.output.create_proxy(
         "call_method",
         name,
-        *proxy_args_kwargs(proxy_args, proxy_kwargs),
+        *proxy_args_kwargs(normalized.proxy_args, normalized.proxy_kwargs),
     )
-    return wrap_fx_proxy_with_precomputed_value(tx, proxy, example_value)
+    fake_self, *fake_method_args = normalized.fake_args
+    example_value = _compute_fake_value(
+        tx,
+        proxy.node,
+        lambda *method_args, **method_kwargs: getattr(fake_self, name)(
+            *method_args, **method_kwargs
+        ),
+        fake_method_args,
+        normalized.fake_kwargs,
+    )
+    if not isinstance(example_value, torch.Tensor):
+        tx.output.remove_node(proxy.node)
+        return None
+
+    from .variables.builder import wrap_fx_proxy
+
+    return wrap_fx_proxy(tx, proxy, precomputed_example_value=example_value)
