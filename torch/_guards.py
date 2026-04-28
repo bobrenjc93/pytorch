@@ -828,6 +828,14 @@ class InvokeSubgraphReuseCondition:
 
 
 class InvokeSubgraphCache(HopSubgraphCache):
+    _persistent_subgraph_reuse_cache: weakref.WeakKeyDictionary[
+        Any,
+        list[tuple[InvokeSubgraphReuseCondition, InvokeSubgraphReuseEntry]],
+    ] = weakref.WeakKeyDictionary()
+    _persistent_subgraph_reuse_key_cache: weakref.WeakKeyDictionary[
+        Any, dict[int, InvokeSubgraphReuseEntry]
+    ] = weakref.WeakKeyDictionary()
+
     def __init__(self) -> None:
         self.autograd_cache: dict[str, Callable] = {}
         self.proxy_dispatch_cache: dict[str, Callable] = {}
@@ -838,17 +846,20 @@ class InvokeSubgraphCache(HopSubgraphCache):
         self.effects_cache: dict[
             str, set
         ] = {}  # Maps identifier -> set of effect types
-        # fn.__code__ → list of (condition, cache_entry) pairs. Walked linearly
-        # on lookup; first matching condition wins.
-        self.subgraph_reuse_cache: dict[
-            CodeType,
-            list[tuple[InvokeSubgraphReuseCondition, InvokeSubgraphReuseEntry]],
-        ] = defaultdict(list)
-        # fn_code → {hash_key → cache_entry}. Used by user-provided
-        # reuse_hash_fn for O(1) subgraph reuse lookup.
-        self.subgraph_reuse_key_cache: dict[
-            CodeType, dict[int, InvokeSubgraphReuseEntry]
-        ] = defaultdict(dict)
+        # Process-persistent fn.__code__ → list of (condition, cache_entry)
+        # pairs. Walked linearly on lookup; first matching condition wins.
+        self.subgraph_reuse_cache = self._persistent_subgraph_reuse_cache
+        # Process-persistent fn_code → {hash_key → cache_entry}. Used by
+        # user-provided reuse_hash_fn for O(1) subgraph reuse lookup.
+        self.subgraph_reuse_key_cache = self._persistent_subgraph_reuse_key_cache
+        # Per tracing context remap from persistent cache entries to the subgraph
+        # name installed in the current OutputGraph.
+        self.installed_reuse_subgraphs: dict[int, str] = {}
+
+    @classmethod
+    def reset_reuse_cache(cls) -> None:
+        cls._persistent_subgraph_reuse_cache.clear()
+        cls._persistent_subgraph_reuse_key_cache.clear()
 
     def add_dynamo_installed_submodule(
         self, fn_code: CodeType, identifier: str
@@ -912,7 +923,10 @@ class InvokeSubgraphCache(HopSubgraphCache):
         entry: InvokeSubgraphReuseEntry,
         max_reuse_entries: int = 8,
     ) -> None:
-        entries = self.subgraph_reuse_cache[fn_code]
+        entries = self.subgraph_reuse_cache.get(fn_code)
+        if entries is None:
+            entries = []
+            self.subgraph_reuse_cache[fn_code] = entries
         if len(entries) >= max_reuse_entries:
             raise RuntimeError(
                 f"invoke_subgraph: exceeded maximum reuse entries "
@@ -954,7 +968,10 @@ class InvokeSubgraphCache(HopSubgraphCache):
         entry: InvokeSubgraphReuseEntry,
         max_reuse_entries: int = 8,
     ) -> None:
-        key_cache = self.subgraph_reuse_key_cache[fn_code]
+        key_cache = self.subgraph_reuse_key_cache.get(fn_code)
+        if key_cache is None:
+            key_cache = {}
+            self.subgraph_reuse_key_cache[fn_code] = key_cache
         if len(key_cache) >= max_reuse_entries and hash_key not in key_cache:
             raise RuntimeError(
                 f"invoke_subgraph: exceeded maximum reuse entries "
@@ -963,6 +980,10 @@ class InvokeSubgraphCache(HopSubgraphCache):
                 f"nested_compile_region()."
             )
         key_cache[hash_key] = entry
+
+
+def reset_invoke_subgraph_reuse_cache() -> None:
+    InvokeSubgraphCache.reset_reuse_cache()
 
 
 class HopDispatchSetCache:

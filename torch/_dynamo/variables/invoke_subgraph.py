@@ -4,6 +4,7 @@ supporting helpers for subgraph reuse (auto-cache) in Dynamo's invoke_subgraph
 higher-order operator.
 """
 
+import copy
 import enum
 import logging
 import traceback
@@ -19,6 +20,7 @@ from torch._dynamo.guards import (
     extract_tensor_metadata,
     GUARD_VALUE_DISPATCH,
     GuardCheckSpec,
+    install_guard,
     SKIP_GUARD,
     UnsupportedGuardCheckSpec,
 )
@@ -654,11 +656,6 @@ def is_reusable(
     if has_mutated_vars(tx, remapped):
         return False
 
-    # If no sources changed, all guards were already checked during the
-    # original trace and will trivially pass again.
-    if not source_replacement:
-        return True
-
     # Shared resolution context so source.get_value memoizes intermediate
     # results (e.g. common base sources) across all guards in this check.
     resolve_globals: dict[str, Any] = {
@@ -667,13 +664,10 @@ def is_reusable(
     }
     resolve_locals: dict[str, Any] = {}
     resolve_cache: dict[Source, Any] = {}
+    guards_to_install: list[Guard] = []
 
     for source, handler, expected, guard in condition.guards:
         new_source = source.clone(replacement_fn)
-        # Source unchanged after replacement — guard already passed during
-        # the original trace, skip re-evaluation.
-        if new_source == source:
-            continue
 
         try:
             value = new_source.get_value(resolve_globals, resolve_locals, resolve_cache)
@@ -712,6 +706,14 @@ def is_reusable(
                 else "<no stack>",
             )
             return False
+
+        new_guard = new_source.make_guard(guard.create_fn)
+        new_guard.stack = guard.stack
+        new_guard.user_stack = guard.user_stack
+        guards_to_install.append(new_guard)
+
+    if guards_to_install:
+        install_guard(*guards_to_install)
 
     return True
 
@@ -913,6 +915,7 @@ def stamp_out_subgraph(
     source replacement before we can look up or create the corresponding
     graph placeholders.
     """
+    from torch._guards import InvokeSubgraphCache
     from torch._dynamo.variables.builder import VariableBuilder
     from torch._dynamo.variables.higher_order_ops import add_call_function, make_attr
 
@@ -989,8 +992,25 @@ def stamp_out_subgraph(
         )
 
     # Install the invoke_subgraph call
-    body_node = make_attr(tx, cached.body_name)
-    p_args = (body_node, cached.body_name, *new_lifted_args)
+    body_name = cached.body_name
+    invoke_subgraph_cache = tx.output.tracing_context.hop_dispatch_set_cache.get_cache(
+        torch._higher_order_ops.invoke_subgraph
+    )
+    if isinstance(invoke_subgraph_cache, InvokeSubgraphCache):
+        entry_id = id(cached)
+        remapped_name = invoke_subgraph_cache.installed_reuse_subgraphs.get(entry_id)
+        if remapped_name is not None:
+            body_name = remapped_name
+        elif tx.output.nn_modules.get(body_name) is cached.body_gmod:
+            invoke_subgraph_cache.installed_reuse_subgraphs[entry_id] = body_name
+        else:
+            body_name = tx.output.install_subgraph(
+                cached.body_name, copy.deepcopy(cached.body_gmod)
+            )
+            invoke_subgraph_cache.installed_reuse_subgraphs[entry_id] = body_name
+
+    body_node = make_attr(tx, body_name)
+    p_args = (body_node, body_name, *new_lifted_args)
     flat_variable = add_call_function(
         tx,
         torch._higher_order_ops.invoke_subgraph,
