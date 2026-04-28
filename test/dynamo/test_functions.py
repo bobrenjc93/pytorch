@@ -147,6 +147,14 @@ def inline_lru_cache_fn_with_default_args(x, y, _=None):
     return torch.sin(x * y)
 
 
+def inline_summary_leaf(x):
+    return torch.sin(x + 1.0)
+
+
+def inline_summary_outer(x):
+    return inline_summary_leaf(x) * inline_summary_leaf(x + 1.0)
+
+
 @torch.jit.script_if_tracing
 def inline_script_if_tracing_fn_with_default_args(x, y, c=1.2):
     return torch.cos(x * y) + c
@@ -167,6 +175,36 @@ class FunctionTests(torch._dynamo.test_case.TestCase):
     @make_test
     def test_inline_lru_cache_fn_with_default_args(a, b):
         return inline_lru_cache_fn_with_default_args(a, 2, b)
+
+    @torch._dynamo.config.patch(inline_user_function_summaries=True)
+    def test_repeated_inline_uses_hierarchical_summary(self):
+        from torch._dynamo.symbolic_convert import InliningInstructionTranslator
+
+        def fn(x):
+            return inline_summary_outer(x) + inline_summary_outer(x + 2.0)
+
+        counts = collections.Counter()
+        orig_build_inline_tracer = InliningInstructionTranslator.build_inline_tracer
+
+        def counted_build_inline_tracer(parent, func, args, kwargs):
+            code = func.get_code()
+            if code is inline_summary_leaf.__code__:
+                counts["leaf"] += 1
+            elif code is inline_summary_outer.__code__:
+                counts["outer"] += 1
+            return orig_build_inline_tracer(parent, func, args, kwargs)
+
+        x = torch.randn(4)
+        with patch.object(
+            InliningInstructionTranslator,
+            "build_inline_tracer",
+            side_effect=counted_build_inline_tracer,
+        ):
+            opt_fn = torch.compile(fn, backend="eager", fullgraph=True)
+            self.assertEqual(opt_fn(x), fn(x))
+
+        self.assertEqual(counts["leaf"], 1)
+        self.assertEqual(counts["outer"], 1)
 
     def test_lru_cache_warning_issued_during_tracing(self):
         import warnings
