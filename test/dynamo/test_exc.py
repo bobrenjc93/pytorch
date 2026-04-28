@@ -221,8 +221,10 @@ from user code:
         torch.compile(fn001, backend="eager")(torch.randn(1))
 
         record = self.getRecord(records, "missing BUILD_SET handler")
-        expected = (
-            """\
+        if sys.version_info < (3, 11):
+            self.assertExpectedInline(
+                _munge_with_source_markers_removed(record.getMessage()),
+                """\
 Graph break in user code at test_exc.py:N
 Graph Break Reason: Failed to handle graph break gracefully. Skipping the function and falling back to eager. Graph break encountered:
 
@@ -234,20 +236,48 @@ missing BUILD_SET handler
 
  For more details about this graph break, please visit: https://meta-pytorch.github.io/compile-graph-break-site/gb/gb0200.html
 
-"""
-            + _unsupported_error_source_attribution()
-            + """
+Stack variable source attribution:
+  ConstantVariable(int: 1) originated from:
+  File "test_exc.py", line N
+                return {1, 2}
+
 User code traceback:
   File "test_exc.py", line N, in test_unsupported_error
     torch.compile(fn001, backend="eager")(torch.randn(1))
   File "test_exc.py", line N, in fn001
     return {1, 2}
-"""
-        )
-        self.assertExpectedInline(
-            _munge_with_source_markers_removed(record.getMessage()),
-            expected,
-        )
+""",
+            )
+        else:
+            self.assertExpectedInline(
+                _munge_with_source_markers_removed(record.getMessage()),
+                """\
+Graph break in user code at test_exc.py:N
+Graph Break Reason: Failed to handle graph break gracefully. Skipping the function and falling back to eager. Graph break encountered:
+
+missing BUILD_SET handler
+  Explanation: Missing BUILD_SET bytecode handler (for testing purposes).
+
+
+  Developer debug context:
+
+ For more details about this graph break, please visit: https://meta-pytorch.github.io/compile-graph-break-site/gb/gb0200.html
+
+Stack variable source attribution:
+  ConstantVariable(int: 1) originated from:
+  File "test_exc.py", line N
+                return {1, 2}
+  ConstantVariable(int: 2) originated from:
+  File "test_exc.py", line N
+                return {1, 2}
+
+User code traceback:
+  File "test_exc.py", line N, in test_unsupported_error
+    torch.compile(fn001, backend="eager")(torch.randn(1))
+  File "test_exc.py", line N, in fn001
+    return {1, 2}
+""",
+            )
 
     @torch._dynamo.config.patch(suppress_errors=False)
     def test_internal_error_no_suppress(self):
@@ -517,9 +547,10 @@ Failed Source Expressions:
 """,
         )
 
-        if sys.version_info >= (3, 11):
-            if sys.version_info >= (3, 13):
-                expected = """\
+        if sys.version_info >= (3, 13):
+            self.assertExpectedInline(
+                result,
+                """\
   File "<source_path>", line 1
     value = (
             ~
@@ -529,9 +560,12 @@ Failed Source Expressions:
         ^~~~~
     )
     ~
-"""
-            else:
-                expected = """\
+""",
+            )
+        elif sys.version_info >= (3, 11):
+            self.assertExpectedInline(
+                result,
+                """\
   File "<source_path>", line 1
     value = (
             ^
@@ -541,8 +575,8 @@ Failed Source Expressions:
         ^^^^^
     )
     ^
-"""
-            self.assertExpectedInline(result, expected)
+""",
+            )
 
     def test_vt_source_location_set_during_tracing(self):
         _source_location_capture.clear()
