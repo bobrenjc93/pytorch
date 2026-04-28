@@ -111,6 +111,8 @@ def initialize_lazy_module(
             else:
                 return x
 
+        from .tensor import materialize_tensor_tolist_args_kwargs
+
         args, kwargs = materialize_tensor_tolist_args_kwargs(tx, args, kwargs)
         proxy_args, proxy_kwargs = proxy_args_kwargs(args, kwargs)
         fake_args = [convert_to_fake(arg) for arg in proxy_args]
@@ -124,20 +126,6 @@ def initialize_lazy_module(
                 tx,
                 args=["AttributeError during lazy module initialization"],
             )
-
-
-def materialize_tensor_tolist_args_kwargs(
-    tx: "InstructionTranslator",
-    args: Sequence[VariableTracker],
-    kwargs: dict[str, VariableTracker],
-) -> tuple[list[VariableTracker], dict[str, VariableTracker]]:
-    from .tensor import materialize_tensor_tolist_arg
-
-    return (
-        [materialize_tensor_tolist_arg(arg, tx) for arg in args],
-        {key: materialize_tensor_tolist_arg(arg, tx) for key, arg in kwargs.items()},
-    )
-
 
 @contextmanager
 def record_nn_module_stack(
@@ -571,6 +559,7 @@ class NNModuleVariable(VariableTracker):
                     self.convert_to_unspecialized(tx)
 
                 from .builder import wrap_fx_proxy
+                from .tensor import materialize_tensor_tolist_args_kwargs
 
                 args, kwargs = materialize_tensor_tolist_args_kwargs(tx, args, kwargs)
                 return wrap_fx_proxy(
@@ -732,6 +721,8 @@ class NNModuleVariable(VariableTracker):
                 {},
             )
             set_example_value(mod_proxy.node, module)
+
+            from .tensor import materialize_tensor_tolist_args_kwargs
 
             materialized_args, materialized_kwargs = (
                 materialize_tensor_tolist_args_kwargs(tx, args, kwargs)

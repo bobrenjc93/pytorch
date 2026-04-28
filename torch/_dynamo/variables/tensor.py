@@ -952,10 +952,7 @@ class TensorVariable(VariableTracker):
 
         from .builder import wrap_fx_proxy
 
-        args = [materialize_tensor_tolist_arg(arg, tx) for arg in args]
-        kwargs = {
-            key: materialize_tensor_tolist_arg(arg, tx) for key, arg in kwargs.items()
-        }
+        args, kwargs = materialize_tensor_tolist_args_kwargs(tx, args, kwargs)
 
         proxy = tx.output.create_proxy(
             "call_method",
@@ -2182,6 +2179,7 @@ class TensorToListVariable(VariableTracker):
 
     _nonvar_fields = {
         "tx",
+        "_cached_list_var",
         "_example_value_cache",
         *VariableTracker._nonvar_fields,
     }
@@ -2418,6 +2416,17 @@ def materialize_tensor_tolist_arg(
         if any(a is not b for a, b in zip(materialized_items, list_arg.items)):
             return list_arg.clone(items=materialized_items)
     return arg
+
+
+def materialize_tensor_tolist_args_kwargs(
+    tx: "InstructionTranslatorBase",
+    args: Sequence[VariableTracker],
+    kwargs: dict[str, VariableTracker],
+) -> tuple[list[VariableTracker], dict[str, VariableTracker]]:
+    return (
+        [materialize_tensor_tolist_arg(arg, tx) for arg in args],
+        {key: materialize_tensor_tolist_arg(arg, tx) for key, arg in kwargs.items()},
+    )
 
 
 class SymNodeVariable(VariableTracker):
