@@ -172,13 +172,7 @@ def run_functionalized_fw_and_collect_metadata(
     static_input_indices: list[int] | None = None,
     pre_dispatch: bool = False,
     _return_graph_outputs: bool = False,
-    _metadata_out: list[ViewAndMutationMeta] | None = None,
 ) -> Callable[..., Any]:
-    if _return_graph_outputs and _metadata_out is None:
-        raise AssertionError(
-            "_metadata_out must be provided when _return_graph_outputs=True"
-        )
-
     memo: dict[Tensor, Tensor] = {}
 
     # TODO: see if we can rewrite this to be more accurate using
@@ -194,7 +188,7 @@ def run_functionalized_fw_and_collect_metadata(
             return t
 
     @simple_wraps(f)
-    def inner(*flat_args: Any) -> ViewAndMutationMeta:
+    def inner(*flat_args: Any) -> Any:
         # This function is meant to be run with the forward, which expects a flat list of tensor/symint/other args.
         if not all(
             isinstance(a, tuple(KNOWN_TYPES)) or is_opaque_type(type(a))
@@ -891,10 +885,7 @@ from a multi-output view call"
             tokens=mode._tokens,
         )
         if _return_graph_outputs:
-            if _metadata_out is None:
-                raise AssertionError("_metadata_out must not be None")
-            _metadata_out.append(metadata)
-            return fw_graph_outs, f_fw_graph_outs_descs
+            return tuple(fw_graph_outs), tuple(f_fw_graph_outs_descs), metadata
         return metadata
 
     return inner

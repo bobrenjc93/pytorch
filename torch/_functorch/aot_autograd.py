@@ -476,11 +476,16 @@ def _can_collect_metadata_during_fw_graph_trace(
     aot_config: AOTConfig,
     needs_autograd: bool,
 ) -> bool:
+    # The combined metadata/trace path intentionally stays narrow: it is only
+    # profitable when stage 1 can reuse the traced graph.  Dynamic-shape traces
+    # have extra ShapeEnv/FakeTensor side effects during metadata analysis, so
+    # keep them on the existing two-step path for now.
     if (
         needs_autograd
         or aot_config.disable_functionalization
         or aot_config.is_export
         or aot_config.pre_dispatch
+        or aot_config.dynamic_shapes
         or config.functionalize_rng_ops
         or config.selective_decompose
         or torch._C._is_any_autocast_enabled()
