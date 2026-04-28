@@ -30,7 +30,10 @@ def stash_graph_created_object(obj: Any) -> Any:
     return obj
 
 
+# Keep index 0 available for the ambient current stream so cudagraph wrappers
+# can replace it with the capture stream at runtime.
 CURRENT_STREAM_INDEX = 0
+FIRST_USER_OBJECT_INDEX = CURRENT_STREAM_INDEX + 1
 
 
 def set_external_object_by_index(index: int, value: Any) -> None:
@@ -56,10 +59,30 @@ def store_user_object_weakrefs(*args: Any) -> None:
     )
 
 
+def store_user_object_weakrefs_by_index(indices: tuple[int, ...], *args: Any) -> None:
+    global index_to_external_object_weakref
+    assert len(indices) == len(args)
+    index_to_external_object_weakref.clear()
+    index_to_external_object_weakref.update(
+        {i: weakref.ref(arg) for i, arg in zip(indices, args)}
+    )
+
+
 def reset_user_object_tracking() -> None:
     index_to_bytecode_constructor.clear()
     index_to_external_object_weakref.clear()
     keep_alive.clear()
+
+
+def _store_external_object_weakref(index: int, value: Any) -> None:
+    index_to_external_object_weakref[index] = weakref.ref(value)
+
+
+def _next_user_object_index() -> int:
+    index = FIRST_USER_OBJECT_INDEX
+    while index in index_to_bytecode_constructor:
+        index += 1
+    return index
 
 
 def register_graph_created_object(
@@ -68,10 +91,10 @@ def register_graph_created_object(
     global index_to_bytecode_constructor
     global keep_alive
     keep_alive.append(example_value)
-    index = len(index_to_bytecode_constructor)
+    index = _next_user_object_index()
     index_to_bytecode_constructor[index] = lambda cg: construct_fn(index, cg)
     try:
-        index_to_external_object_weakref[index] = weakref.ref(example_value)
+        _store_external_object_weakref(index, example_value)
     except TypeError as e:
         from .exc import unimplemented
 
@@ -88,10 +111,10 @@ def register_graph_created_object(
 # Register a user object to be used in the graph
 def register_user_object(value: Any, source: Source) -> int:
     global index_to_bytecode_constructor
-    index = len(index_to_bytecode_constructor)
+    index = _next_user_object_index()
     index_to_bytecode_constructor[index] = lambda cg: cg(source)
     try:
-        index_to_external_object_weakref[index] = weakref.ref(value)
+        _store_external_object_weakref(index, value)
     except TypeError as e:
         from .exc import unimplemented
 
@@ -103,6 +126,27 @@ def register_user_object(value: Any, source: Source) -> int:
             from_exc=e,
         )
     return index
+
+
+def register_current_stream(value: Any, source: Source) -> int:
+    global index_to_bytecode_constructor
+    assert CURRENT_STREAM_INDEX not in index_to_bytecode_constructor, (
+        f"Current stream index {CURRENT_STREAM_INDEX} is already registered"
+    )
+    index_to_bytecode_constructor[CURRENT_STREAM_INDEX] = lambda cg: cg(source)
+    try:
+        _store_external_object_weakref(CURRENT_STREAM_INDEX, value)
+    except TypeError as e:
+        from .exc import unimplemented
+
+        unimplemented(
+            gb_type="Failed to make weakref to User Object",
+            context=f"user_object: {value}",
+            explanation="Object does not allow us to make a weakref to it",
+            hints=[],
+            from_exc=e,
+        )
+    return CURRENT_STREAM_INDEX
 
 
 # Register a callback so invoke_leaf_function can retrieve nn.Module instances at runtime.

@@ -42,6 +42,23 @@ class TestStreams(torch._dynamo.test_case.TestCase):
         e = torch.Event()
         weakref.ref(e)
 
+    def test_stream_state_is_lazy_for_non_stream_graphs(self):
+        def fn(x):
+            return x + 1
+
+        with (
+            patch.object(torch.accelerator, "is_available", return_value=True),
+            patch.object(
+                torch.accelerator,
+                "current_stream",
+                side_effect=AssertionError("current_stream should be lazy"),
+            ) as current_stream,
+        ):
+            opt_fn = torch.compile(fn, backend="eager", fullgraph=True)
+            self.assertEqual(opt_fn(torch.ones(1)), torch.ones(1) + 1)
+
+        current_stream.assert_not_called()
+
     @requires_cuda
     def test_stream_enter_exit(self):
         def fn(x, y, s1, s2):
