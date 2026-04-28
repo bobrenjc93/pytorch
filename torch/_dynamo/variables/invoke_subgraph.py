@@ -692,6 +692,7 @@ def is_reusable(
 
     for source, handler, expected, guard in condition.guards:
         new_source = source.clone(replacement_fn)
+        guard_type = guard.create_fn_name()
 
         try:
             value = new_source.get_value(resolve_globals, resolve_locals, resolve_cache)
@@ -702,7 +703,7 @@ def is_reusable(
                 "  guard source: %s\n"
                 "  guard source name: %s\n"
                 "  user stack:\n%s",
-                guard.create_fn_name(),
+                guard_type,
                 new_source,
                 new_source.name,
                 "".join(guard.user_stack.format())
@@ -720,7 +721,7 @@ def is_reusable(
                 "  expected: %s\n"
                 "  got: %s\n"
                 "  user stack:\n%s",
-                guard.create_fn_name(),
+                guard_type,
                 new_source,
                 new_source.name,
                 expected,
@@ -730,6 +731,14 @@ def is_reusable(
                 else "<no stack>",
             )
             return False
+
+        # TENSOR_MATCH guards are validated above but not replayed here:
+        # explicit tensor inputs are covered by input_checks/input_aliases, and
+        # captured tensor sources are rewrapped by stamp_out_subgraph's
+        # VariableBuilder, which installs the current trace's tensor guard.
+        # Replaying the cached guard as well can duplicate no-alias sources.
+        if guard_type == "TENSOR_MATCH":
+            continue
 
         new_guard = new_source.make_guard(guard.create_fn)
         new_guard.stack = guard.stack

@@ -45,7 +45,6 @@ if TYPE_CHECKING:
     from torch._dynamo.backends.distributed import DDPOptimizerContext
     from torch._dynamo.codegen import PyCodegen
     from torch._dynamo.guards import GuardCheckSpec
-    from torch._dynamo.utils import ExactWeakKeyDictionary
     from torch._functorch._aot_autograd.schemas import ViewAndMutationMeta
     from torch._higher_order_ops.invoke_subgraph import NestedCompileRegionOptions
     from torch._subclasses.fake_tensor import FakeTensorMode
@@ -847,6 +846,14 @@ class InvokeSubgraphReuseCondition:
 
 
 class InvokeSubgraphCache(HopSubgraphCache):
+    # Runtime types:
+    # ExactWeakKeyDictionary[
+    #     CodeType,
+    #     list[tuple[InvokeSubgraphReuseCondition, InvokeSubgraphReuseEntry]],
+    # ]
+    # ExactWeakKeyDictionary[
+    #     CodeType, dict[int, InvokeSubgraphReuseEntry]
+    # ]
     _persistent_subgraph_reuse_cache: Any = None
     _persistent_subgraph_reuse_key_cache: Any = None
 
@@ -862,25 +869,6 @@ class InvokeSubgraphCache(HopSubgraphCache):
             cls._persistent_subgraph_reuse_cache = cls._new_code_cache()
         if cls._persistent_subgraph_reuse_key_cache is None:
             cls._persistent_subgraph_reuse_key_cache = cls._new_code_cache()
-
-    _persistent_subgraph_reuse_cache: Any
-    _persistent_subgraph_reuse_key_cache: Any
-    # Runtime type:
-    # ExactWeakKeyDictionary[
-    #     CodeType,
-    #     list[tuple[InvokeSubgraphReuseCondition, InvokeSubgraphReuseEntry]],
-    # ]
-    # ExactWeakKeyDictionary[
-    #     CodeType, dict[int, InvokeSubgraphReuseEntry]
-    # ]
-    if TYPE_CHECKING:
-        _persistent_subgraph_reuse_cache: ExactWeakKeyDictionary[
-            CodeType,
-            list[tuple[InvokeSubgraphReuseCondition, InvokeSubgraphReuseEntry]],
-        ]
-        _persistent_subgraph_reuse_key_cache: ExactWeakKeyDictionary[
-            CodeType, dict[int, InvokeSubgraphReuseEntry]
-        ]
 
     def __init__(self) -> None:
         self._ensure_reuse_caches()
