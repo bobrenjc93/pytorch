@@ -1021,6 +1021,7 @@ class outer_fn(torch.nn.Module):
             actual1 = torch.compile(outer1, backend=cnt, fullgraph=True)(x, y)
             self.assertEqual(trace_count, 1)
             actual2 = torch.compile(outer2, backend=cnt, fullgraph=True)(x, y)
+            self.assertEqual(trace_count, 1)
             torch._dynamo.reset()
             actual3 = torch.compile(outer2, backend=cnt, fullgraph=True)(x, y)
 
