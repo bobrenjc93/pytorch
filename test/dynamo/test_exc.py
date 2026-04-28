@@ -244,7 +244,7 @@ User code traceback:
     return {1, 2}
 """
         )
-        self.assertEqual(
+        self.assertExpectedInline(
             _munge_with_source_markers_removed(record.getMessage()),
             expected,
         )
@@ -542,7 +542,7 @@ Failed Source Expressions:
     )
     ^
 """
-            self.assertEqual(result, expected)
+            self.assertExpectedInline(result, expected)
 
     def test_vt_source_location_set_during_tracing(self):
         _source_location_capture.clear()
