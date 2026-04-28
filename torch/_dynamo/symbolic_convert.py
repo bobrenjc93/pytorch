@@ -5814,6 +5814,8 @@ class InliningGeneratorInstructionTranslator(InliningInstructionTranslator):
 
     def YIELD_VALUE(self, inst: Instruction) -> None:
         top = self.pop()
+        if type(top) is variables.TensorToListVariable:
+            top = variables.materialize_tensor_tolist_arg(top, self, recursive=False)
         self.generated_items.append(top)
         if len(self.generated_items) > MAX_ITERATOR_LIMIT:
             raise exc.InfiniteGeneratorError
