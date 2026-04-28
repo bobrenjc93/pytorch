@@ -78,8 +78,8 @@ class TestRemoteCache(TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             key = os.path.join(tmpdir, "cache", "entry.best_config")
             c = create_cache("local-autotune", local_cache_cls="LocalAutotuneCache")
-            self.assertIsNotNone(c)
-            assert c is not None
+            if c is None:
+                self.fail("Expected local autotune cache")
 
             expected = {"value": 1}
             c.put(key, expected)
