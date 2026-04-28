@@ -3254,6 +3254,30 @@ class TestInvokeSubgraphReuse(TestCase):
 
         self.assertEqual(count(), 1)
 
+    def test_transformer_encoder_layers_auto_reuse(self):
+        torch.manual_seed(0)
+        layer = torch.nn.TransformerEncoderLayer(
+            d_model=4,
+            nhead=2,
+            dim_feedforward=8,
+            dropout=0.0,
+            batch_first=True,
+        )
+        encoder = torch.nn.TransformerEncoder(layer, num_layers=3)
+        encoder.eval()
+        with torch.no_grad():
+            encoder.layers[1].linear1.weight.add_(0.25)
+            encoder.layers[2].linear2.bias.add_(0.5)
+
+        x = torch.randn(2, 3, 4, requires_grad=True)
+        ref = encoder(x)
+
+        with self._count_speculate_calls() as count:
+            res = torch.compile(encoder, backend="aot_eager", fullgraph=True)(x)
+
+        self.assertEqual(ref, res)
+        self.assertEqual(count(), 1)
+
     def test_subgraph_reuse_different_shapes(self):
         @nested_compile_region
         def gn(x):
