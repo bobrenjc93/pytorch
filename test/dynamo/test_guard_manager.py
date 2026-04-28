@@ -1601,7 +1601,7 @@ class NNModuleStructuralGuardTests(RecursiveDictTagTests):
         self.assertEqual(opt_mod(x), expected + 1)
         self.assertEqual(counter.frame_count, 2)
 
-    def test_structural_fingerprint_recompiles_on_child_attr_mutation(self):
+    def test_normalization_preserves_leaf_value_guards(self):
         class Leaf(torch.nn.Module):
             def __init__(self):
                 super().__init__()
@@ -1638,6 +1638,9 @@ class NNModuleStructuralGuardTests(RecursiveDictTagTests):
         self.assertEqual(opt_mod(x), expected)
         self.assertEqual(counter.frame_count, 1)
 
+        # The structural fingerprint only covers nn.Module structure. The
+        # recompile here comes from the surviving EQUALS_MATCH guard on
+        # `offset`, which is accessed in forward.
         mod.layers[0].offset = 3
         self.assertEqual(opt_mod(x), expected + 2)
         self.assertEqual(counter.frame_count, 2)

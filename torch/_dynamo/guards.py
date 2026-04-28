@@ -1203,6 +1203,9 @@ def _check_nn_module_structural_fingerprint(
     try:
         # Guard checks run on every cache hit.  Compare against the stored
         # fingerprint directly instead of allocating a fresh dataclass tree.
+        # This is still a Python tree walk; the normalized guard is primarily
+        # aimed at reducing guard build work and cache metadata until this
+        # structural check can move into the C++ guard manager.
         # A root-only dict-version shortcut is not sound: child module
         # structure can change without mutating the root module __dict__.
         return _nn_module_structural_fingerprint_matches(value, expected)
