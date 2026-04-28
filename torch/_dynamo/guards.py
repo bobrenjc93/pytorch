@@ -1362,8 +1362,13 @@ def _replace_output_graph_guards(
     output_graph: OutputGraphCommon, sorted_guards: list[Guard]
 ) -> None:
     guards_set = torch._guards.GuardsSet(OrderedSet(sorted_guards))
-    tracing_context = output_graph.tracing_context  # type: ignore[attr-defined]
-    tracing_context.guards_context.dynamo_guards = guards_set
+    tracing_context = getattr(output_graph, "tracing_context", None)
+    if tracing_context is not None:
+        tracing_context.guards_context.dynamo_guards = guards_set
+    else:
+        # Strict export and precompile can pass an OutputGraphCommon wrapper
+        # that owns only the persistent guards state, not a tracing context.
+        output_graph._guards = guards_set
 
 
 @functools.cache
