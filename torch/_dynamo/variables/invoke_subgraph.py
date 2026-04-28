@@ -4,7 +4,6 @@ supporting helpers for subgraph reuse (auto-cache) in Dynamo's invoke_subgraph
 higher-order operator.
 """
 
-import copy
 import enum
 import logging
 import traceback
@@ -343,6 +342,17 @@ class LiftedBoundSymbol:
 LiftedArgOrigin = (
     LiftedUserArg | LiftedCapturedSource | LiftedSyntheticObject | LiftedBoundSymbol
 )
+
+
+def graph_has_free_unbacked_symbols(gm: torch.fx.GraphModule) -> bool:
+    from torch.fx.experimental.symbolic_shapes import has_free_unbacked_symbols
+
+    for node in gm.graph.nodes:
+        for key in ("example_value", "val", "unbacked_bindings"):
+            value = node.meta.get(key)
+            if value is not None and has_free_unbacked_symbols(value):
+                return True
+    return False
 
 
 def get_fn_code(fn_var: Any) -> types.CodeType | None:
@@ -764,7 +774,7 @@ def has_reuse_entries(
     if not isinstance(invoke_subgraph_cache, InvokeSubgraphCache):
         return False
     fn_code = get_fn_code(fn_var)
-    return fn_code is not None and fn_code in invoke_subgraph_cache.subgraph_reuse_cache
+    return fn_code is not None and invoke_subgraph_cache.has_reuse_entries(fn_code)
 
 
 def find_reuse_match(
@@ -876,6 +886,7 @@ def save_reuse_entry(
         # rewrite captured variable sources for the current invocation.
         arg_sources=fingerprint.arg_sources,
         num_user_outputs=num_user_outputs,
+        has_free_unbacked_symbols=graph_has_free_unbacked_symbols(body_gmod),
     )
     if condition is not None:
         invoke_subgraph_cache.add_reuse_entry(
@@ -1033,14 +1044,24 @@ def stamp_out_subgraph(
         remapped_name = invoke_subgraph_cache.installed_reuse_subgraphs.get(
             cached.reuse_id
         )
+        # In the original trace the cached module may already be installed;
+        # in a later trace we register it under the cached name when possible
+        # so proxy-dispatch tracing can reuse its identifier-based cache.
         if remapped_name is not None:
             body_name = remapped_name
         elif tx.output.nn_modules.get(body_name) is cached.body_gmod:
             invoke_subgraph_cache.installed_reuse_subgraphs[cached.reuse_id] = body_name
+        elif body_name not in tx.output.nn_modules:
+            cached.body_gmod.__name__ = body_name  # type: ignore[assignment]
+            cached.body_gmod.torchdynamo_force_dynamic = False  # type: ignore[assignment]
+            tx.output.register_attr_or_module(cached.body_gmod, body_name, source=None)
+            for name, mod in tx.output.nn_modules.items():
+                if mod is cached.body_gmod:
+                    body_name = name
+                    break
+            invoke_subgraph_cache.installed_reuse_subgraphs[cached.reuse_id] = body_name
         else:
-            body_name = tx.output.install_subgraph(
-                cached.body_name, copy.deepcopy(cached.body_gmod)
-            )
+            body_name = tx.output.install_subgraph(cached.body_name, cached.body_gmod)
             invoke_subgraph_cache.installed_reuse_subgraphs[cached.reuse_id] = body_name
 
     body_node = make_attr(tx, body_name)
