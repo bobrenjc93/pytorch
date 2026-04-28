@@ -11676,6 +11676,19 @@ def ___make_guard_fn():
         self.assertEqual(counter.frame_count, 1)
 
     @torch._dynamo.config.patch(capture_scalar_outputs=True)
+    def test_tolist_sum_uses_lazy_reduction(self):
+        def fn(x):
+            return torch.tensor(sum(x.tolist()))
+
+        x = torch.arange(100, dtype=torch.int64)
+        eager = fn(x)
+        counter = CompileCounter()
+        compiled = torch.compile(fn, backend=counter, fullgraph=True)(x)
+        self.assertEqual(eager, compiled)
+        self.assertEqual(counter.frame_count, 1)
+        self.assertLess(counter.op_count, 10)
+
+    @torch._dynamo.config.patch(capture_scalar_outputs=True)
     def test_tolist_kd(self):
         def fn(x):
             new_list = []

@@ -75,7 +75,7 @@ from ..utils import (
 )
 from .base import AttributeMutationNew, ValueMutationNew, VariableTracker
 from .constant import ConstantVariable
-from .lists import ListIteratorVariable, SizeVariable
+from .lists import ListIteratorVariable, ListVariable, SizeVariable
 from .script_object import TorchScriptObjectVariable
 from .user_defined import UserDefinedClassVariable
 
@@ -952,6 +952,18 @@ class TensorVariable(VariableTracker):
 
         from .builder import wrap_fx_proxy
 
+        def materialize_tensor_tolist_arg(arg: VariableTracker) -> VariableTracker:
+            if isinstance(arg, TensorToListVariable):
+                return ListVariable(
+                    arg.unpack_var_sequence(tx), mutation_type=ValueMutationNew()
+                )
+            return arg
+
+        args = [materialize_tensor_tolist_arg(arg) for arg in args]
+        kwargs = {
+            key: materialize_tensor_tolist_arg(arg) for key, arg in kwargs.items()
+        }
+
         proxy = tx.output.create_proxy(
             "call_method",
             name,
@@ -1219,28 +1231,32 @@ class TensorVariable(VariableTracker):
     def method_tolist(self, tx: "InstructionTranslator") -> VariableTracker:
         from .builder import wrap_fx_proxy
 
+        tensor = self.as_proxy().node.meta["example_value"]
+        if tensor.dtype not in [
+            torch.int8,
+            torch.int16,
+            torch.int32,
+            torch.int64,
+        ]:
+            unimplemented(
+                gb_type="Tensor.tolist() with non-integer tensor",
+                context=f"call_method {self} to_list",
+                explanation="Dynamo currently does not support tracing "
+                "`tolist()` on non-integer tensors.",
+                hints=[
+                    "Ensure the input tensor to `tolist()` is an integer "
+                    "type (e.g., int8, int16, int32, int64)."
+                ],
+            )
+
+        if tensor.dim() > 0:
+            return TensorToListVariable(self, mutation_type=ValueMutationNew())
+
         def tolist(tensor: torch.Tensor, sub_proxy: torch.fx.Proxy) -> Any | list[Any]:
             def wrap(i: Any, sub_proxy: torch.fx.Proxy) -> VariableTracker:
                 return wrap_fx_proxy(
                     tx,
                     sub_proxy.item(),
-                )
-
-            if tensor.dtype not in [
-                torch.int8,
-                torch.int16,
-                torch.int32,
-                torch.int64,
-            ]:
-                unimplemented(
-                    gb_type="Tensor.tolist() with non-integer tensor",
-                    context=f"call_method {self} to_list",
-                    explanation="Dynamo currently does not support tracing "
-                    "`tolist()` on non-integer tensors.",
-                    hints=[
-                        "Ensure the input tensor to `tolist()` is an integer "
-                        "type (e.g., int8, int16, int32, int64)."
-                    ],
                 )
 
             if tensor.dim() == 0:
@@ -1254,7 +1270,6 @@ class TensorVariable(VariableTracker):
                 for i, sub_tensor in enumerate(tensor)
             ]
 
-        tensor = self.as_proxy().node.meta["example_value"]
         out = tolist(tensor, self.as_proxy())
         return VariableTracker.build(tx, out)
 
@@ -2167,6 +2182,189 @@ class TensorVariable(VariableTracker):
         a = self.as_proxy().node.meta["example_value"]
         b = other.as_proxy().node.meta["example_value"]
         return a is b
+
+
+class TensorToListVariable(VariableTracker):
+    """Lazy representation of Tensor.tolist() for non-scalar integer tensors."""
+
+    _nonvar_fields = {
+        *VariableTracker._nonvar_fields,
+    }
+
+    def __init__(
+        self,
+        tensor_variable: TensorVariable,
+        materialized: list[VariableTracker] | None = None,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(**kwargs)
+        self.tensor_variable = tensor_variable
+        self.materialized = materialized
+
+    def python_type(self) -> type:
+        return list
+
+    def debug_repr(self) -> str:
+        return f"{self.tensor_variable.debug_repr()}.tolist()"
+
+    def _example_value(self) -> torch.Tensor:
+        return self.tensor_variable.as_proxy().node.meta["example_value"]
+
+    def _length(self, tx: "InstructionTranslator") -> int:
+        tensor = self._example_value()
+        assert tensor.dim() > 0
+        length = tensor.shape[0]
+        if isinstance(length, int):
+            return length
+        return int(guard_scalar(length))
+
+    def _wrap_item(self, tx: "InstructionTranslator", index: int) -> VariableTracker:
+        from .builder import wrap_fx_proxy
+
+        return wrap_fx_proxy(tx, self.tensor_variable.as_proxy()[index].item())
+
+    def _wrap_sublist(
+        self, tx: "InstructionTranslator", index: int
+    ) -> "TensorToListVariable":
+        from .builder import wrap_fx_proxy_cls
+
+        sub_tensor = wrap_fx_proxy_cls(
+            target_cls=type(self.tensor_variable),
+            tx=tx,
+            proxy=self.tensor_variable.as_proxy()[index],
+        )
+        assert isinstance(sub_tensor, TensorVariable)
+        return TensorToListVariable(sub_tensor, mutation_type=ValueMutationNew())
+
+    def _getitem_index(
+        self, tx: "InstructionTranslator", index: int
+    ) -> VariableTracker:
+        length = self._length(tx)
+        if index < 0:
+            index += length
+        if index < 0 or index >= length:
+            raise_observed_exception(IndexError, tx, args=["list index out of range"])
+
+        if self._example_value().dim() == 1:
+            return self._wrap_item(tx, index)
+        return self._wrap_sublist(tx, index)
+
+    def _list_variable(self, tx: "InstructionTranslator") -> ListVariable:
+        return ListVariable(
+            self.unpack_var_sequence(tx), mutation_type=ValueMutationNew()
+        )
+
+    def as_python_constant(self) -> Any:
+        raise NotImplementedError
+
+    def as_proxy(self) -> list[Any]:
+        if self.materialized is None:
+            raise NotImplementedError
+        return [item.as_proxy() for item in self.materialized]
+
+    def has_unpack_var_sequence(self, tx: "InstructionTranslator") -> bool:
+        return True
+
+    def has_force_unpack_var_sequence(self, tx: "InstructionTranslator") -> bool:
+        return True
+
+    def getitem_const(
+        self, tx: "InstructionTranslator", arg: VariableTracker
+    ) -> VariableTracker:
+        if isinstance(arg, SymNodeVariable):
+            index = arg.evaluate_expr(tx.output)
+        else:
+            index = arg.as_python_constant()
+
+        if isinstance(index, slice):
+            return self._list_variable(tx).getitem_const(tx, arg)
+
+        return self._getitem_index(tx, operator.index(index))
+
+    def unpack_var_sequence(
+        self,
+        tx: "InstructionTranslator",
+        idxes: Sequence[int] | None = None,
+    ) -> list[VariableTracker]:
+        if self.materialized is None:
+            length = self._length(tx)
+            if idxes is None:
+                idxes = range(length)  # type: ignore[assignment]
+            else:
+                assert len(idxes) == length, (
+                    f"Can't unpack a list of {length} items into {len(idxes)} elements."
+                )
+            self.materialized = [self._getitem_index(tx, i) for i in idxes]
+        return list(self.materialized)
+
+    def force_unpack_var_sequence(
+        self, tx: "InstructionTranslator"
+    ) -> list[VariableTracker]:
+        return self.unpack_var_sequence(tx)
+
+    def sq_length(self, tx: "InstructionTranslator") -> VariableTracker:
+        return VariableTracker.build(tx, self._length(tx))
+
+    def method___len__(self, tx: "InstructionTranslator") -> VariableTracker:
+        return self.sq_length(tx)
+
+    def mp_subscript_impl(
+        self, tx: "InstructionTranslator", key: VariableTracker
+    ) -> VariableTracker:
+        try:
+            key_type = key.python_type()
+        except NotImplementedError:
+            key_type = None
+        if key_type not in (int, bool, slice):
+            if key_type is not None and not hasattr(key_type, "__index__"):
+                raise_observed_exception(
+                    TypeError,
+                    tx,
+                    args=[
+                        f"list indices must be integers or slices, not {key.python_type_name()}"
+                    ],
+                )
+            key = key.nb_index_impl(tx)
+
+        return self.getitem_const(tx, key)
+
+    def tp_iter_impl(self, tx: "InstructionTranslator") -> VariableTracker:
+        return ListIteratorVariable(
+            self.unpack_var_sequence(tx), mutation_type=ValueMutationNew()
+        )
+
+    def method___iter__(self, tx: "InstructionTranslator") -> VariableTracker:
+        return self.tp_iter_impl(tx)
+
+    def call_method(
+        self,
+        tx: "InstructionTranslator",
+        name: str,
+        args: Sequence[VariableTracker],
+        kwargs: dict[str, VariableTracker],
+    ) -> VariableTracker:
+        return self._list_variable(tx).call_method(tx, name, list(args), kwargs)
+
+    def sym_sum(self, tx: "InstructionTranslator") -> VariableTracker | None:
+        if self._example_value().dim() != 1:
+            return None
+
+        sum_tensor = self.tensor_variable.call_method(
+            tx,
+            "sum",
+            [],
+            {"dtype": ConstantVariable.create(torch.int64)},
+        )
+        return sum_tensor.call_method(tx, "item", [], {})
+
+    def reconstruct(self, codegen: "PyCodegen") -> None:
+        if self.materialized is not None:
+            codegen(ListVariable(self.materialized, mutation_type=ValueMutationNew()))
+            return
+
+        codegen(self.tensor_variable)
+        codegen.load_method("tolist")
+        codegen.call_method(0)
 
 
 class SymNodeVariable(VariableTracker):

@@ -2955,6 +2955,17 @@ class PolyfilledFunctionVariable(VariableTracker):
             )
             return VariableTracker.build(tx, result)
 
+        # Special case for sum on a lazy Tensor.tolist() result.
+        if (
+            self.fn is builtins.sum
+            and len(args) == 1
+            and not kwargs
+            and isinstance(args[0], variables.TensorToListVariable)
+        ):
+            result = args[0].sym_sum(tx)
+            if result is not None:
+                return result
+
         # Special case for sum on tuple/list of ints
         if (
             self.fn is builtins.sum
