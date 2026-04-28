@@ -2197,6 +2197,7 @@ class TensorToListVariable(VariableTracker):
         self.tensor_variable = tensor_variable
         self.tx = tx
         self.materialized = materialized
+        self._cached_list_var: ListVariable | None = None
         self._example_value_cache = self.tensor_variable.as_proxy().node.meta[
             "example_value"
         ]
@@ -2256,11 +2257,15 @@ class TensorToListVariable(VariableTracker):
         return self._wrap_sublist(tx, index)
 
     def _list_variable(self, tx: "InstructionTranslator") -> ListVariable:
-        if self.materialized is None:
-            self.unpack_var_sequence(tx)
+        if self._cached_list_var is None:
+            if self.materialized is None:
+                self.unpack_var_sequence(tx)
 
-        assert self.materialized is not None
-        return ListVariable(self.materialized, mutation_type=ValueMutationNew())
+            assert self.materialized is not None
+            self._cached_list_var = ListVariable(
+                self.materialized, mutation_type=ValueMutationNew()
+            )
+        return self._cached_list_var
 
     def as_python_constant(self) -> Any:
         raise NotImplementedError
@@ -2379,8 +2384,7 @@ class TensorToListVariable(VariableTracker):
         if self.materialized is None:
             self.unpack_var_sequence(cast("InstructionTranslator", codegen.tx))
 
-        assert self.materialized is not None
-        codegen(ListVariable(self.materialized, mutation_type=ValueMutationNew()))
+        codegen(self._list_variable(cast("InstructionTranslator", codegen.tx)))
 
 
 def materialize_tensor_tolist_arg(
