@@ -168,6 +168,25 @@ class FunctionTests(torch._dynamo.test_case.TestCase):
     def test_inline_lru_cache_fn_with_default_args(a, b):
         return inline_lru_cache_fn_with_default_args(a, 2, b)
 
+    def test_inline_trace_cache_reuses_same_shape_function(self):
+        def block(x):
+            return torch.cos(torch.sin(x + 1.0)) * 2.0
+
+        def fn(x):
+            for _ in range(4):
+                x = block(x)
+            return x
+
+        counters.clear()
+        cnt = torch._dynamo.testing.CompileCounter()
+        opt_fn = torch.compile(fn, backend=cnt, fullgraph=True)
+
+        x = torch.randn(3, 4)
+        self.assertTrue(same(opt_fn(x), fn(x)))
+        self.assertEqual(cnt.frame_count, 1)
+        self.assertEqual(counters["inline_trace_cache"]["stored"], 1)
+        self.assertEqual(counters["inline_trace_cache"]["hit"], 3)
+
     def test_lru_cache_warning_issued_during_tracing(self):
         import warnings
         from functools import lru_cache
