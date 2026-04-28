@@ -2211,6 +2211,9 @@ class TensorToListVariable(VariableTracker):
         return self._example_value_cache
 
     def _length(self, tx: "InstructionTranslator") -> int:
+        if self.materialized is not None:
+            return len(self.materialized)
+
         tensor = self._example_value()
         assert tensor.dim() > 0
         length = tensor.shape[0]
@@ -2245,14 +2248,19 @@ class TensorToListVariable(VariableTracker):
         if index < 0 or index >= length:
             raise_observed_exception(IndexError, tx, args=["list index out of range"])
 
+        if self.materialized is not None:
+            return self.materialized[index]
+
         if self._example_value().dim() == 1:
             return self._wrap_item(tx, index)
         return self._wrap_sublist(tx, index)
 
     def _list_variable(self, tx: "InstructionTranslator") -> ListVariable:
-        return ListVariable(
-            self.unpack_var_sequence(tx), mutation_type=ValueMutationNew()
-        )
+        if self.materialized is None:
+            self.unpack_var_sequence(tx)
+
+        assert self.materialized is not None
+        return ListVariable(self.materialized, mutation_type=ValueMutationNew())
 
     def as_python_constant(self) -> Any:
         raise NotImplementedError
@@ -2349,6 +2357,11 @@ class TensorToListVariable(VariableTracker):
         return self._list_variable(tx).call_method(tx, name, list(args), kwargs)
 
     def sym_sum(self, tx: "InstructionTranslator") -> VariableTracker | None:
+        if self.materialized is not None:
+            # Materialized values may have been mutated through list methods, so
+            # use the generic sum polyfill to preserve Python list semantics.
+            return None
+
         if self._example_value().dim() != 1:
             return None
 

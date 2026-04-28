@@ -11728,6 +11728,20 @@ def ___make_guard_fn():
             self.assertEqual(counter.frame_count, 1)
 
     @torch._dynamo.config.patch(capture_scalar_outputs=True)
+    def test_tolist_list_mutation_materializes(self):
+        def fn(x):
+            lst = x.tolist()
+            lst.append(5)
+            return lst, len(lst), lst[-1], sum(lst)
+
+        x = torch.tensor([1, 2, 3], dtype=torch.int64)
+        eager = fn(x)
+        counter = CompileCounter()
+        compiled = torch.compile(fn, backend=counter, fullgraph=True)(x)
+        self.assertEqual(eager, compiled)
+        self.assertEqual(counter.frame_count, 1)
+
+    @torch._dynamo.config.patch(capture_scalar_outputs=True)
     def test_tolist_as_torch_function_arg_materializes(self):
         def fn(x, sections):
             return torch.split(x, sections.tolist())
