@@ -5162,6 +5162,10 @@ class InstructionTranslator(InstructionTranslatorBase):
 
     def _return(self, inst: Instruction) -> None:
         self.replace_tos_if_return_is_generator()
+        if self.stack:
+            self.stack[-1] = variables.materialize_tensor_tolist_arg(
+                self.stack[-1], self
+            )
         assert self.instruction_pointer is not None
         assert self.start_point is not None
         get_metrics_context().increment(

@@ -83,7 +83,7 @@ from ..utils import (
     proxy_args_kwargs,
     unwrap_if_wrapper,
 )
-from .base import typestr, ValueMutationNew, VariableTracker
+from .base import typestr, VariableTracker
 from .ctx_manager import (
     AutocastModeVariable,
     ProfilerContextVariable,
@@ -2625,8 +2625,9 @@ class TorchInGraphFunctionVariable(BaseTorchVariable):
         args: Sequence[VariableTracker],
         kwargs: "dict[str, VariableTracker]",
     ) -> "VariableTracker":
-        from . import SymNodeVariable, TensorToListVariable
+        from . import SymNodeVariable
         from .builder import wrap_fx_proxy
+        from .tensor import materialize_tensor_tolist_arg
 
         if self.kind == AllowInGraphKind.NONSTRICT_TRACE:
             return self._call_nonstrict_traceable_function(tx, args, kwargs)
@@ -2801,16 +2802,9 @@ For now, dynamo will explicitly graph break when it encounters user code with th
             if tx.fake_mode and tx.fake_mode.shape_env:
                 ctx = tx.fake_mode.shape_env.ignore_fresh_unbacked_symbols
 
-        def materialize_tensor_tolist_arg(arg: VariableTracker) -> VariableTracker:
-            if isinstance(arg, TensorToListVariable):
-                return ListVariable(
-                    arg.unpack_var_sequence(tx), mutation_type=ValueMutationNew()
-                )
-            return arg
-
-        args = [materialize_tensor_tolist_arg(arg) for arg in args]
+        args = [materialize_tensor_tolist_arg(arg, tx) for arg in args]
         kwargs = {
-            key: materialize_tensor_tolist_arg(arg) for key, arg in kwargs.items()
+            key: materialize_tensor_tolist_arg(arg, tx) for key, arg in kwargs.items()
         }
 
         with ctx():

@@ -155,6 +155,7 @@ from .streams import (
 from .tensor import (
     DataPtrVariable,
     FakeItemVariable,
+    materialize_tensor_tolist_arg,
     NumpyNdarrayVariable,
     SymNodeVariable,
     TensorToListVariable,
@@ -238,6 +239,7 @@ __all__ = [
     "SDPAParamsVariable",
     "ErrorOnGraphBreakVariable",
     "SkipFunctionVariable",
+    "materialize_tensor_tolist_arg",
     "SliceVariable",
     "StringFormatVariable",
     "SuperVariable",

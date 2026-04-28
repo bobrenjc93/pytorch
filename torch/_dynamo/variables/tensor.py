@@ -25,7 +25,7 @@ from collections.abc import Iterable, Sequence
 from contextlib import nullcontext
 from itertools import chain
 from types import NoneType
-from typing import Any, NoReturn, Optional, TYPE_CHECKING
+from typing import Any, cast, NoReturn, Optional, SupportsIndex, TYPE_CHECKING
 
 import sympy
 
@@ -952,16 +952,9 @@ class TensorVariable(VariableTracker):
 
         from .builder import wrap_fx_proxy
 
-        def materialize_tensor_tolist_arg(arg: VariableTracker) -> VariableTracker:
-            if isinstance(arg, TensorToListVariable):
-                return ListVariable(
-                    arg.unpack_var_sequence(tx), mutation_type=ValueMutationNew()
-                )
-            return arg
-
-        args = [materialize_tensor_tolist_arg(arg) for arg in args]
+        args = [materialize_tensor_tolist_arg(arg, tx) for arg in args]
         kwargs = {
-            key: materialize_tensor_tolist_arg(arg) for key, arg in kwargs.items()
+            key: materialize_tensor_tolist_arg(arg, tx) for key, arg in kwargs.items()
         }
 
         proxy = tx.output.create_proxy(
@@ -1249,8 +1242,8 @@ class TensorVariable(VariableTracker):
                 ],
             )
 
-        if tensor.dim() > 0:
-            return TensorToListVariable(self, mutation_type=ValueMutationNew())
+        if tensor.dim() > 0 and config.capture_scalar_outputs:
+            return TensorToListVariable(self, tx, mutation_type=ValueMutationNew())
 
         def tolist(tensor: torch.Tensor, sub_proxy: torch.fx.Proxy) -> Any | list[Any]:
             def wrap(i: Any, sub_proxy: torch.fx.Proxy) -> VariableTracker:
@@ -2188,18 +2181,25 @@ class TensorToListVariable(VariableTracker):
     """Lazy representation of Tensor.tolist() for non-scalar integer tensors."""
 
     _nonvar_fields = {
+        "tx",
+        "_example_value_cache",
         *VariableTracker._nonvar_fields,
     }
 
     def __init__(
         self,
         tensor_variable: TensorVariable,
+        tx: "InstructionTranslator",
         materialized: list[VariableTracker] | None = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(**kwargs)
         self.tensor_variable = tensor_variable
+        self.tx = tx
         self.materialized = materialized
+        self._example_value_cache = self.tensor_variable.as_proxy().node.meta[
+            "example_value"
+        ]
 
     def python_type(self) -> type:
         return list
@@ -2208,7 +2208,7 @@ class TensorToListVariable(VariableTracker):
         return f"{self.tensor_variable.debug_repr()}.tolist()"
 
     def _example_value(self) -> torch.Tensor:
-        return self.tensor_variable.as_proxy().node.meta["example_value"]
+        return self._example_value_cache
 
     def _length(self, tx: "InstructionTranslator") -> int:
         tensor = self._example_value()
@@ -2234,7 +2234,7 @@ class TensorToListVariable(VariableTracker):
             proxy=self.tensor_variable.as_proxy()[index],
         )
         assert isinstance(sub_tensor, TensorVariable)
-        return TensorToListVariable(sub_tensor, mutation_type=ValueMutationNew())
+        return TensorToListVariable(sub_tensor, tx, mutation_type=ValueMutationNew())
 
     def _getitem_index(
         self, tx: "InstructionTranslator", index: int
@@ -2258,9 +2258,10 @@ class TensorToListVariable(VariableTracker):
         raise NotImplementedError
 
     def as_proxy(self) -> list[Any]:
-        if self.materialized is None:
-            raise NotImplementedError
-        return [item.as_proxy() for item in self.materialized]
+        materialized = self.materialized
+        if materialized is None:
+            materialized = self.unpack_var_sequence(self.tx)
+        return [item.as_proxy() for item in materialized]
 
     def has_unpack_var_sequence(self, tx: "InstructionTranslator") -> bool:
         return True
@@ -2279,7 +2280,7 @@ class TensorToListVariable(VariableTracker):
         if isinstance(index, slice):
             return self._list_variable(tx).getitem_const(tx, arg)
 
-        return self._getitem_index(tx, operator.index(index))
+        return self._getitem_index(tx, operator.index(cast(SupportsIndex, index)))
 
     def unpack_var_sequence(
         self,
@@ -2358,13 +2359,19 @@ class TensorToListVariable(VariableTracker):
         return sum_tensor.call_method(tx, "item", [], {})
 
     def reconstruct(self, codegen: "PyCodegen") -> None:
-        if self.materialized is not None:
-            codegen(ListVariable(self.materialized, mutation_type=ValueMutationNew()))
-            return
+        if self.materialized is None:
+            self.unpack_var_sequence(self.tx)
 
-        codegen(self.tensor_variable)
-        codegen.load_method("tolist")
-        codegen.call_method(0)
+        assert self.materialized is not None
+        codegen(ListVariable(self.materialized, mutation_type=ValueMutationNew()))
+
+
+def materialize_tensor_tolist_arg(
+    arg: VariableTracker, tx: "InstructionTranslator"
+) -> VariableTracker:
+    if isinstance(arg, TensorToListVariable):
+        return arg._list_variable(tx)
+    return arg
 
 
 class SymNodeVariable(VariableTracker):
