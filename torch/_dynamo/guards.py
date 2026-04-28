@@ -1211,12 +1211,6 @@ def _check_nn_module_structural_fingerprint(
         return False
 
 
-def _guard_create_fn_kwarg(guard: Guard, name: str) -> Any:
-    if isinstance(guard.create_fn, functools.partial) and guard.create_fn.keywords:
-        return guard.create_fn.keywords.get(name)
-    return None
-
-
 def _is_structural_attr_of_specialized_nn_module(
     source: Source,
     attr_names: tuple[str, ...] | set[str],
@@ -1259,12 +1253,6 @@ def _nn_module_structural_guard_covers(
 
     if guard_type in ("ID_MATCH", "TYPE_MATCH") and isinstance(source, TypeSource):
         return source.base in module_sources
-
-    if (
-        guard_type == "NOT_PRESENT_IN_GENERIC_DICT"
-        and _guard_create_fn_kwarg(guard, "attr") == "forward"
-    ):
-        return source in module_sources
 
     if guard_type == "EMPTY_NN_MODULE_HOOKS_DICT":
         return (

@@ -1540,7 +1540,6 @@ class NNModuleStructuralGuardTests(RecursiveDictTagTests):
         self.assertFalse(disabled_seen_structural_guard)
         self.assertGreater(enabled_guard_count, 0)
         self.assertLess(enabled_guard_count, disabled_guard_count)
-        self.assertLess(enabled_guard_count, 500)
 
     def test_nested_module_structural_guard_respects_config(self):
         try:
@@ -1600,6 +1599,83 @@ class NNModuleStructuralGuardTests(RecursiveDictTagTests):
 
         mod.layers[0].eval()
         self.assertEqual(opt_mod(x), expected + 1)
+        self.assertEqual(counter.frame_count, 2)
+
+    def test_structural_fingerprint_recompiles_on_child_module_add(self):
+        class Leaf(torch.nn.Module):
+            def forward(self, x):
+                return x + 1
+
+        class Parent(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.layer_count = (
+                    torch._dynamo.config.nn_module_structural_guard_min_module_count + 6
+                )
+                self.layers = torch.nn.ModuleList(
+                    [Leaf() for _ in range(self.layer_count)]
+                )
+
+            def forward(self, x):
+                for layer in self.layers:
+                    x = layer(x)
+                return x
+
+        torch._dynamo.reset()
+        from torch._dynamo.testing import CompileCounter
+
+        counter = CompileCounter()
+        mod = Parent()
+        opt_mod = torch.compile(mod, backend=counter, fullgraph=True)
+
+        x = torch.ones(4)
+        expected = torch.full((4,), float(mod.layer_count + 1))
+        self.assertEqual(opt_mod(x), expected)
+        self.assertEqual(opt_mod(x), expected)
+        self.assertEqual(counter.frame_count, 1)
+
+        mod.layers.append(Leaf())
+        self.assertEqual(opt_mod(x), expected + 1)
+        self.assertEqual(counter.frame_count, 2)
+
+    def test_normalization_preserves_child_forward_monkeypatch_guard(self):
+        class Leaf(torch.nn.Module):
+            def forward(self, x):
+                return x + 1
+
+        class Parent(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.layer_count = (
+                    torch._dynamo.config.nn_module_structural_guard_min_module_count + 6
+                )
+                self.layers = torch.nn.ModuleList(
+                    [Leaf() for _ in range(self.layer_count)]
+                )
+
+            def forward(self, x):
+                for layer in self.layers:
+                    x = layer(x)
+                return x
+
+        torch._dynamo.reset()
+        from torch._dynamo.testing import CompileCounter
+
+        counter = CompileCounter()
+        mod = Parent()
+        opt_mod = torch.compile(mod, backend=counter, fullgraph=True)
+
+        x = torch.ones(4)
+        expected = torch.full((4,), float(mod.layer_count + 1))
+        self.assertEqual(opt_mod(x), expected)
+        self.assertEqual(opt_mod(x), expected)
+        self.assertEqual(counter.frame_count, 1)
+
+        def patched_forward(self, x):
+            return x + 3
+
+        mod.layers[0].forward = patched_forward.__get__(mod.layers[0], Leaf)
+        self.assertEqual(opt_mod(x), expected + 2)
         self.assertEqual(counter.frame_count, 2)
 
     def test_normalization_preserves_leaf_value_guards(self):
