@@ -2,6 +2,8 @@
 import re
 import unittest
 import weakref
+from types import SimpleNamespace
+from typing import Any, cast
 from unittest.mock import patch
 
 import torch
@@ -59,6 +61,39 @@ class TestStreams(torch._dynamo.test_case.TestCase):
             self.assertEqual(opt_fn(torch.ones(1)), torch.ones(1) + 1)
 
         current_stream.assert_not_called()
+
+    def test_event_record_rescans_delayed_input_mutations(self):
+        from torch._dynamo.variables.streams import EventVariable, StreamVariable
+
+        class FakeOutput:
+            def __init__(self) -> None:
+                self.checked_input_mutation = False
+
+            def check_input_mutation_on_current_stream(self, tx) -> None:
+                self.checked_input_mutation = True
+
+            def check_event_record_after_input_mutation(self, stream_id) -> None:
+                if not self.checked_input_mutation:
+                    raise AssertionError(
+                        "input mutations were not checked before record"
+                    )
+
+            def create_proxy(self, *args, **kwargs):
+                return None
+
+        class FakeStream:
+            device = torch.device("cuda")
+
+        output = FakeOutput()
+        tx = SimpleNamespace(output=output)
+        stream = StreamVariable(
+            cast(Any, None), cast(torch.Stream, FakeStream()), user_object_index=1
+        )
+        event = EventVariable(
+            cast(Any, None), cast(torch.Event, object()), user_object_index=2
+        )
+
+        event.call_method(tx, "record", [stream], {})
 
     @requires_cuda
     def test_stream_enter_exit(self):

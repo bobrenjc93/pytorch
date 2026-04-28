@@ -448,6 +448,7 @@ class StreamVariable(StreamContextVariable):
         elif name == "record_event":
             from .builder import wrap_fx_proxy
 
+            tx.output.check_input_mutation_on_current_stream(tx)
             tx.output.check_event_record_after_input_mutation(id(self.value))
             if args and isinstance(args[0], EventVariable):
                 event_var = args[0]
@@ -624,6 +625,7 @@ class EventVariable(VariableTracker):
             return ConstantVariable.create(None)
         elif name == "record":
             stream_arg, stream_index = EventVariable._get_stream_arg(tx, args, kwargs)
+            tx.output.check_input_mutation_on_current_stream(tx)
             tx.output.check_event_record_after_input_mutation(id(stream_arg.value))
             tx.output.create_proxy(
                 "call_function",
