@@ -1038,12 +1038,22 @@ class CompileContext:
 
 
 @dataclass
+class InlinedFrameCache:
+    """Monomorphic cache entry for a successfully traced inline frame."""
+
+    key: Any
+    nodes: list[Any]
+    result: Any
+
+
+@dataclass
 class InlinedCodeCache:
     """Cache for code-object-derived data used during inlining."""
 
     instructions: list[Any]
     indexof: dict[Any, int]
     code_options: dict[str, Any]
+    inline_frame_cache: InlinedFrameCache | None = None
 
 
 class TracingContext:

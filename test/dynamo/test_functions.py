@@ -168,6 +168,49 @@ class FunctionTests(torch._dynamo.test_case.TestCase):
     def test_inline_lru_cache_fn_with_default_args(a, b):
         return inline_lru_cache_fn_with_default_args(a, 2, b)
 
+    def test_monomorphic_inline_frame_cache_replays_leaf(self):
+        from torch._dynamo.symbolic_convert import InliningInstructionTranslator
+
+        def leaf(x):
+            return torch.sin(x) + 1
+
+        def fn(x):
+            return leaf(x) + leaf(x) + leaf(x)
+
+        run_count = 0
+        original_run = InliningInstructionTranslator.run
+
+        def counted_run(tx):
+            nonlocal run_count
+            if tx.f_code is leaf.__code__:
+                run_count += 1
+            return original_run(tx)
+
+        cnt = torch._dynamo.testing.CompileCounter()
+        x = torch.randn(4)
+
+        with patch.object(InliningInstructionTranslator, "run", counted_run):
+            opt_fn = torch.compile(fn, backend=cnt, fullgraph=True)
+            self.assertTrue(same(opt_fn(x), fn(x)))
+
+        self.assertEqual(cnt.frame_count, 1)
+        self.assertEqual(run_count, 1)
+
+    def test_monomorphic_inline_frame_cache_fresh_tensor_result(self):
+        def leaf(x):
+            return x + 1
+
+        def fn(x):
+            a = leaf(x)
+            b = leaf(x)
+            a.add_(2)
+            return b
+
+        x = torch.randn(4)
+        opt_fn = torch.compile(fn, backend="eager", fullgraph=True)
+
+        self.assertTrue(same(opt_fn(x), fn(x)))
+
     def test_lru_cache_warning_issued_during_tracing(self):
         import warnings
         from functools import lru_cache

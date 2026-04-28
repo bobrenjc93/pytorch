@@ -52,8 +52,9 @@ import torch
 import torch._logging
 from torch._dynamo.dynamo_profiler import DynamoProfilerState, FunctionTraceTiming
 from torch._dynamo.exc import ObservedException, TensorifyScalarRestartAnalysis
-from torch._guards import InlinedCodeCache, tracing, TracingContext
+from torch._guards import InlinedCodeCache, InlinedFrameCache, tracing, TracingContext
 from torch._logging.structured import dump_file
+from torch._subclasses.fake_tensor import FakeTensor, is_fake
 from torch.fx.experimental.symbolic_shapes import guard_bool
 from torch.utils._functools import cache_method
 
@@ -141,7 +142,13 @@ from .utils import (
     LazyString,
     proxy_args_kwargs,
 )
-from .variables.base import SourceLocation, typestr, ValueMutationNew, VariableTracker
+from .variables.base import (
+    AttributeMutationNew,
+    SourceLocation,
+    typestr,
+    ValueMutationNew,
+    VariableTracker,
+)
 from .variables.builder import FrameStateSizeEntry, VariableBuilder, wrap_fx_proxy
 from .variables.builtin import BuiltinVariable, DictBuiltinVariable
 from .variables.constant import ConstantVariable
@@ -5285,12 +5292,379 @@ def profile_inline_call(
             output.profiler_state.add_child_time(cumtime_ns)
 
 
+_INLINE_FRAME_CACHE_UNSUPPORTED = object()
+
+
+def _make_inline_frame_cache_key(
+    symbolic_locals: dict[str, VariableTracker],
+) -> tuple[Any, ...] | None:
+    key = []
+    for name in sorted(symbolic_locals):
+        value_key = _make_inline_frame_cache_value_key(symbolic_locals[name])
+        if value_key is None:
+            return None
+        key.append((name, value_key))
+    return tuple(key)
+
+
+def _make_inline_frame_cache_value_key(value: VariableTracker) -> Any | None:
+    value = value.unwrap()
+    if isinstance(value, LazyVariableTracker):
+        if not value.is_realized():
+            return None
+        value = value.unwrap()
+
+    if isinstance(value, TensorVariable):
+        node = value.proxy.node
+        example_value = node.meta.get("example_value")
+        version = getattr(example_value, "_version", None)
+        return ("tensor", id(value), id(node), version)
+
+    if isinstance(value, TupleVariable):
+        items = []
+        for item in value.items:
+            item_key = _make_inline_frame_cache_value_key(item)
+            if item_key is None:
+                return None
+            items.append(item_key)
+        return ("tuple", tuple(items))
+
+    if isinstance(value, ConstantVariable):
+        try:
+            constant = value.as_python_constant()
+            hash(constant)
+        except Exception:
+            return None
+        return ("constant", type(constant), constant)
+
+    return None
+
+
+def _inline_frame_cache_node_is_replayable(node: torch.fx.Node) -> bool:
+    if node.op in ("placeholder", "get_attr"):
+        return True
+    if node.op == "call_method":
+        target = node.target
+        return not (
+            isinstance(target, str)
+            and target.endswith("_")
+            and not target.startswith("__")
+        )
+    if node.op != "call_function":
+        return False
+
+    schema = getattr(node.target, "_schema", None)
+    if schema is not None and getattr(schema, "is_mutable", False):
+        return False
+    return node.target not in (
+        operator.delitem,
+        operator.setitem,
+        setattr,
+        delattr,
+    )
+
+
+def _inline_frame_cache_fake_is_supported(value: Any, tx: Any) -> bool:
+    return (
+        type(value) is FakeTensor
+        and tx.fake_mode is not None
+        and value.fake_mode is tx.fake_mode
+        and value.layout is torch.strided
+        and not value.is_sparse
+        and not value.is_nested
+        and not value.is_quantized
+        and not value.is_conj()
+        and not value.is_neg()
+        and value.storage_offset() == 0
+        and getattr(value, "_base", None) is None
+        and value.constant is None
+        and value.real_tensor is None
+        and value.pytype in (None, torch.Tensor)
+    )
+
+
+def _clone_inline_frame_cache_fake(value: Any, tx: Any) -> Any:
+    if not _inline_frame_cache_fake_is_supported(value, tx):
+        return _INLINE_FRAME_CACHE_UNSUPPORTED
+    try:
+        with tx.fake_mode:
+            return torch.empty_strided(
+                tuple(value.size()),
+                tuple(value.stride()),
+                dtype=value.dtype,
+                device=value.fake_device,
+                requires_grad=value.requires_grad,
+            )
+    except Exception:
+        return _INLINE_FRAME_CACHE_UNSUPPORTED
+
+
+def _clone_inline_frame_cache_example_value(value: Any, tx: Any) -> Any:
+    if is_fake(value):
+        return _clone_inline_frame_cache_fake(value, tx)
+    if isinstance(value, tuple):
+        cloned = [_clone_inline_frame_cache_example_value(v, tx) for v in value]
+        if any(v is _INLINE_FRAME_CACHE_UNSUPPORTED for v in cloned):
+            return _INLINE_FRAME_CACHE_UNSUPPORTED
+        if hasattr(value, "_fields"):
+            return type(value)(*cloned)
+        return tuple(cloned)
+    if isinstance(value, list):
+        cloned = [_clone_inline_frame_cache_example_value(v, tx) for v in value]
+        if any(v is _INLINE_FRAME_CACHE_UNSUPPORTED for v in cloned):
+            return _INLINE_FRAME_CACHE_UNSUPPORTED
+        return cloned
+    if isinstance(value, dict):
+        cloned = {
+            k: _clone_inline_frame_cache_example_value(v, tx)
+            for k, v in value.items()
+        }
+        if any(v is _INLINE_FRAME_CACHE_UNSUPPORTED for v in cloned.values()):
+            return _INLINE_FRAME_CACHE_UNSUPPORTED
+        return cloned
+    if isinstance(value, torch.Tensor):
+        return _INLINE_FRAME_CACHE_UNSUPPORTED
+    return value
+
+
+def _inline_frame_cache_example_value_is_supported(value: Any, tx: Any) -> bool:
+    if is_fake(value):
+        return _inline_frame_cache_fake_is_supported(value, tx)
+    if isinstance(value, (tuple, list)):
+        return all(
+            _inline_frame_cache_example_value_is_supported(v, tx) for v in value
+        )
+    if isinstance(value, dict):
+        return all(
+            _inline_frame_cache_example_value_is_supported(v, tx)
+            for v in value.values()
+        )
+    return not isinstance(value, torch.Tensor)
+
+
+def _clone_inline_frame_cache_node_meta(
+    node: torch.fx.Node, tx: Any
+) -> dict[str, Any] | None:
+    meta = copy.copy(node.meta)
+    if "example_value" in meta:
+        example_value = _clone_inline_frame_cache_example_value(
+            meta["example_value"], tx
+        )
+        if example_value is _INLINE_FRAME_CACHE_UNSUPPORTED:
+            return None
+        meta["example_value"] = example_value
+    return meta
+
+
+def _inline_frame_cache_node_meta_is_supported(
+    node: torch.fx.Node, tx: Any
+) -> bool:
+    if "example_value" not in node.meta:
+        return True
+    return _inline_frame_cache_example_value_is_supported(
+        node.meta["example_value"], tx
+    )
+
+
+def _inline_frame_cache_result_is_supported(
+    result: VariableTracker, cached_nodes: set[torch.fx.Node]
+) -> bool:
+    result = result.unwrap()
+    if isinstance(result, LazyVariableTracker):
+        return result.is_realized() and _inline_frame_cache_result_is_supported(
+            result.unwrap(), cached_nodes
+        )
+    if isinstance(result, TensorVariable):
+        return (
+            result.proxy.node in cached_nodes
+            or result.proxy.node.op == "placeholder"
+        )
+    if isinstance(result, TupleVariable):
+        return all(
+            _inline_frame_cache_result_is_supported(item, cached_nodes)
+            for item in result.items
+        )
+    return isinstance(result, ConstantVariable)
+
+
 class InliningInstructionTranslator(InstructionTranslatorBase):
     """Trace and inline a called method"""
 
     symbolic_result: VariableTracker | None
     # pyrefly: ignore [bad-override]
     parent: InstructionTranslatorBase
+
+    def _maybe_replay_inline_frame_cache(self) -> VariableTracker | None:
+        if is_generator(self.f_code):
+            return None
+        if self.parent.strict_checks_fn:
+            return None
+        if config.use_graph_deduplication or config.track_nodes_for_deduplication:
+            return None
+        if self.output.current_tracer.parent is not None:
+            return None
+
+        tracing_ctx = self.output.tracing_context
+        cache_entry = tracing_ctx.inlined_code_cache.get(self.f_code)
+        cached = cache_entry.inline_frame_cache if cache_entry is not None else None
+        if cached is None:
+            return None
+
+        key = _make_inline_frame_cache_key(self.symbolic_locals)
+        if key != cached.key:
+            return None
+
+        return self._replay_inline_frame_cache(cached)
+
+    def _replay_inline_frame_cache(
+        self, cached: InlinedFrameCache
+    ) -> VariableTracker | None:
+        tracer = self.output.current_tracer
+        node_remap: dict[torch.fx.Node, torch.fx.Node] = {}
+        cloned_meta: dict[torch.fx.Node, dict[str, Any]] = {}
+
+        for node in cached.nodes:
+            if node.op == "placeholder":
+                node_remap[node] = node
+                continue
+            if not _inline_frame_cache_node_is_replayable(node):
+                return None
+            meta = _clone_inline_frame_cache_node_meta(node, self)
+            if meta is None:
+                return None
+            cloned_meta[node] = meta
+
+        for node in cached.nodes:
+            if node.op == "placeholder":
+                continue
+
+            def remap_arg(arg: torch.fx.Node) -> torch.fx.Proxy:
+                return tracer.proxy(node_remap.get(arg, arg))
+
+            args = torch.fx.node.map_arg(node.args, remap_arg)
+            kwargs = torch.fx.node.map_arg(node.kwargs, remap_arg)
+            proxy = tracer.create_proxy(
+                node.op,
+                node.target,
+                args,
+                dict(kwargs),
+                name=node.name,
+                type_expr=node.type,
+            )
+            proxy.node.meta = cloned_meta[node]
+            if "example_value" in proxy.node.meta:
+                tracer.track_produced_symints(proxy.node.meta["example_value"], proxy)
+            node_remap[node] = proxy.node
+
+        return self._remap_inline_frame_cache_result(cached.result, node_remap)
+
+    def _remap_inline_frame_cache_result(
+        self,
+        result: VariableTracker,
+        node_remap: dict[torch.fx.Node, torch.fx.Node],
+    ) -> VariableTracker | None:
+        result = result.unwrap()
+        if isinstance(result, LazyVariableTracker):
+            if not result.is_realized():
+                return None
+            return self._remap_inline_frame_cache_result(result.unwrap(), node_remap)
+
+        if isinstance(result, TensorVariable):
+            node = result.proxy.node
+            new_node = node_remap.get(node)
+            if new_node is None or new_node is node:
+                return result
+            proxy = self.output.current_tracer.proxy(new_node)
+            remapped = result.clone(proxy=proxy, mutation_type=None)
+            self.output.side_effects._track_obj(
+                proxy, remapped, mutation_type_cls=AttributeMutationNew
+            )
+            self.output.current_tracer.record_proxyable_vt(remapped)
+            return remapped
+
+        if isinstance(result, TupleVariable):
+            items = [
+                self._remap_inline_frame_cache_result(item, node_remap)
+                for item in result.items
+            ]
+            if any(item is None for item in items):
+                return None
+            return result.clone(items=cast(list[VariableTracker], items))
+
+        if isinstance(result, ConstantVariable):
+            return result
+
+        return None
+
+    def _inline_frame_cache_has_new_existing_mutation(self) -> bool:
+        side_effects = self.output.side_effects
+        if (
+            side_effects.has_existing_dict_mutation()
+            and not self._inline_frame_cache_had_existing_dict_mutation
+        ):
+            return True
+
+        for item_id, variable in side_effects.id_to_variable.items():
+            mutation_type = variable.mutation_type
+            if item_id not in self._inline_frame_cache_tracked_side_effect_ids:
+                if not isinstance(
+                    mutation_type, (AttributeMutationNew, ValueMutationNew)
+                ) and side_effects.is_modified(variable):
+                    return True
+                continue
+            if (
+                item_id not in self._inline_frame_cache_modified_side_effect_ids
+                and side_effects.is_modified(variable)
+            ):
+                return True
+        return False
+
+    def _maybe_store_inline_frame_cache(self, result: VariableTracker) -> None:
+        if is_generator(self.f_code):
+            return
+        if self.parent.strict_checks_fn:
+            return
+        if config.use_graph_deduplication or config.track_nodes_for_deduplication:
+            return
+        if self.output.current_tracer.parent is not None:
+            return
+        if self.output.should_exit:
+            return
+        if not self.has_no_inlined_calls:
+            return
+        if self.inconsistent_side_effects:
+            return
+        if self._inline_frame_cache_has_new_existing_mutation():
+            return
+
+        key = _make_inline_frame_cache_key(self.symbolic_locals)
+        if key is None:
+            return
+
+        new_nodes = [
+            node
+            for node in self.output.current_tracer.graph.nodes
+            if node not in self._inline_frame_cache_start_nodes
+        ]
+        cached_nodes = set(new_nodes)
+        if not all(_inline_frame_cache_node_is_replayable(node) for node in new_nodes):
+            return
+        if not all(
+            _inline_frame_cache_node_meta_is_supported(node, self)
+            for node in new_nodes
+        ):
+            return
+        if not _inline_frame_cache_result_is_supported(result, cached_nodes):
+            return
+
+        cache_entry = self.output.tracing_context.inlined_code_cache.get(self.f_code)
+        if cache_entry is None:
+            return
+        cache_entry.inline_frame_cache = InlinedFrameCache(
+            key=key,
+            nodes=new_nodes,
+            result=result,
+        )
 
     @classmethod
     def inline_call(
@@ -5517,8 +5891,16 @@ class InliningInstructionTranslator(InstructionTranslatorBase):
     def inline_call_(self) -> VariableTracker:
         parent = self.parent
         parent.has_no_inlined_calls = False
-        parent.is_child_tracer_active = True
         code = self.f_code
+
+        cached_result = self._maybe_replay_inline_frame_cache()
+        if cached_result is not None:
+            parent.error_on_graph_break = self.error_on_graph_break
+            log.debug("DONE INLINING %s (inline frame cache hit)", code)
+            self.output.tracing_context.traced_code.append(code)
+            return cached_result
+
+        parent.is_child_tracer_active = True
 
         strict_ctx: Any = contextlib.nullcontext()
         if parent.strict_checks_fn:
@@ -5579,17 +5961,20 @@ class InliningInstructionTranslator(InstructionTranslatorBase):
                     args = [self.symbolic_result]
                 exc.raise_observed_exception(StopIteration, self, args=args)
             else:
-                return self.symbolic_result
+                result = self.symbolic_result
         else:
             if is_generator(code):
                 assert isinstance(self, InliningGeneratorInstructionTranslator)
                 assert self.symbolic_result.is_constant_none()
-                return ListIteratorVariable(
+                result = ListIteratorVariable(
                     self.generated_items,
                     mutation_type=ValueMutationNew(),
                 )
             else:
-                return self.symbolic_result
+                result = self.symbolic_result
+
+        self._maybe_store_inline_frame_cache(result)
+        return result
 
     def __init__(
         self,
@@ -5648,6 +6033,21 @@ class InliningInstructionTranslator(InstructionTranslatorBase):
             indexof=indexof,
         )
         self.funcvar = funcvar
+        self._inline_frame_cache_start_nodes = frozenset(
+            parent.output.current_tracer.graph.nodes
+        )
+        side_effects = self.output.side_effects
+        self._inline_frame_cache_tracked_side_effect_ids = frozenset(
+            side_effects.id_to_variable.keys()
+        )
+        self._inline_frame_cache_modified_side_effect_ids = frozenset(
+            item_id
+            for item_id, variable in side_effects.id_to_variable.items()
+            if side_effects.is_modified(variable)
+        )
+        self._inline_frame_cache_had_existing_dict_mutation = (
+            side_effects.has_existing_dict_mutation()
+        )
         self.parent = parent
         self.num_calls = parent.num_calls
         self.symbolic_result = None
