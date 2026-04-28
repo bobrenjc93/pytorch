@@ -20,6 +20,12 @@ index_to_external_object_weakref: dict[int, weakref.ReferenceType[Any]] = {}
 
 keep_alive: list[Any] = []
 
+# Keep index 0 available for the ambient current stream so cudagraph wrappers
+# can replace it with the capture stream at runtime.
+CURRENT_STREAM_INDEX = 0
+FIRST_USER_OBJECT_INDEX = CURRENT_STREAM_INDEX + 1
+next_user_object_index = FIRST_USER_OBJECT_INDEX
+
 
 def has_user_objects() -> bool:
     return bool(index_to_bytecode_constructor)
@@ -28,12 +34,6 @@ def has_user_objects() -> bool:
 def stash_graph_created_object(obj: Any) -> Any:
     keep_alive.append(obj)
     return obj
-
-
-# Keep index 0 available for the ambient current stream so cudagraph wrappers
-# can replace it with the capture stream at runtime.
-CURRENT_STREAM_INDEX = 0
-FIRST_USER_OBJECT_INDEX = CURRENT_STREAM_INDEX + 1
 
 
 def set_external_object_by_index(index: int, value: Any) -> None:
@@ -69,19 +69,32 @@ def store_user_object_weakrefs_by_index(indices: tuple[int, ...], *args: Any) ->
 
 
 def reset_user_object_tracking() -> None:
+    global next_user_object_index
     index_to_bytecode_constructor.clear()
     index_to_external_object_weakref.clear()
     keep_alive.clear()
+    next_user_object_index = FIRST_USER_OBJECT_INDEX
 
 
-def _store_external_object_weakref(index: int, value: Any) -> None:
-    index_to_external_object_weakref[index] = weakref.ref(value)
+def _store_user_object_weakref(index: int, value: Any) -> None:
+    try:
+        index_to_external_object_weakref[index] = weakref.ref(value)
+    except TypeError as e:
+        from .exc import unimplemented
+
+        unimplemented(
+            gb_type="Failed to make weakref to User Object",
+            context=f"user_object: {value}",
+            explanation="Object does not allow us to make a weakref to it",
+            hints=[],
+            from_exc=e,
+        )
 
 
 def _next_user_object_index() -> int:
-    index = FIRST_USER_OBJECT_INDEX
-    while index in index_to_bytecode_constructor:
-        index += 1
+    global next_user_object_index
+    index = next_user_object_index
+    next_user_object_index += 1
     return index
 
 
@@ -94,7 +107,7 @@ def register_graph_created_object(
     index = _next_user_object_index()
     index_to_bytecode_constructor[index] = lambda cg: construct_fn(index, cg)
     try:
-        _store_external_object_weakref(index, example_value)
+        index_to_external_object_weakref[index] = weakref.ref(example_value)
     except TypeError as e:
         from .exc import unimplemented
 
@@ -113,18 +126,7 @@ def register_user_object(value: Any, source: Source) -> int:
     global index_to_bytecode_constructor
     index = _next_user_object_index()
     index_to_bytecode_constructor[index] = lambda cg: cg(source)
-    try:
-        _store_external_object_weakref(index, value)
-    except TypeError as e:
-        from .exc import unimplemented
-
-        unimplemented(
-            gb_type="Failed to make weakref to User Object",
-            context=f"user_object: {value}",
-            explanation="Object does not allow us to make a weakref to it",
-            hints=[],
-            from_exc=e,
-        )
+    _store_user_object_weakref(index, value)
     return index
 
 
@@ -134,18 +136,7 @@ def register_current_stream(value: Any, source: Source) -> int:
         f"Current stream index {CURRENT_STREAM_INDEX} is already registered"
     )
     index_to_bytecode_constructor[CURRENT_STREAM_INDEX] = lambda cg: cg(source)
-    try:
-        _store_external_object_weakref(CURRENT_STREAM_INDEX, value)
-    except TypeError as e:
-        from .exc import unimplemented
-
-        unimplemented(
-            gb_type="Failed to make weakref to User Object",
-            context=f"user_object: {value}",
-            explanation="Object does not allow us to make a weakref to it",
-            hints=[],
-            from_exc=e,
-        )
+    _store_user_object_weakref(CURRENT_STREAM_INDEX, value)
     return CURRENT_STREAM_INDEX
 
 

@@ -305,6 +305,8 @@ class SymbolicStreamState:
         return self.cur_stream_stack[-1]
 
     def in_stream_context(self) -> bool:
+        # Keep this lazy: pure Dynamo graphs that never touch streams should
+        # not initialize accelerator stream state just to answer this check.
         return len(self.cur_stream_stack) > 0
 
     def cur_stream_id(self) -> int:

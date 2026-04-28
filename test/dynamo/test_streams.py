@@ -8,8 +8,9 @@ import torch
 import torch._dynamo.test_case
 import torch._dynamo.testing
 from torch._dynamo.graph_bytecode_inputs import (
+    FIRST_USER_OBJECT_INDEX,
     reset_user_object_tracking,
-    store_user_object_weakrefs,
+    store_user_object_weakrefs_by_index,
 )
 from torch._dynamo.testing import extract_graph, remove_trailing_space
 from torch.testing._internal.common_utils import requires_cuda
@@ -669,11 +670,13 @@ class <lambda>(torch.nn.Module):
         try:
             s0 = torch.Stream()
             s1 = torch.Stream()
-            store_user_object_weakrefs(s0, s1)
+            s0_index = FIRST_USER_OBJECT_INDEX
+            s1_index = FIRST_USER_OBJECT_INDEX + 1
+            store_user_object_weakrefs_by_index((s0_index, s1_index), s0, s1)
 
             sample_inputs = [
-                (0, 1),
-                (1, 0),
+                (s0_index, s1_index),
+                (s1_index, s0_index),
             ]
             for args in sample_inputs:
                 opcheck(fork_stream, args)
@@ -693,11 +696,17 @@ class <lambda>(torch.nn.Module):
             s1 = torch.Stream()
             e0 = torch.Event()
             e1 = torch.Event()
-            store_user_object_weakrefs(s0, s1, e0, e1)
+            s0_index = FIRST_USER_OBJECT_INDEX
+            s1_index = FIRST_USER_OBJECT_INDEX + 1
+            e0_index = FIRST_USER_OBJECT_INDEX + 2
+            e1_index = FIRST_USER_OBJECT_INDEX + 3
+            store_user_object_weakrefs_by_index(
+                (s0_index, s1_index, e0_index, e1_index), s0, s1, e0, e1
+            )
 
             sample_inputs = [
-                (2, 0),
-                (3, 1),
+                (e0_index, s0_index),
+                (e1_index, s1_index),
             ]
             for args in sample_inputs:
                 opcheck(wait_event, args)
@@ -715,11 +724,16 @@ class <lambda>(torch.nn.Module):
             s0 = torch.Stream()
             s1 = torch.Stream()
             s2 = torch.Stream()
-            store_user_object_weakrefs(s0, s1, s2)
+            s0_index = FIRST_USER_OBJECT_INDEX
+            s1_index = FIRST_USER_OBJECT_INDEX + 1
+            s2_index = FIRST_USER_OBJECT_INDEX + 2
+            store_user_object_weakrefs_by_index(
+                (s0_index, s1_index, s2_index), s0, s1, s2
+            )
 
             sample_inputs = [
-                (0, 1),
-                (2, 0),
+                (s0_index, s1_index),
+                (s2_index, s0_index),
             ]
             for args in sample_inputs:
                 opcheck(wait_stream, args)
