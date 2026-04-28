@@ -144,7 +144,6 @@ from .source import (
     GlobalWeakRefSource,
     GradSource,
     ImportSource,
-    is_from_source,
     ListGetItemSource,
     LocalSource,
     NamedTupleFieldsSource,
@@ -1049,9 +1048,8 @@ def _is_nn_module_guard_source(source: Source) -> bool:
 @dataclasses.dataclass(frozen=True)
 class NNModuleStructuralFingerprint:
     module_type: type[torch.nn.Module]
-    module_dict_version: int
     structural_attrs: tuple[tuple[str, tuple[Any, ...]], ...]
-    children: tuple[tuple[str, "NNModuleStructuralFingerprint | None"], ...]
+    children: tuple[tuple[str, NNModuleStructuralFingerprint | None], ...]
 
 
 def _structural_attr_fingerprint(value: Any) -> tuple[Any, ...]:
@@ -1083,7 +1081,6 @@ def _make_nn_module_structural_fingerprint(
     if module_id in seen:
         return NNModuleStructuralFingerprint(
             type(module),
-            dict_version(object.__getattribute__(module, "__dict__")),
             (),
             (),
         )
@@ -1110,7 +1107,6 @@ def _make_nn_module_structural_fingerprint(
 
     return NNModuleStructuralFingerprint(
         type(module),
-        dict_version(module_dict),
         structural_attrs,
         tuple(children),
     )
@@ -1202,20 +1198,28 @@ def _nn_module_structural_guard_covers(
     return False
 
 
+def _is_from_any_nn_module_structural_root(
+    source: Source, structural_roots: OrderedSet[Source]
+) -> bool:
+    while True:
+        if source in structural_roots:
+            return True
+        if not isinstance(source, ChainedSource):
+            return False
+        source = source.base
+
+
 def _normalize_nn_module_structural_guards(
     sorted_guards: list[Guard],
-) -> tuple[list[Guard], OrderedSet[Source]]:
+) -> list[Guard]:
     if not config.use_nn_module_structural_guards:
-        return sorted_guards, OrderedSet()
+        return sorted_guards
 
     module_source_guards = [
         guard for guard in sorted_guards if _is_module_source_guard(guard)
     ]
-    if (
-        len(module_source_guards)
-        < config.nn_module_structural_guard_min_module_count
-    ):
-        return sorted_guards, OrderedSet()
+    if len(module_source_guards) < config.nn_module_structural_guard_min_module_count:
+        return sorted_guards
 
     module_sources = OrderedSet(
         guard.originating_source for guard in module_source_guards
@@ -1226,36 +1230,42 @@ def _normalize_nn_module_structural_guards(
     structural_roots: OrderedSet[Source] = OrderedSet()
     for guard in module_source_guards:
         source = guard.originating_source
-        if any(is_from_source(source, root) for root in structural_roots):
+        if _is_from_any_nn_module_structural_root(source, structural_roots):
             continue
         structural_roots.add(source)
 
     if not structural_roots:
-        return sorted_guards, OrderedSet()
+        return sorted_guards
 
+    sources_from_structural_roots = OrderedSet(
+        guard.originating_source
+        for guard in sorted_guards
+        if _is_from_any_nn_module_structural_root(
+            guard.originating_source, structural_roots
+        )
+    )
     normalized_guards: list[Guard] = []
     for guard in sorted_guards:
         source = guard.originating_source
-        if source in structural_roots and guard is root_guard_by_source[source]:
+        if source in structural_roots and guard is root_guard_by_source.get(source):
             normalized_guards.append(guard)
-            root_guard = root_guard_by_source[source]
             normalized_guards.append(
                 Guard(
                     source,
                     GuardBuilder.NN_MODULE_STRUCTURE,
-                    stack=root_guard.stack,
-                    user_stack=root_guard.user_stack,
+                    stack=guard.stack,
+                    user_stack=guard.user_stack,
                 )
             )
             continue
 
-        if any(is_from_source(source, root) for root in structural_roots):
+        if source in sources_from_structural_roots:
             if _nn_module_structural_guard_covers(guard, module_sources):
                 continue
 
         normalized_guards.append(guard)
 
-    return normalized_guards, structural_roots
+    return normalized_guards
 
 
 def _replace_output_graph_guards(
@@ -1266,6 +1276,7 @@ def _replace_output_graph_guards(
         tracing_context = output_graph.tracing_context  # type: ignore[attr-defined]
         tracing_context.guards_context.dynamo_guards = guards_set
     else:
+        # OutputGraphCommon wrappers used by precompile do not own a tracing context.
         output_graph._guards = guards_set
 
 
@@ -4546,7 +4557,6 @@ class CheckFunctionManager:
         self.used_builtin_vars: OrderedSet[str] = OrderedSet()
         self.additional_used_local_vars: OrderedSet[str] = OrderedSet()
         self.additional_used_global_vars: OrderedSet[str] = OrderedSet()
-        self.nn_module_structural_guard_sources: OrderedSet[Source] = OrderedSet()
         self.runtime_global_scope = runtime_global_scope
         self.global_state: torch._C._dynamo.guards.GlobalStateGuard | None = None
         self.torch_function_mode_stack_check_fn: Callable[[], bool] | None = None
@@ -4612,10 +4622,7 @@ class CheckFunctionManager:
                 ]
 
             pre_normalized_guard_count = len(sorted_guards)
-            (
-                sorted_guards,
-                self.nn_module_structural_guard_sources,
-            ) = _normalize_nn_module_structural_guards(sorted_guards)
+            sorted_guards = _normalize_nn_module_structural_guards(sorted_guards)
             if len(sorted_guards) != pre_normalized_guard_count:
                 _replace_output_graph_guards(output_graph, sorted_guards)
 
