@@ -11,7 +11,6 @@ import operator
 import os
 import os.path
 import re
-import sys
 import warnings
 from collections import defaultdict, deque
 from collections.abc import Callable
@@ -161,7 +160,7 @@ class MinCutOptions:
     ban_if_reduction: bool
 
 
-@dataclass
+@dataclass(slots=True)
 class _MinCutEdge:
     to: int
     rev: int
@@ -2716,10 +2715,10 @@ def solve_min_cut(
 
 
 def _try_fast_min_cut(
-    nx_graph: "nx.DiGraph[str, dict[str, Any]]",
+    nx_graph: nx.DiGraph[str, dict[str, Any]],
     source: str,
     sink: str,
-) -> tuple[float, tuple[set[str], set[str]]] | None:
+) -> tuple[float, tuple[OrderedSet[str], OrderedSet[str]]] | None:
     """Compute a finite s-t min-cut without NetworkX's generic flow solver.
 
     The partitioner builds a simple directed graph whose capacities are either
@@ -2795,56 +2794,53 @@ def _try_fast_min_cut(
                 queue.append(edge.to)
         return levels if levels[sink_idx] != -1 else None
 
-    def dfs_flow(
-        idx: int,
-        pushed: float,
-        levels: list[int],
-        next_edges: list[int],
-    ) -> float:
-        if pushed <= eps:
-            return 0.0
-        if idx == sink_idx:
-            return pushed
+    def dfs_flow(levels: list[int], next_edges: list[int]) -> float:
+        path: list[tuple[int, int]] = []
+        stack = [source_idx]
 
-        while next_edges[idx] < len(residual_graph[idx]):
-            edge_idx = next_edges[idx]
-            edge = residual_graph[idx][edge_idx]
-            if edge.capacity > eps and levels[edge.to] == levels[idx] + 1:
-                flowed = dfs_flow(
-                    edge.to,
-                    min(pushed, edge.capacity),
-                    levels,
-                    next_edges,
+        while stack:
+            idx = stack[-1]
+            if idx == sink_idx:
+                pushed = min(
+                    residual_graph[from_idx][edge_idx].capacity
+                    for from_idx, edge_idx in path
                 )
-                if flowed > eps:
-                    edge.capacity -= flowed
-                    residual_graph[edge.to][edge.rev].capacity += flowed
-                    return flowed
-            next_edges[idx] += 1
+                for from_idx, edge_idx in path:
+                    edge = residual_graph[from_idx][edge_idx]
+                    edge.capacity -= pushed
+                    residual_graph[edge.to][edge.rev].capacity += pushed
+                return pushed
+
+            while next_edges[idx] < len(residual_graph[idx]):
+                edge_idx = next_edges[idx]
+                edge = residual_graph[idx][edge_idx]
+                if edge.capacity > eps and levels[edge.to] == levels[idx] + 1:
+                    path.append((idx, edge_idx))
+                    stack.append(edge.to)
+                    break
+                next_edges[idx] += 1
+            else:
+                stack.pop()
+                if path:
+                    from_idx, edge_idx = path.pop()
+                    next_edges[from_idx] = edge_idx + 1
         return 0.0
 
     flow = 0.0
-    old_recursion_limit = sys.getrecursionlimit()
-    if old_recursion_limit < len(nodes) + 10:
-        sys.setrecursionlimit(len(nodes) + 10)
-    try:
+    while True:
+        levels = bfs_levels()
+        if levels is None:
+            break
+        next_edges = [0] * len(nodes)
         while True:
-            levels = bfs_levels()
-            if levels is None:
+            pushed = dfs_flow(levels, next_edges)
+            if pushed <= eps:
                 break
-            next_edges = [0] * len(nodes)
-            while True:
-                pushed = dfs_flow(source_idx, infinite_capacity, levels, next_edges)
-                if pushed <= eps:
-                    break
-                flow += pushed
-                if flow > finite_capacity_sum + eps:
-                    return None
-    finally:
-        if sys.getrecursionlimit() != old_recursion_limit:
-            sys.setrecursionlimit(old_recursion_limit)
+            flow += pushed
+            if flow > finite_capacity_sum + eps:
+                return None
 
-    reachable_indexes: set[int] = set()
+    reachable_indexes: OrderedSet[int] = OrderedSet()
     queue = deque([source_idx])
     reachable_indexes.add(source_idx)
     while queue:
@@ -2858,8 +2854,8 @@ def _try_fast_min_cut(
     if sink_idx in reachable_indexes:
         return None
 
-    reachable = {nodes[idx] for idx in reachable_indexes}
-    non_reachable = set(nodes) - reachable
+    reachable = OrderedSet(nodes[idx] for idx in reachable_indexes)
+    non_reachable = OrderedSet(nodes) - reachable
     return flow, (reachable, non_reachable)
 
 
