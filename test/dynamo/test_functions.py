@@ -152,6 +152,9 @@ def inline_script_if_tracing_fn_with_default_args(x, y, c=1.2):
     return torch.cos(x * y) + c
 
 
+_inline_frame_cache_global_tensor = torch.ones(4)
+
+
 class FunctionTests(torch._dynamo.test_case.TestCase):
     @make_test
     def test_inline_jit_annotations(x):
@@ -220,6 +223,59 @@ class FunctionTests(torch._dynamo.test_case.TestCase):
 
         def fn(x):
             return leaf(x) + leaf(x + 1)
+
+        run_count = 0
+        original_run = InliningInstructionTranslator.run
+
+        def counted_run(tx):
+            nonlocal run_count
+            if tx.f_code is leaf.__code__:
+                run_count += 1
+            return original_run(tx)
+
+        x = torch.randn(4)
+
+        with patch.object(InliningInstructionTranslator, "run", counted_run):
+            opt_fn = torch.compile(fn, backend="eager", fullgraph=True)
+            self.assertTrue(same(opt_fn(x), fn(x)))
+
+        self.assertEqual(run_count, 2)
+
+    def test_monomorphic_inline_frame_cache_skips_different_shapes(self):
+        from torch._dynamo.symbolic_convert import InliningInstructionTranslator
+
+        def leaf(x):
+            return torch.sin(x).sum()
+
+        def fn(x, y):
+            return leaf(x) + leaf(y)
+
+        run_count = 0
+        original_run = InliningInstructionTranslator.run
+
+        def counted_run(tx):
+            nonlocal run_count
+            if tx.f_code is leaf.__code__:
+                run_count += 1
+            return original_run(tx)
+
+        x = torch.randn(4)
+        y = torch.randn(8)
+
+        with patch.object(InliningInstructionTranslator, "run", counted_run):
+            opt_fn = torch.compile(fn, backend="eager", fullgraph=True)
+            self.assertTrue(same(opt_fn(x, y), fn(x, y)))
+
+        self.assertEqual(run_count, 2)
+
+    def test_monomorphic_inline_frame_cache_skips_global_tensor(self):
+        from torch._dynamo.symbolic_convert import InliningInstructionTranslator
+
+        def leaf(x):
+            return x + _inline_frame_cache_global_tensor
+
+        def fn(x):
+            return leaf(x) + leaf(x)
 
         run_count = 0
         original_run = InliningInstructionTranslator.run
@@ -3389,8 +3445,8 @@ class GraphModule(torch.nn.Module):
         l_lambda0_keywords_y_ = L_lambda0_keywords_y_
 
         mul: "f32[2, 2]" = l_lambda0_keywords_y_ * l_lambda0_keywords_y_
-        mul_1: "f32[2, 2]" = l_lambda0_keywords_y_ * l_lambda0_keywords_y_;  l_lambda0_keywords_y_ = None
 
+        mul_1: "f32[2, 2]" = l_lambda0_keywords_y_ * l_lambda0_keywords_y_;  l_lambda0_keywords_y_ = None
         mul_2: "f32[2, 2]" = torch.mul(mul, mul_1);  mul = mul_1 = None
         return (mul_2,)
 """,
@@ -3404,8 +3460,8 @@ class GraphModule(torch.nn.Module):
         l_lambda0_keywords_y_ = L_lambda0_keywords_y_
 
         mul: "f32[s9, s9]" = l_lambda0_keywords_y_ * l_lambda0_keywords_y_
-        mul_1: "f32[s9, s9]" = l_lambda0_keywords_y_ * l_lambda0_keywords_y_;  l_lambda0_keywords_y_ = None
 
+        mul_1: "f32[s9, s9]" = l_lambda0_keywords_y_ * l_lambda0_keywords_y_;  l_lambda0_keywords_y_ = None
         mul_2: "f32[s9, s9]" = torch.mul(mul, mul_1);  mul = mul_1 = None
         return (mul_2,)
 """,

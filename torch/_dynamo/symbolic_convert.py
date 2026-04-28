@@ -55,7 +55,7 @@ from torch._dynamo.exc import ObservedException, TensorifyScalarRestartAnalysis
 from torch._guards import InlinedCodeCache, InlinedFrameCache, tracing, TracingContext
 from torch._logging.structured import dump_file
 from torch._subclasses.fake_tensor import FakeTensor, is_fake
-from torch.fx.experimental.symbolic_shapes import guard_bool
+from torch.fx.experimental.symbolic_shapes import guard_bool, statically_known_true
 from torch.utils._functools import cache_method
 
 from . import (
@@ -5298,6 +5298,32 @@ _INLINE_FRAME_CACHE_FRESH_META_KEYS = {
     "source_fn_stack",
     "stack_trace",
 }
+_INLINE_FRAME_CACHE_GLOBAL_SAFE_TYPES = (
+    types.ModuleType,
+    types.FunctionType,
+    types.BuiltinFunctionType,
+    type,
+)
+
+
+def _inline_frame_cache_global_value_is_supported(value: Any) -> bool:
+    if ConstantVariable.is_base_literal(value) or isinstance(value, torch.Size):
+        return True
+    if isinstance(value, tuple):
+        return all(_inline_frame_cache_global_value_is_supported(v) for v in value)
+    if isinstance(value, frozenset):
+        return all(_inline_frame_cache_global_value_is_supported(v) for v in value)
+    return isinstance(value, _INLINE_FRAME_CACHE_GLOBAL_SAFE_TYPES)
+
+
+def _inline_frame_cache_store_attr_mutation_keys(
+    side_effects: Any,
+) -> frozenset[tuple[int, str, int]]:
+    return frozenset(
+        (id(item), name, id(value))
+        for item, mutations in side_effects.store_attr_mutations.items()
+        for name, value in mutations.items()
+    )
 
 
 def _make_inline_frame_cache_key(
@@ -5323,7 +5349,7 @@ def _make_inline_frame_cache_value_key(value: VariableTracker) -> Any | None:
         node = value.proxy.node
         example_value = node.meta.get("example_value")
         version = getattr(example_value, "_version", None)
-        return ("tensor", id(value), id(node), version)
+        return ("tensor", id(node), version)
 
     if isinstance(value, TupleVariable):
         items = []
@@ -5340,7 +5366,7 @@ def _make_inline_frame_cache_value_key(value: VariableTracker) -> Any | None:
             hash(constant)
         except Exception:
             return None
-        return ("constant", type(constant), constant)
+        return ("constant", type(constant), constant, id(constant))
 
     return None
 
@@ -5370,18 +5396,25 @@ def _inline_frame_cache_node_is_replayable(node: torch.fx.Node) -> bool:
 
 
 def _inline_frame_cache_fake_is_supported(value: Any, tx: Any) -> bool:
+    if type(value) is not FakeTensor:
+        return False
+    if tx.fake_mode is None or value.fake_mode is not tx.fake_mode:
+        return False
+    try:
+        if (
+            value.layout is not torch.strided
+            or value.is_sparse
+            or value.is_nested
+            or value.is_quantized
+            or value.is_conj()
+            or value.is_neg()
+            or not statically_known_true(value.storage_offset() == 0)
+        ):
+            return False
+    except Exception:
+        return False
     return (
-        type(value) is FakeTensor
-        and tx.fake_mode is not None
-        and value.fake_mode is tx.fake_mode
-        and value.layout is torch.strided
-        and not value.is_sparse
-        and not value.is_nested
-        and not value.is_quantized
-        and not value.is_conj()
-        and not value.is_neg()
-        and value.storage_offset() == 0
-        and getattr(value, "_base", None) is None
+        getattr(value, "_base", None) is None
         and value.constant is None
         and value.real_tensor is None
         and value.pytype in (None, torch.Tensor)
@@ -5508,8 +5541,25 @@ class InliningInstructionTranslator(InstructionTranslatorBase):
             or self.output.current_tracer.parent is not None
         )
 
+    def _inline_frame_cache_globals_are_supported(self) -> bool:
+        for inst in self.instructions:
+            if inst.opname != "LOAD_GLOBAL":
+                continue
+            name = inst.argval
+            if not isinstance(name, str) or name not in self.f_globals:
+                continue
+            if name in self.symbolic_globals:
+                return False
+            if not _inline_frame_cache_global_value_is_supported(
+                self.f_globals[name]
+            ):
+                return False
+        return True
+
     def _maybe_replay_inline_frame_cache(self) -> VariableTracker | None:
         if not self._inline_frame_cache_is_enabled():
+            return None
+        if not self._inline_frame_cache_globals_are_supported():
             return None
 
         tracing_ctx = self.output.tracing_context
@@ -5547,7 +5597,7 @@ class InliningInstructionTranslator(InstructionTranslatorBase):
                 continue
 
             def remap_arg(arg: torch.fx.Node) -> torch.fx.node.Argument:
-                return tracer.proxy(node_remap.get(arg, arg))
+                return node_remap.get(arg, arg)
 
             args = torch.fx.node.map_arg(node.args, remap_arg)
             kwargs = torch.fx.node.map_arg(node.kwargs, remap_arg)
@@ -5639,12 +5689,16 @@ class InliningInstructionTranslator(InstructionTranslatorBase):
             != self._inline_frame_cache_tensor_hook_ids
         ):
             return True
+        if (
+            _inline_frame_cache_store_attr_mutation_keys(side_effects)
+            != self._inline_frame_cache_store_attr_mutation_keys
+        ):
+            return True
         return False
 
     def _maybe_store_inline_frame_cache(self, result: VariableTracker) -> None:
         if not self._inline_frame_cache_is_enabled():
             return
-        start_nodes = self._inline_frame_cache_start_nodes
         if self.output.should_exit:
             return
         if not self.has_no_inlined_calls:
@@ -5653,16 +5707,23 @@ class InliningInstructionTranslator(InstructionTranslatorBase):
             return
         if self._inline_frame_cache_has_new_existing_mutation():
             return
+        if not self._inline_frame_cache_globals_are_supported():
+            return
 
         key = _make_inline_frame_cache_key(self.symbolic_locals)
         if key is None:
             return
 
-        new_nodes = [
-            node
-            for node in self.output.current_tracer.graph.nodes
-            if node not in start_nodes
-        ]
+        start_node = self._inline_frame_cache_start_node
+        new_nodes: list[torch.fx.Node] = []
+        found_start_node = start_node is None
+        for node in self.output.current_tracer.graph.nodes:
+            if found_start_node:
+                new_nodes.append(node)
+            elif node is start_node:
+                found_start_node = True
+        if not found_start_node:
+            return
         cached_nodes = set(new_nodes)
         if not all(_inline_frame_cache_node_is_replayable(node) for node in new_nodes):
             return
@@ -6052,8 +6113,8 @@ class InliningInstructionTranslator(InstructionTranslatorBase):
         self.parent = parent
         side_effects = self.output.side_effects
         if self._inline_frame_cache_is_enabled():
-            self._inline_frame_cache_start_nodes = frozenset(
-                parent.output.current_tracer.graph.nodes
+            self._inline_frame_cache_start_node = next(
+                reversed(parent.output.current_tracer.graph.nodes), None
             )
             self._inline_frame_cache_tracked_side_effect_ids = frozenset(
                 side_effects.id_to_variable.keys()
@@ -6072,8 +6133,11 @@ class InliningInstructionTranslator(InstructionTranslatorBase):
             self._inline_frame_cache_tensor_hook_ids = frozenset(
                 side_effects.tensor_hooks.keys()
             )
+            self._inline_frame_cache_store_attr_mutation_keys = (
+                _inline_frame_cache_store_attr_mutation_keys(side_effects)
+            )
         else:
-            self._inline_frame_cache_start_nodes = frozenset()
+            self._inline_frame_cache_start_node = None
             self._inline_frame_cache_tracked_side_effect_ids = frozenset()
             self._inline_frame_cache_modified_side_effect_ids = frozenset()
             self._inline_frame_cache_had_existing_dict_mutation = (
@@ -6084,6 +6148,9 @@ class InliningInstructionTranslator(InstructionTranslatorBase):
             )
             self._inline_frame_cache_tensor_hook_ids = frozenset(
                 side_effects.tensor_hooks.keys()
+            )
+            self._inline_frame_cache_store_attr_mutation_keys = (
+                _inline_frame_cache_store_attr_mutation_keys(side_effects)
             )
         self.num_calls = parent.num_calls
         self.symbolic_result = None
