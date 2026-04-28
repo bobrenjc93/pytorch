@@ -5535,6 +5535,10 @@ class InliningInstructionTranslator(InstructionTranslatorBase):
         # regions are plain operator calls, not module calls or lifted attrs.
         if node.op not in {"call_function", "call_method"}:
             return False
+        # Tensor item assignment/deletion routes through Python operator targets
+        # that do not carry torch schemas or conventional mutable names.
+        if node.target in {operator.setitem, operator.delitem}:
+            return False
         # Static schemas catch normal mutable ops. The name fallback catches
         # Python/custom operators that follow the conventional trailing "_".
         if cls._node_target_name(node).split(".", 1)[0].endswith("_"):

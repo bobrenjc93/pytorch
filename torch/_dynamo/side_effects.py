@@ -300,7 +300,9 @@ class SideEffects:
             store_attr_mutations={
                 k: dict(v) for k, v in self.store_attr_mutations.items()
             },
-            mutation_user_stacks=self.mutation_user_stacks,
+            mutation_user_stacks={
+                k: list(v) for k, v in self.mutation_user_stacks.items()
+            },
             keepalive=list(self.keepalive),
             save_for_backward=list(self.save_for_backward),
             tensor_hooks=dict(self.tensor_hooks),
