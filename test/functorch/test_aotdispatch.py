@@ -464,6 +464,21 @@ class TestAOTAutograd(AOTTestCase):
             )
         return compiled_f
 
+    @patch("torch._functorch.config.debug_assert", False)
+    def test_inference_metadata_collection_reuses_graph_trace(self):
+        calls = 0
+
+        def f(x):
+            nonlocal calls
+            calls += 1
+            return x.sin().cos()
+
+        compiled_f = aot_function(f, fw_compiler=nop)
+        x = torch.randn(4)
+
+        self.assertEqual(compiled_f(x), x.sin().cos())
+        self.assertEqual(calls, 1)
+
     # test_mutation will:
     # - Ensure that inputs are non-leaves, so our graphs can mutate them
     # - try to mutate outputs of the graph (to ensure that autograd meta is set properly on outputs)

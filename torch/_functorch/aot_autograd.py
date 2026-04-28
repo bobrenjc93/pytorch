@@ -31,6 +31,7 @@ from torch._inductor.codecache import resolve_pre_grad_pass_timing
 from torch._subclasses import FakeTensor, FakeTensorMode
 from torch.export._tree_utils import reorder_kwargs
 from torch.fx.experimental.proxy_tensor import make_fx
+from torch.utils._python_dispatch import is_traceable_wrapper_subclass
 
 from . import config
 from ._aot_autograd import autograd_cache
@@ -68,6 +69,7 @@ from ._aot_autograd.functional_utils import (  # noqa: F401
     sync_functional_tensor,
     to_fun,
 )
+from ._aot_autograd.graph_capture import _create_graph_and_collect_metadata
 from ._aot_autograd.graph_capture_wrappers import (  # noqa: F401
     aot_dispatch_subclass,
     create_functional_call,
@@ -469,6 +471,34 @@ AOT_COUNTER = itertools.count()
 aot_autograd_decompositions: dict[OpOverload, Callable[..., Any]] = {}
 
 
+def _can_collect_metadata_during_fw_graph_trace(
+    fake_flat_args: FakifiedFlatArgs,
+    aot_config: AOTConfig,
+    needs_autograd: bool,
+) -> bool:
+    if (
+        needs_autograd
+        or aot_config.disable_functionalization
+        or aot_config.is_export
+        or aot_config.pre_dispatch
+        or config.functionalize_rng_ops
+        or config.selective_decompose
+        or torch._C._is_any_autocast_enabled()
+    ):
+        return False
+
+    seen_arg_ids: set[int] = set()
+    for arg in fake_flat_args:
+        if isinstance(arg, Tensor):
+            if is_traceable_wrapper_subclass(arg):
+                return False
+            arg_id = id(arg)
+            if arg_id in seen_arg_ids:
+                return False
+            seen_arg_ids.add(arg_id)
+    return True
+
+
 def create_aot_state(
     stack: contextlib.ExitStack,
     flat_fn: Callable[_P, _R],
@@ -558,6 +588,9 @@ def create_aot_state(
     needs_autograd = any(
         x.requires_grad for x in fake_flat_args if isinstance(x, Tensor)
     )
+    precomputed_fw_module = None
+    precomputed_flat_args = None
+    precomputed_flat_args_descs = None
 
     with enable_python_dispatcher():
         # Patch set_rng_state as set_rng_state with fake tensors is
@@ -579,17 +612,39 @@ def create_aot_state(
                 )
 
             with dynamo_timed_ctx, ctx:
-                fw_metadata = run_functionalized_fw_and_collect_metadata(
-                    flat_fn,
-                    flat_args_descs=flat_args_descs,
-                    static_input_indices=aot_config.static_input_indices,
-                    keep_input_mutations=aot_config.keep_inference_input_mutations,
-                    pre_dispatch=aot_config.pre_dispatch,
-                )(*_dup_fake_script_obj(fake_flat_args))
+                fake_flat_args_for_metadata = _dup_fake_script_obj(fake_flat_args)
+                if _can_collect_metadata_during_fw_graph_trace(
+                    fake_flat_args,
+                    aot_config,
+                    needs_autograd,
+                ):
+                    (
+                        precomputed_fw_module,
+                        precomputed_flat_args,
+                        precomputed_flat_args_descs,
+                        fw_metadata,
+                    ) = _create_graph_and_collect_metadata(
+                        flat_fn,
+                        fake_flat_args_for_metadata,
+                        flat_args_descs,
+                        aot_config=aot_config,
+                    )
+                else:
+                    fw_metadata = run_functionalized_fw_and_collect_metadata(
+                        flat_fn,
+                        flat_args_descs=flat_args_descs,
+                        static_input_indices=aot_config.static_input_indices,
+                        keep_input_mutations=aot_config.keep_inference_input_mutations,
+                        pre_dispatch=aot_config.pre_dispatch,
+                    )(*fake_flat_args_for_metadata)
 
             req_subclass_dispatch = requires_subclass_dispatch(
                 fake_flat_args, fw_metadata
             )
+            if req_subclass_dispatch:
+                precomputed_fw_module = None
+                precomputed_flat_args = None
+                precomputed_flat_args_descs = None
             CompileEventLogger.try_add_pt2_compile(
                 "backend_compile", requires_subclass_dispatch=req_subclass_dispatch
             )
@@ -692,6 +747,9 @@ or otherwise set torch._functorch.config.functionalize_rng_ops = False."""
         aot_config=aot_config,
         stack=stack,
         fake_mode=fake_mode,
+        precomputed_fw_module=precomputed_fw_module,
+        precomputed_flat_args=precomputed_flat_args,
+        precomputed_flat_args_descs=precomputed_flat_args_descs,
     )
 
 
