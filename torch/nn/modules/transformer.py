@@ -77,7 +77,11 @@ def _call_transformer_encoder_layer(
     is_causal: bool | None,
     src_key_padding_mask: Tensor | None,
 ) -> Tensor:
-    if torch.compiler.is_dynamo_compiling() and not torch.compiler.is_exporting():
+    if (
+        not torch.jit.is_scripting()
+        and torch.compiler.is_dynamo_compiling()
+        and not torch.compiler.is_exporting()
+    ):
         from torch._higher_order_ops.invoke_subgraph import invoke_subgraph_placeholder
 
         # Keep mod as an explicit argument so the reuse cache can remap
@@ -580,13 +584,21 @@ class TransformerEncoder(Module):
         is_causal = _detect_is_causal_mask(mask, is_causal, seq_len)
 
         for mod in self.layers:
-            output = _call_transformer_encoder_layer(
-                mod,
-                output,
-                mask,
-                is_causal,
-                src_key_padding_mask_for_layers,
-            )
+            if torch.jit.is_scripting():
+                output = mod(
+                    output,
+                    src_mask=mask,
+                    is_causal=is_causal,
+                    src_key_padding_mask=src_key_padding_mask_for_layers,
+                )
+            else:
+                output = _call_transformer_encoder_layer(
+                    mod,
+                    output,
+                    mask,
+                    is_causal,
+                    src_key_padding_mask_for_layers,
+                )
 
         if convert_to_nested:
             output = output.to_padded_tensor(0.0, src.size())
