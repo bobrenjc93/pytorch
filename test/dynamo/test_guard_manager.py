@@ -1473,6 +1473,89 @@ class RecursiveDictGuardTests(RecursiveDictTagTests):
                 opt_fn(x)
 
 
+class NNModuleStructuralGuardTests(RecursiveDictTagTests):
+    def test_nested_module_guard_count_uses_structural_fingerprint(self):
+        class NestedModule(torch.nn.Module):
+            def __init__(self, depth=2, width=4):
+                super().__init__()
+                self.relu_a = torch.nn.ReLU()
+                self.relu_b = torch.nn.ReLU()
+                if depth > 0:
+                    sub_mods = [NestedModule(depth - 1, width) for _ in range(width)]
+                else:
+                    sub_mods = [torch.nn.ReLU() for _ in range(width)]
+                self.sub_mods = torch.nn.Sequential(*sub_mods)
+                self.a = 2
+
+            def forward(self, x):
+                x = self.relu_a(x)
+                x = x + self.sub_mods(x)
+                return x + self.relu_b(x) + self.a
+
+        try:
+            from .utils import install_guard_manager_testing_hook
+        except ImportError:
+            from utils import install_guard_manager_testing_hook
+
+        def hook(guard_wrapper, f_locals, builder):
+            self.assertIn(
+                "nn.Module structural fingerprint changed", str(guard_wrapper)
+            )
+
+        from torch._dynamo import utils as dynamo_utils
+
+        torch._dynamo.reset()
+        dynamo_utils.clear_compilation_metrics()
+        mod = NestedModule()
+        opt_mod = torch.compile(mod, backend="eager", fullgraph=True)
+
+        with install_guard_manager_testing_hook(hook):
+            opt_mod(torch.ones(4))
+
+        metrics = [
+            metric
+            for metric in dynamo_utils.get_compilation_metrics()
+            if metric.guard_count is not None
+        ]
+        self.assertTrue(metrics)
+        self.assertLess(metrics[-1].guard_count, 500)
+
+    def test_structural_fingerprint_recompiles_on_child_attr_mutation(self):
+        class Leaf(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.offset = 1
+
+            def forward(self, x):
+                return x + self.offset
+
+        class Parent(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.layers = torch.nn.ModuleList([Leaf() for _ in range(70)])
+
+            def forward(self, x):
+                for layer in self.layers:
+                    x = layer(x)
+                return x
+
+        torch._dynamo.reset()
+        from torch._dynamo.testing import CompileCounter
+
+        counter = CompileCounter()
+        mod = Parent()
+        opt_mod = torch.compile(mod, backend=counter, fullgraph=True)
+
+        x = torch.ones(4)
+        self.assertEqual(opt_mod(x), torch.full((4,), 71.0))
+        self.assertEqual(opt_mod(x), torch.full((4,), 71.0))
+        self.assertEqual(counter.frame_count, 1)
+
+        mod.layers[0].offset = 3
+        self.assertEqual(opt_mod(x), torch.full((4,), 73.0))
+        self.assertEqual(counter.frame_count, 2)
+
+
 class SourceCloneTests(torch._dynamo.test_case.TestCase):
     def test_clone_identity_transform(self):
         """Identity transform should produce a source with the same name."""

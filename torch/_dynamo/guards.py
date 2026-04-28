@@ -144,6 +144,7 @@ from .source import (
     GlobalWeakRefSource,
     GradSource,
     ImportSource,
+    is_from_source,
     ListGetItemSource,
     LocalSource,
     NamedTupleFieldsSource,
@@ -999,6 +1000,273 @@ class GuardCodeList:
 class GuardManagerType(enum.Enum):
     GUARD_MANAGER = 1
     DICT_GUARD_MANAGER = 2
+
+
+_NN_MODULE_STRUCTURAL_DICT_NAMES = (
+    "_parameters",
+    "_buffers",
+    "_modules",
+    "_backward_pre_hooks",
+    "_backward_hooks",
+    "_forward_hooks",
+    "_forward_hooks_with_kwargs",
+    "_forward_hooks_always_called",
+    "_forward_pre_hooks",
+    "_forward_pre_hooks_with_kwargs",
+    "_state_dict_hooks",
+    "_state_dict_pre_hooks",
+    "_load_state_dict_pre_hooks",
+    "_load_state_dict_post_hooks",
+    "_non_persistent_buffers_set",
+)
+
+_NN_MODULE_STRUCTURAL_DICT_GUARD_TYPES = {
+    "DICT_CONTAINS",
+    "DICT_KEYS_MATCH",
+    "DICT_NOT_CONTAINS",
+    "ID_MATCH",
+    "MAPPING_KEYS_CHECK",
+    "SEQUENCE_LENGTH",
+}
+
+_NN_MODULE_STRUCTURAL_CONST_GUARD_TYPES = {
+    "BOOL_MATCH",
+    "CONSTANT_MATCH",
+    "EQUALS_MATCH",
+    "NONE_MATCH",
+}
+
+
+def _is_nn_module_guard_source(source: Source) -> bool:
+    guard_source = source.guard_source
+    return (
+        guard_source.is_specialized_nn_module()
+        or guard_source.is_unspecialized_nn_module()
+        or guard_source.is_fsdp_module()
+    )
+
+
+@dataclasses.dataclass(frozen=True)
+class NNModuleStructuralFingerprint:
+    module_type: type[torch.nn.Module]
+    module_dict_version: int
+    structural_attrs: tuple[tuple[str, tuple[Any, ...]], ...]
+    children: tuple[tuple[str, "NNModuleStructuralFingerprint | None"], ...]
+
+
+def _structural_attr_fingerprint(value: Any) -> tuple[Any, ...]:
+    if type(value) is collections.OrderedDict:
+        return (
+            "ordered_dict",
+            type(value),
+            tuple(value.keys()),
+            tuple(id(v) for v in value.values()),
+        )
+    if type(value) is dict:
+        return ("dict", dict_version(value), len(value))
+    if isinstance(value, set):
+        try:
+            set_values: tuple[Any, ...] | frozenset[Any] = frozenset(value)
+        except TypeError:
+            set_values = tuple(sorted(id(v) for v in value))
+        return ("set", type(value), set_values)
+    return ("object", type(value), id(value))
+
+
+def _make_nn_module_structural_fingerprint(
+    module: torch.nn.Module, seen: set[int] | None = None
+) -> NNModuleStructuralFingerprint:
+    if seen is None:
+        seen = set()
+
+    module_id = id(module)
+    if module_id in seen:
+        return NNModuleStructuralFingerprint(
+            type(module),
+            dict_version(object.__getattribute__(module, "__dict__")),
+            (),
+            (),
+        )
+
+    seen.add(module_id)
+    module_dict = object.__getattribute__(module, "__dict__")
+    structural_attrs = tuple(
+        (name, _structural_attr_fingerprint(module_dict[name]))
+        for name in _NN_MODULE_STRUCTURAL_DICT_NAMES
+        if name in module_dict
+    )
+
+    children = []
+    modules = module_dict.get("_modules")
+    if isinstance(modules, dict):
+        for name, child in modules.items():
+            child_fingerprint = (
+                _make_nn_module_structural_fingerprint(child, seen)
+                if isinstance(child, torch.nn.Module)
+                else None
+            )
+            children.append((name, child_fingerprint))
+    seen.remove(module_id)
+
+    return NNModuleStructuralFingerprint(
+        type(module),
+        dict_version(module_dict),
+        structural_attrs,
+        tuple(children),
+    )
+
+
+def _check_nn_module_structural_fingerprint(
+    value: Any, expected: NNModuleStructuralFingerprint
+) -> bool:
+    if not isinstance(value, torch.nn.Module):
+        return False
+    try:
+        return _make_nn_module_structural_fingerprint(value) == expected
+    except Exception:
+        return False
+
+
+def _guard_create_fn_kwarg(guard: Guard, name: str) -> Any:
+    if isinstance(guard.create_fn, functools.partial) and guard.create_fn.keywords:
+        return guard.create_fn.keywords.get(name)
+    return None
+
+
+def _is_structural_attr_of_specialized_nn_module(
+    source: Source,
+    attr_names: tuple[str, ...] | set[str],
+    module_sources: OrderedSet[Source],
+) -> bool:
+    return (
+        isinstance(source, AttrSource)
+        and source.member in attr_names
+        and source.base in module_sources
+    )
+
+
+def _is_module_source_guard(guard: Guard) -> bool:
+    if not _is_nn_module_guard_source(guard.originating_source):
+        return False
+    guard_type = guard.create_fn_name()
+    if guard_type == "NN_MODULE":
+        return True
+    if guard_type != "TYPE_MATCH":
+        return False
+    source = guard.originating_source
+    if isinstance(source, TypeSource):
+        return False
+    if (
+        isinstance(source, AttrSource)
+        and source.member in _NN_MODULE_STRUCTURAL_DICT_NAMES
+    ):
+        return False
+    return True
+
+
+def _nn_module_structural_guard_covers(
+    guard: Guard, module_sources: OrderedSet[Source]
+) -> bool:
+    guard_type = guard.create_fn_name()
+    source = guard.originating_source
+
+    if guard_type == "NN_MODULE":
+        return source in module_sources
+
+    if guard_type in ("ID_MATCH", "TYPE_MATCH") and isinstance(source, TypeSource):
+        return source.base in module_sources
+
+    if (
+        guard_type == "NOT_PRESENT_IN_GENERIC_DICT"
+        and _guard_create_fn_kwarg(guard, "attr") == "forward"
+    ):
+        return source in module_sources
+
+    if guard_type == "EMPTY_NN_MODULE_HOOKS_DICT":
+        return (
+            isinstance(source, AttrSource)
+            and source.member in _NN_MODULE_STRUCTURAL_DICT_NAMES
+            and source.base in module_sources
+        )
+
+    if guard_type in _NN_MODULE_STRUCTURAL_DICT_GUARD_TYPES:
+        return _is_structural_attr_of_specialized_nn_module(
+            source, _NN_MODULE_STRUCTURAL_DICT_NAMES, module_sources
+        )
+
+    if guard_type in _NN_MODULE_STRUCTURAL_CONST_GUARD_TYPES:
+        return _is_structural_attr_of_specialized_nn_module(
+            source, {"training"}, module_sources
+        )
+
+    return False
+
+
+def _normalize_nn_module_structural_guards(
+    sorted_guards: list[Guard],
+) -> tuple[list[Guard], OrderedSet[Source]]:
+    if not config.use_nn_module_structural_guards:
+        return sorted_guards, OrderedSet()
+
+    module_source_guards = [
+        guard for guard in sorted_guards if _is_module_source_guard(guard)
+    ]
+    if (
+        len(module_source_guards)
+        < config.nn_module_structural_guard_min_module_count
+    ):
+        return sorted_guards, OrderedSet()
+
+    module_sources = OrderedSet(
+        guard.originating_source for guard in module_source_guards
+    )
+    root_guard_by_source = collections.OrderedDict()
+    for guard in module_source_guards:
+        root_guard_by_source.setdefault(guard.originating_source, guard)
+    structural_roots: OrderedSet[Source] = OrderedSet()
+    for guard in module_source_guards:
+        source = guard.originating_source
+        if any(is_from_source(source, root) for root in structural_roots):
+            continue
+        structural_roots.add(source)
+
+    if not structural_roots:
+        return sorted_guards, OrderedSet()
+
+    normalized_guards: list[Guard] = []
+    for guard in sorted_guards:
+        source = guard.originating_source
+        if source in structural_roots and guard is root_guard_by_source[source]:
+            normalized_guards.append(guard)
+            root_guard = root_guard_by_source[source]
+            normalized_guards.append(
+                Guard(
+                    source,
+                    GuardBuilder.NN_MODULE_STRUCTURE,
+                    stack=root_guard.stack,
+                    user_stack=root_guard.user_stack,
+                )
+            )
+            continue
+
+        if any(is_from_source(source, root) for root in structural_roots):
+            if _nn_module_structural_guard_covers(guard, module_sources):
+                continue
+
+        normalized_guards.append(guard)
+
+    return normalized_guards, structural_roots
+
+
+def _replace_output_graph_guards(
+    output_graph: OutputGraphCommon, sorted_guards: list[Guard]
+) -> None:
+    guards_set = torch._guards.GuardsSet(OrderedSet(sorted_guards))
+    if hasattr(output_graph, "tracing_context"):
+        tracing_context = output_graph.tracing_context  # type: ignore[attr-defined]
+        tracing_context.guards_context.dynamo_guards = guards_set
+    else:
+        output_graph._guards = guards_set
 
 
 @functools.cache
@@ -2708,6 +2976,35 @@ class GuardBuilder(GuardBuilderBase):
                 ],
             )
 
+    @unsupported_guard_check_spec
+    def NN_MODULE_STRUCTURE(self, guard: Guard) -> None:
+        val = self.get(guard)
+        if not isinstance(val, torch.nn.Module):
+            return
+
+        fingerprint = _make_nn_module_structural_fingerprint(val)
+        ref = self.arg_ref(guard)
+        code = (
+            "___check_nn_module_structural_fingerprint("
+            f"{ref}, ___nn_module_structural_fingerprint_{id(fingerprint)})"
+        )
+
+        def guard_fn(
+            x: Any, expected: NNModuleStructuralFingerprint = fingerprint
+        ) -> bool:
+            return _check_nn_module_structural_fingerprint(x, expected)
+
+        self._set_guard_export_info(guard, [code])
+        self.get_guard_manager(guard).add_lambda_guard(
+            guard_fn,
+            get_verbose_code_parts(
+                code,
+                guard,
+                recompile_hint="nn.Module structural fingerprint changed",
+            ),
+            guard.user_stack,
+        )
+
     @register_guard_check_spec(
         get_metadata_fn=lambda guard, value: value,
         eval_fn=lambda value, metadata: value is metadata,
@@ -4249,6 +4546,7 @@ class CheckFunctionManager:
         self.used_builtin_vars: OrderedSet[str] = OrderedSet()
         self.additional_used_local_vars: OrderedSet[str] = OrderedSet()
         self.additional_used_global_vars: OrderedSet[str] = OrderedSet()
+        self.nn_module_structural_guard_sources: OrderedSet[Source] = OrderedSet()
         self.runtime_global_scope = runtime_global_scope
         self.global_state: torch._C._dynamo.guards.GlobalStateGuard | None = None
         self.torch_function_mode_stack_check_fn: Callable[[], bool] | None = None
@@ -4312,6 +4610,14 @@ class CheckFunctionManager:
                 sorted_guards = [
                     guard for i, guard in enumerate(sorted_guards) if filter_results[i]
                 ]
+
+            pre_normalized_guard_count = len(sorted_guards)
+            (
+                sorted_guards,
+                self.nn_module_structural_guard_sources,
+            ) = _normalize_nn_module_structural_guards(sorted_guards)
+            if len(sorted_guards) != pre_normalized_guard_count:
+                _replace_output_graph_guards(output_graph, sorted_guards)
 
             # Redo the guards because filtering relies on the results from the last guard builder.
             builder, guard_manager = self.build_guards(
@@ -4420,6 +4726,7 @@ class CheckFunctionManager:
     UNSUPPORTED_SERIALIZATION_GUARD_TYPES: tuple[LiteralString, ...] = (
         "DICT_VERSION",
         "NN_MODULE",
+        "NN_MODULE_STRUCTURE",
         "ID_MATCH",
         "FUNCTION_MATCH",
         "CLASS_MATCH",
