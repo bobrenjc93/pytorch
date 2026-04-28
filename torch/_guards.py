@@ -37,6 +37,10 @@ if TYPE_CHECKING:
     from torch._dynamo.backends.distributed import DDPOptimizerContext
     from torch._dynamo.codegen import PyCodegen
     from torch._dynamo.guards import GuardCheckSpec
+    from torch._dynamo.symbolic_convert import (
+        InlineTraceCacheEntry,
+        InlineTraceCacheKey,
+    )
     from torch._functorch._aot_autograd.schemas import ViewAndMutationMeta
     from torch._higher_order_ops.invoke_subgraph import NestedCompileRegionOptions
     from torch._subclasses.fake_tensor import FakeTensorMode
@@ -1075,8 +1079,11 @@ class TracingContext:
         # Combined cache for inlined code data (instructions, indexof, code_options)
         self.inlined_code_cache: dict[Any, InlinedCodeCache] = dict()
         # Cache of successfully traced inline FX regions, keyed by code object
-        # and flattened input metadata. Values are defined in symbolic_convert.py.
-        self.inline_trace_cache: dict[Any, Any] = dict()
+        # and flattened input metadata. Entries intentionally keep FX nodes alive
+        # for this TracingContext lifetime; clear() drops them between traces.
+        self.inline_trace_cache: dict[InlineTraceCacheKey, InlineTraceCacheEntry] = (
+            dict()
+        )
         self.fake_mode: FakeTensorMode | None = fake_mode
         self.frame_summary_stack: list[traceback.FrameSummary] = []
         # This is morally part of frame_summary_stack, but it is kept separate

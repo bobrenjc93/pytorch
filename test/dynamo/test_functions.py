@@ -187,6 +187,47 @@ class FunctionTests(torch._dynamo.test_case.TestCase):
         self.assertEqual(counters["inline_trace_cache"]["stored"], 1)
         self.assertEqual(counters["inline_trace_cache"]["hit"], 3)
 
+    def test_inline_trace_cache_keys_on_tensor_stride(self):
+        def block(x):
+            return torch.cos(torch.sin(x + 1.0)) * 2.0
+
+        def fn(x, y):
+            return block(x) + block(y)
+
+        counters.clear()
+        cnt = torch._dynamo.testing.CompileCounter()
+        opt_fn = torch.compile(fn, backend=cnt, fullgraph=True)
+
+        x = torch.randn(2, 3)
+        y = torch.randn(3, 2).t()
+        self.assertEqual(x.shape, y.shape)
+        self.assertNotEqual(x.stride(), y.stride())
+        self.assertTrue(same(opt_fn(x, y), fn(x, y)))
+        self.assertEqual(cnt.frame_count, 1)
+        self.assertEqual(counters["inline_trace_cache"]["stored"], 2)
+        self.assertEqual(counters["inline_trace_cache"]["hit"], 0)
+
+    def test_inline_trace_cache_rejects_constant_inputs(self):
+        def same_object(a, b):
+            return a is b
+
+        def fn(x):
+            a = b = "xyzpdq"
+            c = a[:3] + b[3:]
+            return (
+                x + (1 if same_object(a, b) else 0) + (10 if same_object(a, c) else 0)
+            )
+
+        counters.clear()
+        cnt = torch._dynamo.testing.CompileCounter()
+        opt_fn = torch.compile(fn, backend=cnt, fullgraph=True)
+
+        x = torch.randn(())
+        self.assertTrue(same(opt_fn(x), fn(x)))
+        self.assertEqual(cnt.frame_count, 1)
+        self.assertEqual(counters["inline_trace_cache"]["stored"], 0)
+        self.assertEqual(counters["inline_trace_cache"]["hit"], 0)
+
     def test_lru_cache_warning_issued_during_tracing(self):
         import warnings
         from functools import lru_cache

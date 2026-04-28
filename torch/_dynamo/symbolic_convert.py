@@ -5291,9 +5291,17 @@ def profile_inline_call(
             output.profiler_state.add_child_time(cumtime_ns)
 
 
+ConstantCacheKey: TypeAlias = tuple[type, int, Any]
+InlineTraceCacheKey: TypeAlias = tuple[
+    types.CodeType,
+    tuple[tuple[Any, ...], ...],
+    tuple[tuple[str, ConstantCacheKey], ...],
+]
+
+
 @dataclasses.dataclass(frozen=True)
 class InlineTraceCacheInfo:
-    key: Any
+    key: InlineTraceCacheKey
     input_nodes: tuple[torch.fx.Node, ...]
     input_vts: tuple[VariableTracker, ...]
 
@@ -5360,21 +5368,31 @@ class InliningInstructionTranslator(InstructionTranslatorBase):
             return result
 
     @staticmethod
-    def _shape_key(shape: Any) -> tuple[Any, ...]:
-        def dim_key(dim: Any) -> Any:
-            if isinstance(dim, torch.SymInt):
-                return dim.node.expr
-            return dim
+    def _tensor_dim_key(dim: Any) -> Any:
+        if isinstance(dim, torch.SymInt):
+            return dim.node.expr
+        return dim
 
-        return tuple(dim_key(dim) for dim in shape)
+    @classmethod
+    def _tensor_dim_sequence_key(cls, shape: Any) -> tuple[Any, ...]:
+        return tuple(cls._tensor_dim_key(dim) for dim in shape)
 
     @staticmethod
-    def _hashable_value_key(value: Any) -> tuple[type, Any] | None:
+    def _hashable_value_key(value: Any) -> ConstantCacheKey | None:
         try:
             hash(value)
         except TypeError:
             return None
-        return (type(value), value)
+        return (type(value), id(value), value)
+
+    @staticmethod
+    @functools.cache
+    def _global_names_for_code(code: types.CodeType) -> tuple[str, ...]:
+        return tuple(
+            inst.argval
+            for inst in dis.get_instructions(code)
+            if inst.opname == "LOAD_GLOBAL" and isinstance(inst.argval, str)
+        )
 
     @classmethod
     def _tensor_input_key(cls, vt: TensorVariable) -> tuple[Any, ...] | None:
@@ -5384,32 +5402,27 @@ class InliningInstructionTranslator(InstructionTranslatorBase):
         example_value = proxy.node.meta.get("example_value")
         if not isinstance(example_value, torch.Tensor):
             return None
+        if example_value.layout is not torch.strided:
+            return None
+        if example_value.is_nested:
+            return None
         return (
             "tensor",
-            cls._shape_key(example_value.shape),
+            cls._tensor_dim_sequence_key(example_value.shape),
+            cls._tensor_dim_sequence_key(example_value.stride()),
+            cls._tensor_dim_key(example_value.storage_offset()),
             example_value.dtype,
             example_value.device,
             example_value.requires_grad,
         )
 
     @classmethod
-    def _constant_input_key(cls, vt: ConstantVariable) -> tuple[Any, ...] | None:
-        value_key = cls._hashable_value_key(vt.value)
-        if value_key is None:
-            return None
-        return ("constant", value_key)
-
-    @classmethod
     def _global_key(
         cls, parent: Any, func: BaseUserFunctionVariable, code: types.CodeType
-    ) -> tuple[tuple[str, tuple[type, Any]], ...] | None:
+    ) -> tuple[tuple[str, ConstantCacheKey], ...] | None:
         f_globals = func.get_globals()
-        global_keys: list[tuple[str, tuple[type, Any]]] = []
-        for inst in dis.get_instructions(code):
-            if inst.opname != "LOAD_GLOBAL" or not isinstance(inst.argval, str):
-                continue
-
-            name = inst.argval
+        global_keys: list[tuple[str, ConstantCacheKey]] = []
+        for name in cls._global_names_for_code(code):
             if name not in f_globals:
                 continue
 
@@ -5442,6 +5455,10 @@ class InliningInstructionTranslator(InstructionTranslatorBase):
             return None
         if not parent.output.is_root_tracer():
             return None
+        if torch._C._functorch.peek_interpreter_stack() is not None:
+            return None
+        if torch.autograd.forward_ad._current_level != -1:
+            return None
         if not isinstance(func, UserFunctionVariable) or func.has_self():
             return None
 
@@ -5458,23 +5475,19 @@ class InliningInstructionTranslator(InstructionTranslatorBase):
         ]
         flat_args.extend(("kwarg", name, kwargs[name]) for name in sorted(kwargs))
 
+        if not all(isinstance(vt, TensorVariable) for _, _, vt in flat_args):
+            return None
+
         for kind, name, vt in flat_args:
-            if isinstance(vt, TensorVariable):
-                tensor_key = cls._tensor_input_key(vt)
-                if tensor_key is None:
-                    return None
-                proxy = vt.as_proxy()
-                assert isinstance(proxy, torch.fx.Proxy)
-                input_nodes.append(proxy.node)
-                input_vts.append(vt)
-                key_parts.append((kind, name, tensor_key))
-            elif isinstance(vt, ConstantVariable):
-                constant_key = cls._constant_input_key(vt)
-                if constant_key is None:
-                    return None
-                key_parts.append((kind, name, constant_key))
-            else:
+            assert isinstance(vt, TensorVariable)
+            tensor_key = cls._tensor_input_key(vt)
+            if tensor_key is None:
                 return None
+            proxy = vt.as_proxy()
+            assert isinstance(proxy, torch.fx.Proxy)
+            input_nodes.append(proxy.node)
+            input_vts.append(vt)
+            key_parts.append((kind, name, tensor_key))
 
         global_key = cls._global_key(parent, func, code)
         if global_key is None:
@@ -5493,8 +5506,12 @@ class InliningInstructionTranslator(InstructionTranslatorBase):
 
     @classmethod
     def _node_is_cacheable(cls, node: torch.fx.Node) -> bool:
+        # Keep the first implementation deliberately narrow: cloned inline
+        # regions are plain operator calls, not module calls or lifted attrs.
         if node.op not in {"call_function", "call_method"}:
             return False
+        # Static schemas catch normal mutable ops. The name fallback catches
+        # Python/custom operators that follow the conventional trailing "_".
         if cls._node_target_name(node).split(".", 1)[0].endswith("_"):
             return False
         schema = getattr(node.target, "_schema", None)
@@ -5545,8 +5562,7 @@ class InliningInstructionTranslator(InstructionTranslatorBase):
             or before.save_for_backward != after.save_for_backward
             or before.tensor_hooks != after.tensor_hooks
             or before.mutated_sources != after.mutated_sources
-            or before.has_existing_dict_mutation()
-            != after.has_existing_dict_mutation()
+            or before.has_existing_dict_mutation() != after.has_existing_dict_mutation()
         )
 
     @classmethod
@@ -5582,6 +5598,15 @@ class InliningInstructionTranslator(InstructionTranslatorBase):
         )
         counters["inline_trace_cache"]["stored"] += 1
 
+    @staticmethod
+    def _clone_node_meta(meta: dict[str, Any]) -> dict[str, Any]:
+        new_meta = copy.copy(meta)
+        for key in ("example_value", "val"):
+            value = new_meta.get(key)
+            if isinstance(value, torch.Tensor):
+                new_meta[key] = value.clone()
+        return new_meta
+
     @classmethod
     def _clone_cached_result(
         cls,
@@ -5600,6 +5625,8 @@ class InliningInstructionTranslator(InstructionTranslatorBase):
             proxy = torch.fx.Proxy(new_node, parent.output.current_tracer)
             cloned = result.clone(proxy=proxy, source=None)
             parent.output.current_tracer.record_proxyable_vt(cloned)
+            # _track_obj keeps the proxy alive, so the id-based side-effect
+            # table cannot observe a recycled id during this trace.
             parent.output.side_effects._track_obj(
                 proxy, cloned, mutation_type_cls=AttributeMutationNew
             )
@@ -5636,14 +5663,13 @@ class InliningInstructionTranslator(InstructionTranslatorBase):
                 new_node = parent.output.graph.node_copy(node, lambda n: node_map[n])
             except KeyError:
                 return None
+            new_node.meta = cls._clone_node_meta(node.meta)
             parent.output.current_tracer._used_names.add(new_node.name)
             if config.use_graph_deduplication or config.track_nodes_for_deduplication:
                 parent.output.region_tracker.track_node(parent, new_node)
             node_map[node] = new_node
 
-        return cls._clone_cached_result(
-            parent, entry.result, node_map, input_vt_map
-        )
+        return cls._clone_cached_result(parent, entry.result, node_map, input_vt_map)
 
     @staticmethod
     def check_inlineable(
