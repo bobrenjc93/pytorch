@@ -2960,7 +2960,7 @@ class PolyfilledFunctionVariable(VariableTracker):
         if (
             self.fn is builtins.sum
             and args
-            and isinstance(args[0], variables.TensorToListVariable)
+            and type(args[0]) is variables.TensorToListVariable
         ):
             start = None
             can_use_tolist_sum = True

@@ -5162,9 +5162,9 @@ class InstructionTranslator(InstructionTranslatorBase):
 
     def _return(self, inst: Instruction) -> None:
         self.replace_tos_if_return_is_generator()
-        if self.stack:
+        if self.stack and type(self.stack[-1]) is variables.TensorToListVariable:
             self.stack[-1] = variables.materialize_tensor_tolist_arg(
-                self.stack[-1], self
+                self.stack[-1], self, recursive=False
             )
         assert self.instruction_pointer is not None
         assert self.start_point is not None
@@ -5702,14 +5702,17 @@ class InliningInstructionTranslator(InstructionTranslatorBase):
         )
 
     def RETURN_VALUE(self, inst: Instruction) -> None:
-        self.symbolic_result = variables.materialize_tensor_tolist_arg(self.pop(), self)
+        result = self.pop()
+        if type(result) is variables.TensorToListVariable:
+            result = variables.materialize_tensor_tolist_arg(
+                result, self, recursive=False
+            )
+        self.symbolic_result = result
         self.instruction_pointer = None
         raise ReturnValueOp
 
     def RETURN_CONST(self, inst: Instruction) -> None:
-        self.symbolic_result = variables.materialize_tensor_tolist_arg(
-            self._load_const(inst), self
-        )
+        self.symbolic_result = self._load_const(inst)
         self.instruction_pointer = None
         raise ReturnValueOp
 

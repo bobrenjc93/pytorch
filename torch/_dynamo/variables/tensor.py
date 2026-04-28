@@ -2352,6 +2352,8 @@ class TensorToListVariable(VariableTracker):
         if self._example_value().dim() != 1:
             return None
 
+        # Match the existing torch.sym_sum path for symbolic int lists. This
+        # sums in int64, unlike Python int sum's arbitrary-precision behavior.
         sum_tensor = self.tensor_variable.call_method(
             tx,
             "sum",
@@ -2369,16 +2371,35 @@ class TensorToListVariable(VariableTracker):
 
 
 def materialize_tensor_tolist_arg(
-    arg: VariableTracker, tx: "InstructionTranslatorBase"
+    arg: VariableTracker,
+    tx: "InstructionTranslatorBase",
+    *,
+    recursive: bool = True,
+    _seen: set[int] | None = None,
 ) -> VariableTracker:
-    if isinstance(arg, TensorToListVariable):
-        return arg._list_variable(cast("InstructionTranslator", tx))
-    if isinstance(arg, BaseListVariable):
-        materialized_items = [
-            materialize_tensor_tolist_arg(item, tx) for item in arg.items
-        ]
-        if any(a is not b for a, b in zip(materialized_items, arg.items)):
-            return arg.clone(items=materialized_items)
+    if type(arg) is TensorToListVariable:
+        return cast(TensorToListVariable, arg)._list_variable(
+            cast("InstructionTranslator", tx)
+        )
+    if not recursive:
+        return arg
+    if issubclass(type(arg), BaseListVariable):
+        list_arg = cast(BaseListVariable, arg)
+        if _seen is None:
+            _seen = set()
+        arg_id = id(list_arg)
+        if arg_id in _seen:
+            return list_arg
+        _seen.add(arg_id)
+        try:
+            materialized_items = [
+                materialize_tensor_tolist_arg(item, tx, _seen=_seen)
+                for item in list_arg.items
+            ]
+        finally:
+            _seen.remove(arg_id)
+        if any(a is not b for a, b in zip(materialized_items, list_arg.items)):
+            return list_arg.clone(items=materialized_items)
     return arg
 
 
