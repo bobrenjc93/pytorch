@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import operator
+import time
 from collections.abc import Callable, Sequence  # noqa: TC003
 from typing import Any, NamedTuple, TYPE_CHECKING
 
@@ -66,8 +67,8 @@ _TENSOR_METHODS: set[str] = {
 
 
 class NormalizedArgs(NamedTuple):
-    proxy_args: list[Any]
-    proxy_kwargs: dict[str, Any]
+    vt_args: list[Any]
+    vt_kwargs: dict[str, Any]
     fake_args: list[Any]
     fake_kwargs: dict[str, Any]
     has_tensor_arg: bool
@@ -166,13 +167,14 @@ def _compute_fake_value(
     args: Sequence[Any],
     kwargs: dict[str, Any],
 ) -> Any:
+    _t0 = time.time_ns()
     fake_mode = tx.fake_mode
-    if fake_mode is None:
-        return None
-
-    from .exc import Unsupported
-
     try:
+        if fake_mode is None:
+            return None
+
+        from .exc import Unsupported
+
         with (
             _disable_saved_tensors_hooks_during_tracing(),
             set_current_node(node),
@@ -184,6 +186,41 @@ def _compute_fake_value(
         raise
     except (RuntimeError, TypeError):
         return None
+    finally:
+        tx.output.bytecode_tracing_timings.get_fake_value_ns += time.time_ns() - _t0
+
+
+def _collect_mutation_inputs(
+    tx: InstructionTranslator,
+    node: torch.fx.Node,
+) -> tuple[list[Any], dict[int, int]] | None:
+    if not (config.use_graph_deduplication or config.track_nodes_for_deduplication):
+        return None
+
+    from .graph_utils import _get_flat_args
+    from .utils import get_fake_values_from_nodes, is_fake
+
+    flat_args_kwargs = get_fake_values_from_nodes(tx, _get_flat_args(node, {}), False)
+    id_to_initial_version = {
+        id(arg): arg._version for arg in flat_args_kwargs if is_fake(arg)
+    }
+    return flat_args_kwargs, id_to_initial_version
+
+
+def _track_node_mutations(
+    tx: InstructionTranslator,
+    node: torch.fx.Node,
+    mutation_inputs: tuple[list[Any], dict[int, int]] | None,
+) -> None:
+    if mutation_inputs is None:
+        return
+
+    flat_args_kwargs, id_to_initial_version = mutation_inputs
+    tx.output.region_tracker.track_node_mutations(
+        node,
+        flat_args_kwargs,
+        id_to_initial_version,
+    )
 
 
 def _can_use_fastpath(
@@ -217,14 +254,21 @@ def maybe_fastpath_tensor_stack_op(
     proxy = tx.output.create_proxy(
         "call_function",
         fn,
-        *proxy_args_kwargs(normalized.proxy_args, normalized.proxy_kwargs),
+        *proxy_args_kwargs(normalized.vt_args, normalized.vt_kwargs),
     )
-    example_value = _compute_fake_value(
-        tx, proxy.node, fn, normalized.fake_args, normalized.fake_kwargs
-    )
+    try:
+        mutation_inputs = _collect_mutation_inputs(tx, proxy.node)
+        example_value = _compute_fake_value(
+            tx, proxy.node, fn, normalized.fake_args, normalized.fake_kwargs
+        )
+    except Exception:
+        tx.output.remove_node(proxy.node)
+        raise
     if not isinstance(example_value, torch.Tensor):
         tx.output.remove_node(proxy.node)
         return None
+
+    _track_node_mutations(tx, proxy.node, mutation_inputs)
 
     from .variables.builder import wrap_fx_proxy
 
@@ -255,21 +299,28 @@ def maybe_fastpath_tensor_method(
     proxy = tx.output.create_proxy(
         "call_method",
         name,
-        *proxy_args_kwargs(normalized.proxy_args, normalized.proxy_kwargs),
+        *proxy_args_kwargs(normalized.vt_args, normalized.vt_kwargs),
     )
     fake_self, *fake_method_args = normalized.fake_args
-    example_value = _compute_fake_value(
-        tx,
-        proxy.node,
-        lambda *method_args, **method_kwargs: getattr(fake_self, name)(
-            *method_args, **method_kwargs
-        ),
-        fake_method_args,
-        normalized.fake_kwargs,
-    )
+    try:
+        mutation_inputs = _collect_mutation_inputs(tx, proxy.node)
+        example_value = _compute_fake_value(
+            tx,
+            proxy.node,
+            lambda *method_args, **method_kwargs: getattr(fake_self, name)(
+                *method_args, **method_kwargs
+            ),
+            fake_method_args,
+            normalized.fake_kwargs,
+        )
+    except Exception:
+        tx.output.remove_node(proxy.node)
+        raise
     if not isinstance(example_value, torch.Tensor):
         tx.output.remove_node(proxy.node)
         return None
+
+    _track_node_mutations(tx, proxy.node, mutation_inputs)
 
     from .variables.builder import wrap_fx_proxy
 

@@ -150,7 +150,6 @@ class TensorSSATests(torch._dynamo.test_case.TestCase):
 
     def test_fastpath_preserves_shape_dependency_current_node(self):
         from functorch.experimental.control_flow import cond
-        from torch.fx.experimental.proxy_tensor import make_fx
 
         a = torch.ones(2, 3)
         b = torch.ones(2, 3) + 1
@@ -164,18 +163,70 @@ class TensorSSATests(torch._dynamo.test_case.TestCase):
         def fn(x):
             return cond(x.shape[0] == 4, true_fn, false_fn, [x])
 
-        gm = make_fx(fn, tracing_mode="symbolic", _allow_non_fake_inputs=True)(
-            torch.randn(2, 3)
+        backend = EagerAndRecordGraphs()
+        opt_fn = torch.compile(fn, backend=backend, fullgraph=True, dynamic=True)
+        x = torch.randn(2, 3)
+
+        with self.collect_fastpath_hits() as hits:
+            self.assertEqual(opt_fn(x), fn(x))
+
+        self.assertEqual(hits, [("stack", operator.add), ("stack", operator.add)])
+        self.assertEqual(len(backend.graphs), 1)
+        graph_code = backend.graphs[0].code
+
+        self.assertIn("torch.ops.higher_order.cond", graph_code)
+        self.assertRegex(graph_code, r"eq = s\d+ == 4")
+        self.assertRegex(
+            graph_code,
+            r"torch\.ops\.higher_order\.cond"
+            r"\(eq, cond_true_0, cond_false_0, \(l_x_, s\d+, s\d+,",
         )
 
-        self.assertIn(
-            "sym_size_int_1 = torch.ops.aten.sym_size.int(x_1, 1)",
-            gm.code,
-        )
-        self.assertIn(
-            "(x_1, _tensor_constant0, sym_size_int_1, sym_size_int, _tensor_constant1)",
-            gm.code,
-        )
+    def test_unsupported_fastpath_fake_value_removes_speculative_node(self):
+        from torch._dynamo.exc import Unsupported
+        from torch._dynamo.output_graph import OutputGraph
+
+        def fn(x):
+            y = x.relu()
+            z = y + 1
+            return z.cos()
+
+        orig_compute_fake_value = tensor_ssa._compute_fake_value
+        orig_remove_node = OutputGraph.remove_node
+        removed_targets = []
+        raised = False
+
+        def fail_add_once(tx, node, op, args, kwargs):
+            nonlocal raised
+            if (
+                not raised
+                and node.op == "call_function"
+                and node.target is operator.add
+            ):
+                raised = True
+                raise Unsupported("forced tensor SSA graph break")
+            return orig_compute_fake_value(tx, node, op, args, kwargs)
+
+        def record_remove_node(output_graph, node):
+            removed_targets.append(node.target)
+            return orig_remove_node(output_graph, node)
+
+        backend = EagerAndRecordGraphs()
+        opt_fn = torch.compile(fn, backend=backend)
+        x = torch.randn(4)
+
+        with (
+            mock.patch.object(
+                tensor_ssa,
+                "_compute_fake_value",
+                side_effect=fail_add_once,
+            ),
+            mock.patch.object(OutputGraph, "remove_node", record_remove_node),
+        ):
+            self.assertEqual(opt_fn(x), fn(x))
+
+        self.assertTrue(raised)
+        self.assertIn(operator.add, removed_targets)
 
 
 if __name__ == "__main__":
