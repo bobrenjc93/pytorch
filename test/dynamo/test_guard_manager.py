@@ -1500,33 +1500,46 @@ class NNModuleStructuralGuardTests(RecursiveDictTagTests):
         except ImportError:
             from utils import install_guard_manager_testing_hook
 
-        seen_structural_guard = False
-
-        def hook(guard_wrapper, f_locals, builder):
-            nonlocal seen_structural_guard
-            seen_structural_guard = seen_structural_guard or (
-                "nn.Module structural fingerprint changed" in str(guard_wrapper)
-            )
-
         from torch._dynamo import utils as dynamo_utils
 
-        torch._dynamo.reset()
-        dynamo_utils.clear_compilation_metrics()
-        mod = self._make_nested_module()
-        opt_mod = torch.compile(mod, backend="eager", fullgraph=True)
+        def guard_count_and_structural_guard_seen(enabled):
+            seen_structural_guard = False
 
-        with install_guard_manager_testing_hook(hook):
-            opt_mod(torch.ones(4))
+            def hook(guard_wrapper, f_locals, builder):
+                nonlocal seen_structural_guard
+                seen_structural_guard = seen_structural_guard or (
+                    "nn.Module structural fingerprint changed" in str(guard_wrapper)
+                )
+
+            torch._dynamo.reset()
+            dynamo_utils.clear_compilation_metrics()
+            mod = self._make_nested_module()
+            with torch._dynamo.config.patch(use_nn_module_structural_guards=enabled):
+                opt_mod = torch.compile(mod, backend="eager", fullgraph=True)
+                with install_guard_manager_testing_hook(hook):
+                    opt_mod(torch.ones(4))
+
+            metrics = [
+                metric
+                for metric in dynamo_utils.get_compilation_metrics()
+                if metric.guard_count is not None
+            ]
+            self.assertTrue(metrics)
+            guard_count = metrics[-1].guard_count
+            self.assertIsNotNone(guard_count)
+            return guard_count, seen_structural_guard
+
+        enabled_guard_count, seen_structural_guard = (
+            guard_count_and_structural_guard_seen(True)
+        )
+        disabled_guard_count, disabled_seen_structural_guard = (
+            guard_count_and_structural_guard_seen(False)
+        )
 
         self.assertTrue(seen_structural_guard)
-
-        metrics = [
-            metric
-            for metric in dynamo_utils.get_compilation_metrics()
-            if metric.guard_count is not None
-        ]
-        self.assertTrue(metrics)
-        self.assertLess(metrics[-1].guard_count, 500)
+        self.assertFalse(disabled_seen_structural_guard)
+        self.assertLess(enabled_guard_count, disabled_guard_count)
+        self.assertLess(enabled_guard_count, 500)
 
     def test_nested_module_structural_guard_respects_config(self):
         try:
@@ -1550,6 +1563,43 @@ class NNModuleStructuralGuardTests(RecursiveDictTagTests):
                 opt_mod(torch.ones(4))
 
         self.assertFalse(seen_structural_guard)
+
+    def test_structural_fingerprint_recompiles_on_child_training_mutation(self):
+        class Leaf(torch.nn.Module):
+            def forward(self, x):
+                return x + (1 if self.training else 2)
+
+        class Parent(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.layer_count = (
+                    torch._dynamo.config.nn_module_structural_guard_min_module_count + 6
+                )
+                self.layers = torch.nn.ModuleList(
+                    [Leaf() for _ in range(self.layer_count)]
+                )
+
+            def forward(self, x):
+                for layer in self.layers:
+                    x = layer(x)
+                return x
+
+        torch._dynamo.reset()
+        from torch._dynamo.testing import CompileCounter
+
+        counter = CompileCounter()
+        mod = Parent()
+        opt_mod = torch.compile(mod, backend=counter, fullgraph=True)
+
+        x = torch.ones(4)
+        expected = torch.full((4,), float(mod.layer_count + 1))
+        self.assertEqual(opt_mod(x), expected)
+        self.assertEqual(opt_mod(x), expected)
+        self.assertEqual(counter.frame_count, 1)
+
+        mod.layers[0].eval()
+        self.assertEqual(opt_mod(x), expected + 1)
+        self.assertEqual(counter.frame_count, 2)
 
     def test_structural_fingerprint_recompiles_on_child_attr_mutation(self):
         class Leaf(torch.nn.Module):
@@ -1630,6 +1680,9 @@ class NNModuleStructuralGuardTests(RecursiveDictTagTests):
         self.assertEqual(opt_mod(x), expected)
         self.assertEqual(counter.frame_count, 1)
 
+        # The structural guard intentionally ignores ordinary child __dict__
+        # writes. Accessed attributes still have their own leaf guards, while
+        # unused attributes do not force recompilation.
         mod.layers[0].unused = 1
         self.assertEqual(opt_mod(x), expected)
         self.assertEqual(counter.frame_count, 1)
