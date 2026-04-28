@@ -5293,6 +5293,11 @@ def profile_inline_call(
 
 
 _INLINE_FRAME_CACHE_UNSUPPORTED = object()
+_INLINE_FRAME_CACHE_FRESH_META_KEYS = {
+    "nn_module_stack",
+    "source_fn_stack",
+    "stack_trace",
+}
 
 
 def _make_inline_frame_cache_key(
@@ -5416,8 +5421,7 @@ def _clone_inline_frame_cache_example_value(value: Any, tx: Any) -> Any:
         return cloned
     if isinstance(value, dict):
         cloned = {
-            k: _clone_inline_frame_cache_example_value(v, tx)
-            for k, v in value.items()
+            k: _clone_inline_frame_cache_example_value(v, tx) for k, v in value.items()
         }
         if any(v is _INLINE_FRAME_CACHE_UNSUPPORTED for v in cloned.values()):
             return _INLINE_FRAME_CACHE_UNSUPPORTED
@@ -5431,9 +5435,7 @@ def _inline_frame_cache_example_value_is_supported(value: Any, tx: Any) -> bool:
     if is_fake(value):
         return _inline_frame_cache_fake_is_supported(value, tx)
     if isinstance(value, (tuple, list)):
-        return all(
-            _inline_frame_cache_example_value_is_supported(v, tx) for v in value
-        )
+        return all(_inline_frame_cache_example_value_is_supported(v, tx) for v in value)
     if isinstance(value, dict):
         return all(
             _inline_frame_cache_example_value_is_supported(v, tx)
@@ -5445,20 +5447,24 @@ def _inline_frame_cache_example_value_is_supported(value: Any, tx: Any) -> bool:
 def _clone_inline_frame_cache_node_meta(
     node: torch.fx.Node, tx: Any
 ) -> dict[str, Any] | None:
-    meta = copy.copy(node.meta)
-    if "example_value" in meta:
-        example_value = _clone_inline_frame_cache_example_value(
-            meta["example_value"], tx
-        )
-        if example_value is _INLINE_FRAME_CACHE_UNSUPPORTED:
+    meta = {}
+    for key, value in node.meta.items():
+        if key in _INLINE_FRAME_CACHE_FRESH_META_KEYS:
+            continue
+        if key == "example_value":
+            example_value = _clone_inline_frame_cache_example_value(value, tx)
+            if example_value is _INLINE_FRAME_CACHE_UNSUPPORTED:
+                return None
+            meta[key] = example_value
+            continue
+        try:
+            meta[key] = copy.deepcopy(value)
+        except Exception:
             return None
-        meta["example_value"] = example_value
     return meta
 
 
-def _inline_frame_cache_node_meta_is_supported(
-    node: torch.fx.Node, tx: Any
-) -> bool:
+def _inline_frame_cache_node_meta_is_supported(node: torch.fx.Node, tx: Any) -> bool:
     if "example_value" not in node.meta:
         return True
     return _inline_frame_cache_example_value_is_supported(
@@ -5476,8 +5482,7 @@ def _inline_frame_cache_result_is_supported(
         )
     if isinstance(result, TensorVariable):
         return (
-            result.proxy.node in cached_nodes
-            or result.proxy.node.op == "placeholder"
+            result.proxy.node in cached_nodes or result.proxy.node.op == "placeholder"
         )
     if isinstance(result, TupleVariable):
         return all(
@@ -5494,14 +5499,17 @@ class InliningInstructionTranslator(InstructionTranslatorBase):
     # pyrefly: ignore [bad-override]
     parent: InstructionTranslatorBase
 
+    def _inline_frame_cache_is_enabled(self) -> bool:
+        return not (
+            is_generator(self.f_code)
+            or self.parent.strict_checks_fn
+            or config.use_graph_deduplication
+            or config.track_nodes_for_deduplication
+            or self.output.current_tracer.parent is not None
+        )
+
     def _maybe_replay_inline_frame_cache(self) -> VariableTracker | None:
-        if is_generator(self.f_code):
-            return None
-        if self.parent.strict_checks_fn:
-            return None
-        if config.use_graph_deduplication or config.track_nodes_for_deduplication:
-            return None
-        if self.output.current_tracer.parent is not None:
+        if not self._inline_frame_cache_is_enabled():
             return None
 
         tracing_ctx = self.output.tracing_context
@@ -5538,7 +5546,7 @@ class InliningInstructionTranslator(InstructionTranslatorBase):
             if node.op == "placeholder":
                 continue
 
-            def remap_arg(arg: torch.fx.Node) -> torch.fx.Proxy:
+            def remap_arg(arg: torch.fx.Node) -> torch.fx.node.Argument:
                 return tracer.proxy(node_remap.get(arg, arg))
 
             args = torch.fx.node.map_arg(node.args, remap_arg)
@@ -5551,7 +5559,11 @@ class InliningInstructionTranslator(InstructionTranslatorBase):
                 name=node.name,
                 type_expr=node.type,
             )
-            proxy.node.meta = cloned_meta[node]
+            meta = cloned_meta[node]
+            replay_meta = {**meta, **proxy.node.meta}
+            if "example_value" in meta:
+                replay_meta["example_value"] = meta["example_value"]
+            proxy.node.meta = replay_meta
             if "example_value" in proxy.node.meta:
                 tracer.track_produced_symints(proxy.node.meta["example_value"], proxy)
             node_remap[node] = proxy.node
@@ -5617,17 +5629,22 @@ class InliningInstructionTranslator(InstructionTranslatorBase):
                 and side_effects.is_modified(variable)
             ):
                 return True
+        if (
+            len(side_effects.save_for_backward)
+            != self._inline_frame_cache_save_for_backward_count
+        ):
+            return True
+        if (
+            frozenset(side_effects.tensor_hooks.keys())
+            != self._inline_frame_cache_tensor_hook_ids
+        ):
+            return True
         return False
 
     def _maybe_store_inline_frame_cache(self, result: VariableTracker) -> None:
-        if is_generator(self.f_code):
+        if not self._inline_frame_cache_is_enabled():
             return
-        if self.parent.strict_checks_fn:
-            return
-        if config.use_graph_deduplication or config.track_nodes_for_deduplication:
-            return
-        if self.output.current_tracer.parent is not None:
-            return
+        start_nodes = self._inline_frame_cache_start_nodes
         if self.output.should_exit:
             return
         if not self.has_no_inlined_calls:
@@ -5644,14 +5661,13 @@ class InliningInstructionTranslator(InstructionTranslatorBase):
         new_nodes = [
             node
             for node in self.output.current_tracer.graph.nodes
-            if node not in self._inline_frame_cache_start_nodes
+            if node not in start_nodes
         ]
         cached_nodes = set(new_nodes)
         if not all(_inline_frame_cache_node_is_replayable(node) for node in new_nodes):
             return
         if not all(
-            _inline_frame_cache_node_meta_is_supported(node, self)
-            for node in new_nodes
+            _inline_frame_cache_node_meta_is_supported(node, self) for node in new_nodes
         ):
             return
         if not _inline_frame_cache_result_is_supported(result, cached_nodes):
@@ -6033,22 +6049,42 @@ class InliningInstructionTranslator(InstructionTranslatorBase):
             indexof=indexof,
         )
         self.funcvar = funcvar
-        self._inline_frame_cache_start_nodes = frozenset(
-            parent.output.current_tracer.graph.nodes
-        )
-        side_effects = self.output.side_effects
-        self._inline_frame_cache_tracked_side_effect_ids = frozenset(
-            side_effects.id_to_variable.keys()
-        )
-        self._inline_frame_cache_modified_side_effect_ids = frozenset(
-            item_id
-            for item_id, variable in side_effects.id_to_variable.items()
-            if side_effects.is_modified(variable)
-        )
-        self._inline_frame_cache_had_existing_dict_mutation = (
-            side_effects.has_existing_dict_mutation()
-        )
         self.parent = parent
+        side_effects = self.output.side_effects
+        if self._inline_frame_cache_is_enabled():
+            self._inline_frame_cache_start_nodes = frozenset(
+                parent.output.current_tracer.graph.nodes
+            )
+            self._inline_frame_cache_tracked_side_effect_ids = frozenset(
+                side_effects.id_to_variable.keys()
+            )
+            self._inline_frame_cache_modified_side_effect_ids = frozenset(
+                item_id
+                for item_id, variable in side_effects.id_to_variable.items()
+                if side_effects.is_modified(variable)
+            )
+            self._inline_frame_cache_had_existing_dict_mutation = (
+                side_effects.has_existing_dict_mutation()
+            )
+            self._inline_frame_cache_save_for_backward_count = len(
+                side_effects.save_for_backward
+            )
+            self._inline_frame_cache_tensor_hook_ids = frozenset(
+                side_effects.tensor_hooks.keys()
+            )
+        else:
+            self._inline_frame_cache_start_nodes = frozenset()
+            self._inline_frame_cache_tracked_side_effect_ids = frozenset()
+            self._inline_frame_cache_modified_side_effect_ids = frozenset()
+            self._inline_frame_cache_had_existing_dict_mutation = (
+                side_effects.has_existing_dict_mutation()
+            )
+            self._inline_frame_cache_save_for_backward_count = len(
+                side_effects.save_for_backward
+            )
+            self._inline_frame_cache_tensor_hook_ids = frozenset(
+                side_effects.tensor_hooks.keys()
+            )
         self.num_calls = parent.num_calls
         self.symbolic_result = None
         self.nn_module_stack = parent.nn_module_stack.copy()
