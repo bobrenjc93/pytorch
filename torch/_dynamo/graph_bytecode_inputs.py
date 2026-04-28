@@ -51,14 +51,6 @@ def get_external_object_by_index(index: int) -> Any:
     return index_to_external_object_weakref[index]()
 
 
-def store_user_object_weakrefs(*args: Any) -> None:
-    global index_to_external_object_weakref
-    index_to_external_object_weakref.clear()
-    index_to_external_object_weakref.update(
-        {i: weakref.ref(arg) for i, arg in enumerate(args)}
-    )
-
-
 def store_user_object_weakrefs_by_index(indices: tuple[int, ...], *args: Any) -> None:
     global index_to_external_object_weakref
     assert len(indices) == len(args)
@@ -76,15 +68,34 @@ def reset_user_object_tracking() -> None:
     next_user_object_index = FIRST_USER_OBJECT_INDEX
 
 
-def _store_user_object_weakref(index: int, value: Any) -> None:
+def _try_store_external_object_weakref(index: int, value: Any) -> TypeError | None:
     try:
         index_to_external_object_weakref[index] = weakref.ref(value)
+        return None
     except TypeError as e:
+        return e
+
+
+def _store_user_object_weakref(index: int, value: Any) -> None:
+    if e := _try_store_external_object_weakref(index, value):
         from .exc import unimplemented
 
         unimplemented(
             gb_type="Failed to make weakref to User Object",
             context=f"user_object: {value}",
+            explanation="Object does not allow us to make a weakref to it",
+            hints=[],
+            from_exc=e,
+        )
+
+
+def _store_graph_created_object_weakref(index: int, example_value: Any) -> None:
+    if e := _try_store_external_object_weakref(index, example_value):
+        from .exc import unimplemented
+
+        unimplemented(
+            gb_type="Failed to make weakref to graph-created external object",
+            context=f"user_object: {example_value}",
             explanation="Object does not allow us to make a weakref to it",
             hints=[],
             from_exc=e,
@@ -106,18 +117,7 @@ def register_graph_created_object(
     keep_alive.append(example_value)
     index = _next_user_object_index()
     index_to_bytecode_constructor[index] = lambda cg: construct_fn(index, cg)
-    try:
-        index_to_external_object_weakref[index] = weakref.ref(example_value)
-    except TypeError as e:
-        from .exc import unimplemented
-
-        unimplemented(
-            gb_type="Failed to make weakref to graph-created external object",
-            context=f"user_object: {example_value}",
-            explanation="Object does not allow us to make a weakref to it",
-            hints=[],
-            from_exc=e,
-        )
+    _store_graph_created_object_weakref(index, example_value)
     return index
 
 
