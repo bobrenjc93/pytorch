@@ -11,6 +11,7 @@ import operator
 import os
 import os.path
 import re
+import sys
 import warnings
 from collections import defaultdict, deque
 from collections.abc import Callable
@@ -158,6 +159,13 @@ class MinCutOptions:
     ban_if_materialized_backward: bool
     ban_if_not_in_allowlist: bool
     ban_if_reduction: bool
+
+
+@dataclass
+class _MinCutEdge:
+    to: int
+    rev: int
+    capacity: float
 
 
 def must_recompute(node: fx.Node) -> bool:
@@ -2510,7 +2518,18 @@ def solve_min_cut(
                         heapq.heappush(fusible, (node_info.get_fw_order(user), user))
 
     try:
-        cut_value, partition = nx.minimum_cut(nx_graph, "source", "sink")
+        try:
+            min_cut_result = _try_fast_min_cut(nx_graph, "source", "sink")
+        except Exception:
+            log.debug(
+                "Fast min-cut solver failed; falling back to NetworkX",
+                exc_info=True,
+            )
+            min_cut_result = None
+        if min_cut_result is None:
+            cut_value, partition = nx.minimum_cut(nx_graph, "source", "sink")
+        else:
+            cut_value, partition = min_cut_result
     except nx.NetworkXUnbounded as unbounded_exc:
         # Check if structured tracing is enabled (for production job debugging via tlparse)
         structured_tracing_enabled = bool(trace_log.handlers)
@@ -2694,6 +2713,154 @@ def solve_min_cut(
         (name_to_node[node] for node in cut_nodes), key=lambda x: node_idx[x]
     )
     return saved_values, banned_nodes
+
+
+def _try_fast_min_cut(
+    nx_graph: "nx.DiGraph[str, dict[str, Any]]",
+    source: str,
+    sink: str,
+) -> tuple[float, tuple[set[str], set[str]]] | None:
+    """Compute a finite s-t min-cut without NetworkX's generic flow solver.
+
+    The partitioner builds a simple directed graph whose capacities are either
+    non-negative finite node-save costs or ``math.inf`` dependency/constraint
+    edges. Replacing the infinite capacities with any value greater than the sum
+    of all finite capacities preserves every finite min-cut. If the resulting
+    cut would cross one of those synthetic infinite edges, this returns ``None``
+    so the caller can fall back to NetworkX and keep the existing unbounded
+    error reporting.
+    """
+    if source not in nx_graph or sink not in nx_graph:
+        return None
+
+    nodes = list(nx_graph.nodes)
+    node_indexes = {node: idx for idx, node in enumerate(nodes)}
+    finite_capacity_sum = 0.0
+    edge_specs: list[tuple[str, str, float | None]] = []
+
+    for from_node, to_node, edge_data in nx_graph.edges(data=True):
+        try:
+            capacity = float(edge_data["capacity"])
+        except (KeyError, TypeError, ValueError, OverflowError):
+            return None
+
+        if math.isnan(capacity) or capacity < 0:
+            return None
+
+        if math.isinf(capacity):
+            edge_specs.append((from_node, to_node, None))
+        else:
+            finite_capacity_sum += capacity
+            if not math.isfinite(finite_capacity_sum):
+                return None
+            edge_specs.append((from_node, to_node, capacity))
+
+    infinite_capacity = finite_capacity_sum + max(finite_capacity_sum, 1.0)
+    if not math.isfinite(infinite_capacity):
+        return None
+
+    residual_graph: list[list[_MinCutEdge]] = [[] for _ in nodes]
+
+    def add_edge(from_node: str, to_node: str, capacity: float) -> None:
+        from_idx = node_indexes[from_node]
+        to_idx = node_indexes[to_node]
+        residual_graph[from_idx].append(
+            _MinCutEdge(to_idx, len(residual_graph[to_idx]), capacity)
+        )
+        residual_graph[to_idx].append(
+            _MinCutEdge(from_idx, len(residual_graph[from_idx]) - 1, 0.0)
+        )
+
+    for from_node, to_node, capacity in edge_specs:
+        add_edge(
+            from_node,
+            to_node,
+            infinite_capacity if capacity is None else capacity,
+        )
+
+    source_idx = node_indexes[source]
+    sink_idx = node_indexes[sink]
+    eps = 1e-12
+
+    def bfs_levels() -> list[int] | None:
+        levels = [-1] * len(nodes)
+        levels[source_idx] = 0
+        queue: deque[int] = deque([source_idx])
+        while queue:
+            idx = queue.popleft()
+            for edge in residual_graph[idx]:
+                if edge.capacity <= eps or levels[edge.to] != -1:
+                    continue
+                levels[edge.to] = levels[idx] + 1
+                queue.append(edge.to)
+        return levels if levels[sink_idx] != -1 else None
+
+    def dfs_flow(
+        idx: int,
+        pushed: float,
+        levels: list[int],
+        next_edges: list[int],
+    ) -> float:
+        if pushed <= eps:
+            return 0.0
+        if idx == sink_idx:
+            return pushed
+
+        while next_edges[idx] < len(residual_graph[idx]):
+            edge_idx = next_edges[idx]
+            edge = residual_graph[idx][edge_idx]
+            if edge.capacity > eps and levels[edge.to] == levels[idx] + 1:
+                flowed = dfs_flow(
+                    edge.to,
+                    min(pushed, edge.capacity),
+                    levels,
+                    next_edges,
+                )
+                if flowed > eps:
+                    edge.capacity -= flowed
+                    residual_graph[edge.to][edge.rev].capacity += flowed
+                    return flowed
+            next_edges[idx] += 1
+        return 0.0
+
+    flow = 0.0
+    old_recursion_limit = sys.getrecursionlimit()
+    if old_recursion_limit < len(nodes) + 10:
+        sys.setrecursionlimit(len(nodes) + 10)
+    try:
+        while True:
+            levels = bfs_levels()
+            if levels is None:
+                break
+            next_edges = [0] * len(nodes)
+            while True:
+                pushed = dfs_flow(source_idx, infinite_capacity, levels, next_edges)
+                if pushed <= eps:
+                    break
+                flow += pushed
+                if flow > finite_capacity_sum + eps:
+                    return None
+    finally:
+        if sys.getrecursionlimit() != old_recursion_limit:
+            sys.setrecursionlimit(old_recursion_limit)
+
+    reachable_indexes: set[int] = set()
+    queue = deque([source_idx])
+    reachable_indexes.add(source_idx)
+    while queue:
+        idx = queue.popleft()
+        for edge in residual_graph[idx]:
+            if edge.capacity <= eps or edge.to in reachable_indexes:
+                continue
+            reachable_indexes.add(edge.to)
+            queue.append(edge.to)
+
+    if sink_idx in reachable_indexes:
+        return None
+
+    reachable = {nodes[idx] for idx in reachable_indexes}
+    non_reachable = set(nodes) - reachable
+    return flow, (reachable, non_reachable)
 
 
 def _find_infinite_capacity_path(
