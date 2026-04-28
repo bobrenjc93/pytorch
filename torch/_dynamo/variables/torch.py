@@ -1770,6 +1770,14 @@ class TorchInGraphFunctionVariable(BaseTorchVariable):
             *args: VariableTracker,
             **kwargs: VariableTracker,
         ) -> VariableTracker | None:
+            from .tensor import materialize_tensor_tolist_arg
+
+            args = tuple(materialize_tensor_tolist_arg(arg, tx) for arg in args)
+            kwargs = {
+                key: materialize_tensor_tolist_arg(arg, tx)
+                for key, arg in kwargs.items()
+            }
+
             def check_any_unspec(x: VariableTracker) -> bool:
                 # NB: This includes UnspecializedPythonVariable
                 if x.is_tensor() or isinstance(x, SymNodeVariable):

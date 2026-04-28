@@ -75,7 +75,7 @@ from ..utils import (
 )
 from .base import AttributeMutationNew, ValueMutationNew, VariableTracker
 from .constant import ConstantVariable
-from .lists import ListIteratorVariable, ListVariable, SizeVariable
+from .lists import BaseListVariable, ListIteratorVariable, ListVariable, SizeVariable
 from .script_object import TorchScriptObjectVariable
 from .user_defined import UserDefinedClassVariable
 
@@ -2260,6 +2260,8 @@ class TensorToListVariable(VariableTracker):
     def as_proxy(self) -> list[Any]:
         materialized = self.materialized
         if materialized is None:
+            # as_proxy() does not receive tx, so keep the translator from the
+            # same compilation pass to materialize before creating proxy args.
             materialized = self.unpack_var_sequence(self.tx)
         return [item.as_proxy() for item in materialized]
 
@@ -2360,17 +2362,23 @@ class TensorToListVariable(VariableTracker):
 
     def reconstruct(self, codegen: "PyCodegen") -> None:
         if self.materialized is None:
-            self.unpack_var_sequence(self.tx)
+            self.unpack_var_sequence(cast("InstructionTranslator", codegen.tx))
 
         assert self.materialized is not None
         codegen(ListVariable(self.materialized, mutation_type=ValueMutationNew()))
 
 
 def materialize_tensor_tolist_arg(
-    arg: VariableTracker, tx: "InstructionTranslator"
+    arg: VariableTracker, tx: "InstructionTranslatorBase"
 ) -> VariableTracker:
     if isinstance(arg, TensorToListVariable):
-        return arg._list_variable(tx)
+        return arg._list_variable(cast("InstructionTranslator", tx))
+    if isinstance(arg, BaseListVariable):
+        materialized_items = [
+            materialize_tensor_tolist_arg(item, tx) for item in arg.items
+        ]
+        if any(a is not b for a, b in zip(materialized_items, arg.items)):
+            return arg.clone(items=materialized_items)
     return arg
 
 

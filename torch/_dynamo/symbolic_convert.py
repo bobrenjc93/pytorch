@@ -5702,12 +5702,14 @@ class InliningInstructionTranslator(InstructionTranslatorBase):
         )
 
     def RETURN_VALUE(self, inst: Instruction) -> None:
-        self.symbolic_result = self.pop()
+        self.symbolic_result = variables.materialize_tensor_tolist_arg(self.pop(), self)
         self.instruction_pointer = None
         raise ReturnValueOp
 
     def RETURN_CONST(self, inst: Instruction) -> None:
-        self.symbolic_result = self._load_const(inst)
+        self.symbolic_result = variables.materialize_tensor_tolist_arg(
+            self._load_const(inst), self
+        )
         self.instruction_pointer = None
         raise ReturnValueOp
 

@@ -11741,6 +11741,18 @@ def ___make_guard_fn():
         self.assertEqual(counter.frame_count, 1)
 
     @torch._dynamo.config.patch(capture_scalar_outputs=True)
+    def test_tolist_as_torch_tensor_arg_uses_refs_tensor(self):
+        def fn(x):
+            return torch.tensor(x.tolist())
+
+        x = torch.tensor([5, 10, 15], dtype=torch.int64)
+        eager = fn(x)
+        counter = CompileCounter()
+        compiled = torch.compile(fn, backend=counter, fullgraph=True)(x)
+        self.assertEqual(eager, compiled)
+        self.assertEqual(counter.frame_count, 1)
+
+    @torch._dynamo.config.patch(capture_scalar_outputs=True)
     def test_tolist_kd(self):
         def fn(x):
             new_list = []
