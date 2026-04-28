@@ -5292,8 +5292,12 @@ def profile_inline_call(
 
 
 ConstantCacheKey: TypeAlias = tuple[type, int, Any]
+InlineTraceCacheCallsiteKey: TypeAlias = tuple[
+    tuple[types.CodeType, int | None, int], ...
+]
 InlineTraceCacheKey: TypeAlias = tuple[
     types.CodeType,
+    InlineTraceCacheCallsiteKey,
     tuple[tuple[Any, ...], ...],
     tuple[tuple[str, ConstantCacheKey], ...],
 ]
@@ -5349,8 +5353,8 @@ class InliningInstructionTranslator(InstructionTranslatorBase):
                         )
                         return result
 
-            prior_nodes = (
-                set(parent.output.graph.nodes) if cache_info is not None else None
+            prior_node_count = (
+                len(parent.output.graph.nodes) if cache_info is not None else None
             )
             prior_side_effects = (
                 parent.output.side_effects.clone() if cache_info is not None else None
@@ -5359,11 +5363,11 @@ class InliningInstructionTranslator(InstructionTranslatorBase):
             result = tracer.inline_call_()
             if (
                 cache_info is not None
-                and prior_nodes is not None
+                and prior_node_count is not None
                 and prior_side_effects is not None
             ):
                 cls.maybe_save_inline_trace_cache(
-                    parent, cache_info, prior_nodes, prior_side_effects, result
+                    parent, cache_info, prior_node_count, prior_side_effects, result
                 )
             return result
 
@@ -5384,6 +5388,16 @@ class InliningInstructionTranslator(InstructionTranslatorBase):
         except TypeError:
             return None
         return (type(value), id(value), value)
+
+    @staticmethod
+    def _callsite_key(parent: Any) -> InlineTraceCacheCallsiteKey:
+        frames: list[tuple[types.CodeType, int | None, int]] = []
+        tx = parent
+        while tx is not None:
+            inst = getattr(tx, "current_instruction", None)
+            frames.append((tx.f_code, getattr(inst, "offset", None), tx.lineno))
+            tx = getattr(tx, "parent", None)
+        return tuple(reversed(frames))
 
     @staticmethod
     @functools.cache
@@ -5474,12 +5488,23 @@ class InliningInstructionTranslator(InstructionTranslatorBase):
             ("arg", i, arg) for i, arg in enumerate(args)
         ]
         flat_args.extend(("kwarg", name, kwargs[name]) for name in sorted(kwargs))
+        realized_flat_args: list[tuple[str, Any, VariableTracker]] = []
+        for kind, name, vt in flat_args:
+            if isinstance(vt, LazyVariableTracker):
+                # Cache probing must not realize lazy inputs: realization can
+                # install guards and source metadata at the callsite instead of
+                # the callee bytecode location.
+                if not vt.is_realized():
+                    return None
+                vt = vt.unwrap()
+            realized_flat_args.append((kind, name, vt))
+        flat_args = realized_flat_args
 
-        if not all(isinstance(vt, TensorVariable) for _, _, vt in flat_args):
+        if not all(type(vt) is TensorVariable for _, _, vt in flat_args):
             return None
 
         for kind, name, vt in flat_args:
-            assert isinstance(vt, TensorVariable)
+            assert type(vt) is TensorVariable
             tensor_key = cls._tensor_input_key(vt)
             if tensor_key is None:
                 return None
@@ -5494,7 +5519,7 @@ class InliningInstructionTranslator(InstructionTranslatorBase):
             return None
 
         return InlineTraceCacheInfo(
-            key=(code, tuple(key_parts), global_key),
+            key=(code, cls._callsite_key(parent), tuple(key_parts), global_key),
             input_nodes=tuple(input_nodes),
             input_vts=tuple(input_vts),
         )
@@ -5570,7 +5595,7 @@ class InliningInstructionTranslator(InstructionTranslatorBase):
         cls,
         parent: Any,
         cache_info: InlineTraceCacheInfo,
-        prior_nodes: set[torch.fx.Node],
+        prior_node_count: int,
         prior_side_effects: Any,
         result: VariableTracker,
     ) -> None:
@@ -5584,7 +5609,7 @@ class InliningInstructionTranslator(InstructionTranslatorBase):
             return
 
         new_nodes = tuple(
-            node for node in parent.output.graph.nodes if node not in prior_nodes
+            itertools.islice(parent.output.graph.nodes, prior_node_count, None)
         )
         if not cls._nodes_are_cacheable(new_nodes, cache_info.input_nodes):
             return

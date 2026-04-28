@@ -173,6 +173,7 @@ class FunctionTests(torch._dynamo.test_case.TestCase):
             return torch.cos(torch.sin(x + 1.0)) * 2.0
 
         def fn(x):
+            x = x + 0.0
             for _ in range(4):
                 x = block(x)
             return x
@@ -192,6 +193,8 @@ class FunctionTests(torch._dynamo.test_case.TestCase):
             return torch.cos(torch.sin(x + 1.0)) * 2.0
 
         def fn(x, y):
+            x = x.as_strided(x.shape, x.stride())
+            y = y.as_strided(y.shape, y.stride())
             return block(x) + block(y)
 
         counters.clear()
@@ -205,6 +208,71 @@ class FunctionTests(torch._dynamo.test_case.TestCase):
         self.assertTrue(same(opt_fn(x, y), fn(x, y)))
         self.assertEqual(cnt.frame_count, 1)
         self.assertEqual(counters["inline_trace_cache"]["stored"], 2)
+        self.assertEqual(counters["inline_trace_cache"]["hit"], 0)
+
+    def test_inline_trace_cache_keys_on_callsite(self):
+        def block(x):
+            return torch.cos(torch.sin(x + 1.0)) * 2.0
+
+        def fn(x):
+            x = x + 0.0
+            y = block(x)
+            z = block(x)
+            return y + z
+
+        counters.clear()
+        cnt = torch._dynamo.testing.CompileCounter()
+        opt_fn = torch.compile(fn, backend=cnt, fullgraph=True)
+
+        x = torch.randn(2, 3)
+        self.assertTrue(same(opt_fn(x), fn(x)))
+        self.assertEqual(cnt.frame_count, 1)
+        self.assertEqual(counters["inline_trace_cache"]["stored"], 2)
+        self.assertEqual(counters["inline_trace_cache"]["hit"], 0)
+
+    def test_inline_trace_cache_rejects_tensor_subclasses(self):
+        from torch._dynamo.symbolic_convert import InliningInstructionTranslator
+        from torch._dynamo.variables.torch_function import TensorWithTFOverrideVariable
+
+        class TensorProxy(torch.Tensor):
+            @classmethod
+            def __torch_function__(cls, func, types, args=(), kwargs=None):
+                return super().__torch_function__(func, types, args, kwargs)
+
+        def block(x):
+            return torch.cos(torch.sin(x + 1.0)) * 2.0
+
+        def fn(x):
+            x = x + 0.0
+            for _ in range(2):
+                x = block(x)
+            return x
+
+        counters.clear()
+        cnt = torch._dynamo.testing.CompileCounter()
+        opt_fn = torch.compile(fn, backend=cnt, fullgraph=True)
+        original = InliningInstructionTranslator.inline_trace_cache_info.__func__
+        accepted_subclass_input = False
+
+        def wrapped_inline_trace_cache_info(cls, parent, func, args, kwargs):
+            nonlocal accepted_subclass_input
+            result = original(cls, parent, func, args, kwargs)
+            if result is not None and any(
+                type(arg) is TensorWithTFOverrideVariable for arg in args
+            ):
+                accepted_subclass_input = True
+            return result
+
+        x = torch.randn(2, 3).as_subclass(TensorProxy)
+        with patch.object(
+            InliningInstructionTranslator,
+            "inline_trace_cache_info",
+            classmethod(wrapped_inline_trace_cache_info),
+        ):
+            self.assertTrue(same(opt_fn(x), fn(x)))
+        self.assertEqual(cnt.frame_count, 1)
+        self.assertFalse(accepted_subclass_input)
+        self.assertEqual(counters["inline_trace_cache"]["stored"], 0)
         self.assertEqual(counters["inline_trace_cache"]["hit"], 0)
 
     def test_inline_trace_cache_rejects_constant_inputs(self):
