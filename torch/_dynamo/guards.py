@@ -1050,6 +1050,7 @@ class NNModuleStructuralFingerprint:
     training: bool | None
     structural_attrs: tuple[tuple[str, tuple[Any, ...]], ...]
     children: tuple[tuple[str, NNModuleStructuralFingerprint | None], ...]
+    is_shared_reference: bool = False
 
 
 def _structural_attr_fingerprint(value: Any) -> tuple[Any, ...]:
@@ -1095,6 +1096,7 @@ def _make_nn_module_structural_fingerprint(
             _nn_module_training_value(module_dict),
             (),
             (),
+            True,
         )
 
     seen.add(module_id)
@@ -1114,8 +1116,6 @@ def _make_nn_module_structural_fingerprint(
                 else None
             )
             children.append((name, child_fingerprint))
-    seen.remove(module_id)
-
     return NNModuleStructuralFingerprint(
         type(module),
         _nn_module_training_value(module_dict),
@@ -1160,39 +1160,37 @@ def _nn_module_structural_fingerprint_matches(
         return False
 
     module_id = id(module)
+    if expected.is_shared_reference:
+        return module_id in seen
     if module_id in seen:
-        return not expected.structural_attrs and not expected.children
+        return False
 
     seen.add(module_id)
-    try:
-        if not _nn_module_structural_attrs_match(
-            module_dict, expected.structural_attrs
-        ):
-            return False
 
-        modules = module_dict.get("_modules")
-        if not isinstance(modules, dict):
-            return len(expected.children) == 0
-        if len(modules) != len(expected.children):
-            return False
+    if not _nn_module_structural_attrs_match(module_dict, expected.structural_attrs):
+        return False
 
-        for (name, child), (expected_name, expected_child) in zip(
-            modules.items(), expected.children
-        ):
-            if name != expected_name:
+    modules = module_dict.get("_modules")
+    if not isinstance(modules, dict):
+        return len(expected.children) == 0
+    if len(modules) != len(expected.children):
+        return False
+
+    for (name, child), (expected_name, expected_child) in zip(
+        modules.items(), expected.children
+    ):
+        if name != expected_name:
+            return False
+        if isinstance(child, torch.nn.Module):
+            if expected_child is None:
                 return False
-            if isinstance(child, torch.nn.Module):
-                if expected_child is None:
-                    return False
-                if not _nn_module_structural_fingerprint_matches(
-                    child, expected_child, seen
-                ):
-                    return False
-            elif expected_child is not None:
+            if not _nn_module_structural_fingerprint_matches(
+                child, expected_child, seen
+            ):
                 return False
-        return True
-    finally:
-        seen.remove(module_id)
+        elif expected_child is not None:
+            return False
+    return True
 
 
 def _check_nn_module_structural_fingerprint(
@@ -1364,12 +1362,8 @@ def _replace_output_graph_guards(
     output_graph: OutputGraphCommon, sorted_guards: list[Guard]
 ) -> None:
     guards_set = torch._guards.GuardsSet(OrderedSet(sorted_guards))
-    if hasattr(output_graph, "tracing_context"):
-        tracing_context = output_graph.tracing_context  # type: ignore[attr-defined]
-        tracing_context.guards_context.dynamo_guards = guards_set
-    else:
-        # OutputGraphCommon wrappers used by precompile do not own a tracing context.
-        output_graph._guards = guards_set
+    tracing_context = output_graph.tracing_context  # type: ignore[attr-defined]
+    tracing_context.guards_context.dynamo_guards = guards_set
 
 
 @functools.cache
@@ -3118,6 +3112,10 @@ class GuardBuilder(GuardBuilderBase):
             return
 
         fingerprint = _make_nn_module_structural_fingerprint(val)
+        # The lambda guard below owns the structural equality check, but these
+        # accessor nodes keep nested module attributes visible to guard-manager
+        # dict-tag invalidation. Without them, child-only mutations can leave
+        # the root source on its cached fast path and skip the structural guard.
         self._install_nn_module_structural_watch_accessors(
             guard.originating_source, val
         )

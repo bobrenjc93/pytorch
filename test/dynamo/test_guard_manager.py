@@ -1538,6 +1538,7 @@ class NNModuleStructuralGuardTests(RecursiveDictTagTests):
 
         self.assertTrue(seen_structural_guard)
         self.assertFalse(disabled_seen_structural_guard)
+        self.assertGreater(enabled_guard_count, 0)
         self.assertLess(enabled_guard_count, disabled_guard_count)
         self.assertLess(enabled_guard_count, 500)
 
@@ -1689,6 +1690,48 @@ class NNModuleStructuralGuardTests(RecursiveDictTagTests):
         mod.layers[0].unused = 1
         self.assertEqual(opt_mod(x), expected)
         self.assertEqual(counter.frame_count, 1)
+
+    def test_structural_fingerprint_visits_shared_child_once(self):
+        class Branch(torch.nn.Module):
+            def __init__(self, child):
+                super().__init__()
+                self.child = child
+
+            def forward(self, x):
+                return self.child(x)
+
+        class Parent(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                shared = torch.nn.Sequential(torch.nn.ReLU())
+                self.left = Branch(shared)
+                self.right = Branch(shared)
+                self.shared_modules = object.__getattribute__(shared, "__dict__")[
+                    "_modules"
+                ]
+
+            def forward(self, x):
+                return self.left(x) + self.right(x)
+
+        from torch._dynamo import guards as dynamo_guards
+
+        mod = Parent()
+        visit_count = 0
+        original_fingerprint = dynamo_guards._structural_attr_fingerprint
+
+        def counted_fingerprint(value):
+            nonlocal visit_count
+            if value is mod.shared_modules:
+                visit_count += 1
+            return original_fingerprint(value)
+
+        dynamo_guards._structural_attr_fingerprint = counted_fingerprint
+        try:
+            dynamo_guards._make_nn_module_structural_fingerprint(mod)
+        finally:
+            dynamo_guards._structural_attr_fingerprint = original_fingerprint
+
+        self.assertEqual(visit_count, 1)
 
 
 class SourceCloneTests(torch._dynamo.test_case.TestCase):
