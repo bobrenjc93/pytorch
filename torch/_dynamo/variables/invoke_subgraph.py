@@ -1047,6 +1047,10 @@ def stamp_out_subgraph(
         # In the original trace the cached module may already be installed;
         # in a later trace we register it under the cached name when possible
         # so proxy-dispatch tracing can reuse its identifier-based cache.
+        # The GraphModule object is intentionally shared across traces rather
+        # than deep-copied. Registration stores the object by reference; later
+        # __name__ writes are only lookup bookkeeping for the active OutputGraph
+        # after a module has been registered.
         if remapped_name is not None:
             body_name = remapped_name
         elif tx.output.nn_modules.get(body_name) is cached.body_gmod:
