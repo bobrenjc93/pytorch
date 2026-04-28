@@ -302,8 +302,8 @@ class SideEffects:
             },
             mutation_user_stacks=self.mutation_user_stacks,
             keepalive=list(self.keepalive),
-            save_for_backward=self.save_for_backward,
-            tensor_hooks=self.tensor_hooks,
+            save_for_backward=list(self.save_for_backward),
+            tensor_hooks=dict(self.tensor_hooks),
         )
         clone._has_existing_dict_mutation = self._has_existing_dict_mutation
         clone.ca_final_callbacks_var = self.ca_final_callbacks_var

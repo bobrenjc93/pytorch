@@ -5625,6 +5625,9 @@ class InliningInstructionTranslator(InstructionTranslatorBase):
 
     @staticmethod
     def _clone_node_meta(meta: dict[str, Any]) -> dict[str, Any]:
+        # The cache only stores narrow, pure call_function/call_method regions.
+        # Shallow-copy structural metadata and clone the tensor payloads known to
+        # be mutable downstream so the cached nodes are not corrupted by hits.
         new_meta = copy.copy(meta)
         for key in ("example_value", "val"):
             value = new_meta.get(key)
