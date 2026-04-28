@@ -987,8 +987,6 @@ class outer_fn(torch.nn.Module):
         )
 
     def test_nested_compile_region_cache_persists_across_traces(self):
-        torch._dynamo.reset()
-
         from torch._dynamo.testing import CompileCounter
         from torch._dynamo.variables.invoke_subgraph import (
             InvokeSubgraphHigherOrderVariable,
@@ -1023,11 +1021,14 @@ class outer_fn(torch.nn.Module):
             actual1 = torch.compile(outer1, backend=cnt, fullgraph=True)(x, y)
             self.assertEqual(trace_count, 1)
             actual2 = torch.compile(outer2, backend=cnt, fullgraph=True)(x, y)
+            torch._dynamo.reset()
+            actual3 = torch.compile(outer2, backend=cnt, fullgraph=True)(x, y)
 
         expected = x.sin() * 2 + y.sin() * 2
         self.assertEqual(actual1, expected)
         self.assertEqual(actual2, expected)
-        self.assertEqual(trace_count, 1)
+        self.assertEqual(actual3, expected)
+        self.assertEqual(trace_count, 2)
 
     @torch._functorch.config.patch(guess_tangent_strides_as_outputs=True)
     @torch._dynamo.config.patch(force_compile_during_fx_trace=True)

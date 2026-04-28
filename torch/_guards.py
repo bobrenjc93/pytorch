@@ -4,6 +4,7 @@ import contextlib
 import dataclasses
 import enum
 import functools
+import itertools
 import logging
 import re
 import threading
@@ -28,6 +29,13 @@ from torch.utils.weak import WeakTensorKeyDictionary
 log = logging.getLogger(__name__)
 
 
+_invoke_subgraph_reuse_entry_counter = itertools.count()
+
+
+def _next_invoke_subgraph_reuse_entry_id() -> int:
+    return next(_invoke_subgraph_reuse_entry_counter)
+
+
 if TYPE_CHECKING:
     from collections.abc import Callable, Generator, Iterator
     from types import CodeType
@@ -37,6 +45,7 @@ if TYPE_CHECKING:
     from torch._dynamo.backends.distributed import DDPOptimizerContext
     from torch._dynamo.codegen import PyCodegen
     from torch._dynamo.guards import GuardCheckSpec
+    from torch._dynamo.utils import ExactWeakKeyDictionary
     from torch._functorch._aot_autograd.schemas import ViewAndMutationMeta
     from torch._higher_order_ops.invoke_subgraph import NestedCompileRegionOptions
     from torch._subclasses.fake_tensor import FakeTensorMode
@@ -798,6 +807,11 @@ class InvokeSubgraphReuseEntry:
     # The graph may have additional outputs from side-effect intermediates;
     # stamp_out_subgraph uses this to return only the user-visible slice.
     num_user_outputs: int = 0
+    # Stable identity for per-trace remapping of a persistent cache entry.
+    # Avoids using id(entry), whose value can be reused after object deletion.
+    reuse_id: int = dataclasses.field(
+        default_factory=_next_invoke_subgraph_reuse_entry_id
+    )
 
 
 @dataclass
@@ -821,6 +835,11 @@ class InvokeSubgraphReuseCondition:
     # On cache hit, we verify the new call has the same treespec.
     treespec: pytree.TreeSpec | None = None
 
+    # Per flattened input VT: first flattened index with the same proxy node, or
+    # None for non-proxy inputs. This preserves tensor/symnode aliasing
+    # contracts without replaying TENSOR_MATCH guards for explicit inputs.
+    input_aliases: list[int | None] | None = None
+
     # All sources accessed via VariableBuilder during the subgraph trace.
     # On cache hit, we check if any modified VT's source is a base of one
     # of these to detect mutations on captured variables.
@@ -828,15 +847,43 @@ class InvokeSubgraphReuseCondition:
 
 
 class InvokeSubgraphCache(HopSubgraphCache):
-    _persistent_subgraph_reuse_cache: weakref.WeakKeyDictionary[
-        Any,
-        list[tuple[InvokeSubgraphReuseCondition, InvokeSubgraphReuseEntry]],
-    ] = weakref.WeakKeyDictionary()
-    _persistent_subgraph_reuse_key_cache: weakref.WeakKeyDictionary[
-        Any, dict[int, InvokeSubgraphReuseEntry]
-    ] = weakref.WeakKeyDictionary()
+    _persistent_subgraph_reuse_cache: Any = None
+    _persistent_subgraph_reuse_key_cache: Any = None
+
+    @staticmethod
+    def _new_code_cache() -> Any:
+        from torch._dynamo.utils import ExactWeakKeyDictionary
+
+        return ExactWeakKeyDictionary()
+
+    @classmethod
+    def _ensure_reuse_caches(cls) -> None:
+        if cls._persistent_subgraph_reuse_cache is None:
+            cls._persistent_subgraph_reuse_cache = cls._new_code_cache()
+        if cls._persistent_subgraph_reuse_key_cache is None:
+            cls._persistent_subgraph_reuse_key_cache = cls._new_code_cache()
+
+    _persistent_subgraph_reuse_cache: Any
+    _persistent_subgraph_reuse_key_cache: Any
+    # Runtime type:
+    # ExactWeakKeyDictionary[
+    #     CodeType,
+    #     list[tuple[InvokeSubgraphReuseCondition, InvokeSubgraphReuseEntry]],
+    # ]
+    # ExactWeakKeyDictionary[
+    #     CodeType, dict[int, InvokeSubgraphReuseEntry]
+    # ]
+    if TYPE_CHECKING:
+        _persistent_subgraph_reuse_cache: ExactWeakKeyDictionary[
+            CodeType,
+            list[tuple[InvokeSubgraphReuseCondition, InvokeSubgraphReuseEntry]],
+        ]
+        _persistent_subgraph_reuse_key_cache: ExactWeakKeyDictionary[
+            CodeType, dict[int, InvokeSubgraphReuseEntry]
+        ]
 
     def __init__(self) -> None:
+        self._ensure_reuse_caches()
         self.autograd_cache: dict[str, Callable] = {}
         self.proxy_dispatch_cache: dict[str, Callable] = {}
         self.dynamo_installed_submodules: dict[CodeType, list[str]] = defaultdict(list)
@@ -858,6 +905,7 @@ class InvokeSubgraphCache(HopSubgraphCache):
 
     @classmethod
     def reset_reuse_cache(cls) -> None:
+        cls._ensure_reuse_caches()
         cls._persistent_subgraph_reuse_cache.clear()
         cls._persistent_subgraph_reuse_key_cache.clear()
 

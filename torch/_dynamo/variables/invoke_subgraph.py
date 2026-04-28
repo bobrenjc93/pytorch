@@ -289,6 +289,20 @@ def get_flat_proxies(fingerprint: InputFingerprint) -> list[Proxy]:
     return flat_proxies
 
 
+def build_input_aliases(fingerprint: InputFingerprint) -> list[int | None]:
+    """Record tensor/symnode aliasing by flattened input position."""
+    node_to_first_idx: dict[torch.fx.Node, int] = {}
+    aliases: list[int | None] = []
+    for idx, (tag, vt) in enumerate(fingerprint.flat_vts):
+        if tag in (InputTag.TENSOR, InputTag.SYMNODE):
+            node = vt.as_proxy().node
+            first_idx = node_to_first_idx.setdefault(node, idx)
+            aliases.append(first_idx)
+        else:
+            aliases.append(None)
+    return aliases
+
+
 @dataclass
 class LiftedUserArg:
     """Lifted arg that came from a user argument (intermediate activation or explicit input)."""
@@ -496,10 +510,14 @@ def build_reuse_condition(
     for source in all_sources:
         all_relevant_guards.update(tx.output.guards.get_guards_for_source(source))
 
+    explicit_arg_sources = {s for s in fingerprint.arg_sources if s is not None}
     guard_tuples: list[tuple[Source, GuardCheckSpec, object, Guard]] = []
     for guard in all_relevant_guards:
         source = guard.originating_source
         type_str = guard.create_fn_name()
+        if type_str == "TENSOR_MATCH" and source in explicit_arg_sources:
+            continue
+
         handler = GUARD_VALUE_DISPATCH.get(type_str)
 
         if handler is SKIP_GUARD:
@@ -532,6 +550,7 @@ def build_reuse_condition(
         input_checks=input_checks,
         guards=guard_tuples,
         treespec=fingerprint.treespec,
+        input_aliases=build_input_aliases(fingerprint),
         traced_sources=traced_sources,
     )
 
@@ -584,6 +603,11 @@ def is_reusable(
             len(condition.input_checks),
             len(fingerprint.flat_vts),
         )
+        return False
+
+    input_aliases = build_input_aliases(fingerprint)
+    if condition.input_aliases is not None and input_aliases != condition.input_aliases:
+        hc_log.debug("subgraph_reuse: reuse failed -- input aliasing mismatch")
         return False
 
     for i, ((cached_tag, cached_val), (cur_tag, cur_vt)) in enumerate(
@@ -915,9 +939,9 @@ def stamp_out_subgraph(
     source replacement before we can look up or create the corresponding
     graph placeholders.
     """
-    from torch._guards import InvokeSubgraphCache
     from torch._dynamo.variables.builder import VariableBuilder
     from torch._dynamo.variables.higher_order_ops import add_call_function, make_attr
+    from torch._guards import InvokeSubgraphCache
 
     flat_proxies = get_flat_proxies(fingerprint)
     new_arg_sources = fingerprint.arg_sources
@@ -997,17 +1021,18 @@ def stamp_out_subgraph(
         torch._higher_order_ops.invoke_subgraph
     )
     if isinstance(invoke_subgraph_cache, InvokeSubgraphCache):
-        entry_id = id(cached)
-        remapped_name = invoke_subgraph_cache.installed_reuse_subgraphs.get(entry_id)
+        remapped_name = invoke_subgraph_cache.installed_reuse_subgraphs.get(
+            cached.reuse_id
+        )
         if remapped_name is not None:
             body_name = remapped_name
         elif tx.output.nn_modules.get(body_name) is cached.body_gmod:
-            invoke_subgraph_cache.installed_reuse_subgraphs[entry_id] = body_name
+            invoke_subgraph_cache.installed_reuse_subgraphs[cached.reuse_id] = body_name
         else:
             body_name = tx.output.install_subgraph(
                 cached.body_name, copy.deepcopy(cached.body_gmod)
             )
-            invoke_subgraph_cache.installed_reuse_subgraphs[entry_id] = body_name
+            invoke_subgraph_cache.installed_reuse_subgraphs[cached.reuse_id] = body_name
 
     body_node = make_attr(tx, body_name)
     p_args = (body_node, body_name, *new_lifted_args)
