@@ -5591,14 +5591,18 @@ class InliningInstructionTranslator(InstructionTranslatorBase):
     _inline_frame_cache_tensor_hook_ids: frozenset[int]
     _inline_frame_cache_store_attr_mutation_keys: frozenset[tuple[int, str, int]]
 
-    def _inline_frame_cache_is_enabled(self) -> bool:
+    def _inline_frame_cache_can_be_enabled(self) -> bool:
         return not (
             is_generator(self.f_code)
             or self.parent.strict_checks_fn
             or config.use_graph_deduplication
             or config.track_nodes_for_deduplication
             or self.output.current_tracer.parent is not None
-            or not _inline_frame_cache_locals_have_tensor(self.symbolic_locals)
+        )
+
+    def _inline_frame_cache_is_enabled(self) -> bool:
+        return self._inline_frame_cache_can_be_enabled() and (
+            _inline_frame_cache_locals_have_tensor(self.symbolic_locals)
         )
 
     def _inline_frame_cache_globals_are_supported(self) -> bool:
@@ -5807,6 +5811,8 @@ class InliningInstructionTranslator(InstructionTranslatorBase):
         cache_entry = self.output.tracing_context.inlined_code_cache.get(self.f_code)
         if cache_entry is None:
             return
+        # RestartAnalysis retries use a fresh TracingContext and InlinedCodeCache, so
+        # entries stored here cannot leak from an abandoned trace attempt.
         cache_entry.inline_frame_cache = InlinedFrameCache(
             key=key,
             nodes=new_nodes,
@@ -6188,11 +6194,16 @@ class InliningInstructionTranslator(InstructionTranslatorBase):
         self.funcvar = funcvar
         self.parent = parent
         side_effects = self.output.side_effects
-        (
-            self._inline_frame_cache_static_globals_supported,
-            self._inline_frame_cache_loaded_global_names,
-        ) = _inline_frame_cache_analyze_globals(self.instructions, self.f_globals)
-        # Locals may be lazy at construction and realized before the store path.
+        if self._inline_frame_cache_can_be_enabled():
+            (
+                self._inline_frame_cache_static_globals_supported,
+                self._inline_frame_cache_loaded_global_names,
+            ) = _inline_frame_cache_analyze_globals(self.instructions, self.f_globals)
+        else:
+            self._inline_frame_cache_static_globals_supported = False
+            self._inline_frame_cache_loaded_global_names = frozenset()
+        # Locals may be lazy at construction and realized before the store path, so
+        # capture the graph position even while the cache is temporarily disabled.
         self._inline_frame_cache_start_node = next(
             reversed(parent.output.current_tracer.graph.nodes), None
         )
@@ -6218,6 +6229,9 @@ class InliningInstructionTranslator(InstructionTranslatorBase):
                 _inline_frame_cache_store_attr_mutation_keys(side_effects)
             )
         else:
+            # These conservative defaults still matter if lazy locals make this frame
+            # eligible by the store path; they prevent silently ignoring pre-existing
+            # side effects captured before eligibility became knowable.
             self._inline_frame_cache_tracked_side_effect_ids = frozenset()
             self._inline_frame_cache_modified_side_effect_ids = frozenset()
             self._inline_frame_cache_had_existing_dict_mutation = False
