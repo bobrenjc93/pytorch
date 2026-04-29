@@ -5624,6 +5624,7 @@ class InliningInstructionTranslator(InstructionTranslatorBase):
         tracer = self.output.current_tracer
         node_remap: dict[torch.fx.Node, torch.fx.Node] = {}
         cloned_meta: dict[torch.fx.Node, dict[str, Any]] = {}
+        replayed_nodes: list[torch.fx.Node] = []
 
         for node in cached.nodes:
             if node.op == "placeholder":
@@ -5661,8 +5662,16 @@ class InliningInstructionTranslator(InstructionTranslatorBase):
             if "example_value" in proxy.node.meta:
                 tracer.track_produced_symints(proxy.node.meta["example_value"], proxy)
             node_remap[node] = proxy.node
+            replayed_nodes.append(proxy.node)
 
-        return self._remap_inline_frame_cache_result(cached.result, node_remap)
+        remapped_result = self._remap_inline_frame_cache_result(
+            cached.result, node_remap
+        )
+        if remapped_result is None:
+            for node in reversed(replayed_nodes):
+                tracer.graph.erase_node(node)
+            return None
+        return remapped_result
 
     def _remap_inline_frame_cache_result(
         self,

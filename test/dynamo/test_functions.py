@@ -585,6 +585,40 @@ class FunctionTests(torch._dynamo.test_case.TestCase):
             )
         )
 
+    def test_monomorphic_inline_frame_cache_rolls_back_failed_result_remap(self):
+        from torch._dynamo.symbolic_convert import InliningInstructionTranslator
+
+        def leaf(x):
+            return torch.sin(x) + 1
+
+        def fn(x):
+            return leaf(x) + leaf(x)
+
+        original_remap = InliningInstructionTranslator._remap_inline_frame_cache_result
+        failed_remaps = 0
+
+        def fail_first_replay_remap(tx, result, node_remap):
+            nonlocal failed_remaps
+            if tx.f_code is leaf.__code__ and failed_remaps == 0:
+                failed_remaps += 1
+                return None
+            return original_remap(tx, result, node_remap)
+
+        cnt = torch._dynamo.testing.CompileCounter()
+        x = torch.randn(4)
+
+        with patch.object(
+            InliningInstructionTranslator,
+            "_remap_inline_frame_cache_result",
+            fail_first_replay_remap,
+        ):
+            opt_fn = torch.compile(fn, backend=cnt, fullgraph=True)
+            self.assertTrue(same(opt_fn(x), fn(x)))
+
+        self.assertEqual(failed_remaps, ifdynstaticdefault(1, 0))
+        self.assertEqual(cnt.frame_count, 1)
+        self.assertEqual(cnt.op_count, 5)
+
     def test_monomorphic_inline_frame_cache_skips_non_leaf(self):
         from torch._dynamo.symbolic_convert import InliningInstructionTranslator
 
