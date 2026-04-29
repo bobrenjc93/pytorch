@@ -218,6 +218,7 @@ class FunctionTests(torch._dynamo.test_case.TestCase):
         self.assertTrue(same(opt_fn(x), fn(x)))
 
     def test_monomorphic_inline_frame_cache_replays_tuple_with_placeholder(self):
+        from torch._dynamo.output_graph import SubgraphTracer
         from torch._dynamo.symbolic_convert import InliningInstructionTranslator
         from torch._dynamo.variables import TensorVariable, TupleVariable
 
@@ -230,7 +231,9 @@ class FunctionTests(torch._dynamo.test_case.TestCase):
             return a + b + c + d
 
         original_remap = InliningInstructionTranslator._remap_inline_frame_cache_result
+        original_record_proxyable_vt = SubgraphTracer.record_proxyable_vt
         placeholder_reuses = 0
+        placeholder_proxyable_records = 0
         tuple_remaps = 0
 
         def checked_remap(tx, result, node_remap):
@@ -246,19 +249,34 @@ class FunctionTests(torch._dynamo.test_case.TestCase):
                         placeholder_reuses += 1
             return remapped
 
+        def checked_record_proxyable_vt(tracer, vt):
+            nonlocal placeholder_proxyable_records
+            node = getattr(getattr(vt, "proxy", None), "node", None)
+            if getattr(node, "op", None) == "placeholder":
+                placeholder_proxyable_records += 1
+            return original_record_proxyable_vt(tracer, vt)
+
         cnt = torch._dynamo.testing.CompileCounter()
         x = torch.randn(4)
 
-        with patch.object(
-            InliningInstructionTranslator,
-            "_remap_inline_frame_cache_result",
-            checked_remap,
+        with (
+            patch.object(
+                SubgraphTracer,
+                "record_proxyable_vt",
+                checked_record_proxyable_vt,
+            ),
+            patch.object(
+                InliningInstructionTranslator,
+                "_remap_inline_frame_cache_result",
+                checked_remap,
+            ),
         ):
             opt_fn = torch.compile(fn, backend=cnt, fullgraph=True)
             self.assertTrue(same(opt_fn(x), fn(x)))
 
         self.assertEqual(tuple_remaps, ifdynstaticdefault(1, 0))
         self.assertEqual(placeholder_reuses, 0)
+        self.assertEqual(placeholder_proxyable_records, 0)
         self.assertEqual(cnt.frame_count, 1)
         self.assertEqual(cnt.op_count, 5)
 

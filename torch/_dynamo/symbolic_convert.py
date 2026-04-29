@@ -5395,6 +5395,8 @@ def _make_inline_frame_cache_value_key(value: VariableTracker) -> Any | None:
         # such as operator.is_.
         return ("constant", type(constant), constant, id(constant))
 
+    # Unsupported symbolic locals conservatively skip cache use. Additional
+    # container/object keys can be added here if they become worthwhile.
     return None
 
 
@@ -5711,7 +5713,6 @@ class InliningInstructionTranslator(InstructionTranslatorBase):
                 return None
             if new_node is node:
                 remapped = result.clone(mutation_type=None)
-                self.output.current_tracer.record_proxyable_vt(remapped)
                 return remapped
             proxy = self.output.current_tracer.proxy(new_node)
             remapped = result.clone(proxy=proxy, mutation_type=None)
