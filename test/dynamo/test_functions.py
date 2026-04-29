@@ -216,6 +216,51 @@ class FunctionTests(torch._dynamo.test_case.TestCase):
 
         self.assertTrue(same(opt_fn(x), fn(x)))
 
+    def test_monomorphic_inline_frame_cache_replays_tuple_with_placeholder(self):
+        from torch._dynamo.symbolic_convert import InliningInstructionTranslator
+        from torch._dynamo.variables import TensorVariable, TupleVariable
+
+        def leaf(x):
+            return x, torch.sin(x)
+
+        def fn(x):
+            a, b = leaf(x)
+            c, d = leaf(x)
+            return a + b + c + d
+
+        original_remap = InliningInstructionTranslator._remap_inline_frame_cache_result
+        placeholder_reuses = 0
+        tuple_remaps = 0
+
+        def checked_remap(tx, result, node_remap):
+            nonlocal placeholder_reuses, tuple_remaps
+            unwrapped = result.unwrap()
+            remapped = original_remap(tx, result, node_remap)
+            if tx.f_code is leaf.__code__:
+                if isinstance(unwrapped, TupleVariable):
+                    tuple_remaps += 1
+                if isinstance(unwrapped, TensorVariable):
+                    node = unwrapped.proxy.node
+                    if node_remap.get(node) is node and remapped is unwrapped:
+                        placeholder_reuses += 1
+            return remapped
+
+        cnt = torch._dynamo.testing.CompileCounter()
+        x = torch.randn(4)
+
+        with patch.object(
+            InliningInstructionTranslator,
+            "_remap_inline_frame_cache_result",
+            checked_remap,
+        ):
+            opt_fn = torch.compile(fn, backend=cnt, fullgraph=True)
+            self.assertTrue(same(opt_fn(x), fn(x)))
+
+        self.assertEqual(tuple_remaps, ifdynstaticdefault(1, 0))
+        self.assertEqual(placeholder_reuses, 0)
+        self.assertEqual(cnt.frame_count, 1)
+        self.assertEqual(cnt.op_count, 5)
+
     def test_monomorphic_inline_frame_cache_skips_mutated_arg_version(self):
         from torch._dynamo.symbolic_convert import InliningInstructionTranslator
 

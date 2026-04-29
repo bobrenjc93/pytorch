@@ -5696,8 +5696,12 @@ class InliningInstructionTranslator(InstructionTranslatorBase):
         if isinstance(result, TensorVariable):
             node = result.proxy.node
             new_node = node_remap.get(node)
-            if new_node is None or new_node is node:
-                return result
+            if new_node is None:
+                return None
+            if new_node is node:
+                remapped = result.clone(mutation_type=None)
+                self.output.current_tracer.record_proxyable_vt(remapped)
+                return remapped
             proxy = self.output.current_tracer.proxy(new_node)
             remapped = result.clone(proxy=proxy, mutation_type=None)
             self.output.side_effects._track_obj(
