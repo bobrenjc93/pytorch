@@ -5334,6 +5334,17 @@ def _inline_frame_cache_store_attr_mutation_keys(
 def _inline_frame_cache_analyze_globals(
     instructions: list[Instruction], f_globals: dict[str, Any]
 ) -> tuple[bool, frozenset[str]]:
+    globals_safe, loaded_global_names = _inline_frame_cache_analyze_global_instructions(
+        instructions
+    )
+    if not globals_safe:
+        return False, frozenset()
+    return _inline_frame_cache_analyze_global_values(loaded_global_names, f_globals)
+
+
+def _inline_frame_cache_analyze_global_instructions(
+    instructions: list[Instruction],
+) -> tuple[bool, frozenset[str]]:
     loaded_global_names: set[str] = set()
     for inst in instructions:
         if inst.opname in ("STORE_GLOBAL", "DELETE_GLOBAL"):
@@ -5341,12 +5352,22 @@ def _inline_frame_cache_analyze_globals(
         if inst.opname != "LOAD_GLOBAL":
             continue
         name = inst.argval
-        if not isinstance(name, str) or name not in f_globals:
+        if isinstance(name, str):
+            loaded_global_names.add(name)
+    return True, frozenset(loaded_global_names)
+
+
+def _inline_frame_cache_analyze_global_values(
+    loaded_global_names: frozenset[str], f_globals: dict[str, Any]
+) -> tuple[bool, frozenset[str]]:
+    supported_loaded_global_names: set[str] = set()
+    for name in loaded_global_names:
+        if name not in f_globals:
             continue
         if not _inline_frame_cache_global_value_is_supported(f_globals[name]):
             return False, frozenset()
-        loaded_global_names.add(name)
-    return True, frozenset(loaded_global_names)
+        supported_loaded_global_names.add(name)
+    return True, frozenset(supported_loaded_global_names)
 
 
 def _make_inline_frame_cache_key(
@@ -5600,7 +5621,8 @@ class InliningInstructionTranslator(InstructionTranslatorBase):
 
     def _inline_frame_cache_can_be_enabled(self) -> bool:
         return not (
-            is_generator(self.f_code)
+            not config.enable_inline_frame_cache
+            or is_generator(self.f_code)
             or self.parent.strict_checks_fn
             or config.use_graph_deduplication
             or config.track_nodes_for_deduplication
@@ -6171,11 +6193,12 @@ class InliningInstructionTranslator(InstructionTranslatorBase):
             indexof = get_indexof(instructions)
             code_options = {k: getattr(code, k) for k in get_code_keys()}
             if tracing_ctx:
-                tracing_ctx.inlined_code_cache[code] = InlinedCodeCache(
+                cached = InlinedCodeCache(
                     instructions=instructions,
                     indexof=indexof,
                     code_options=code_options,
                 )
+                tracing_ctx.inlined_code_cache[code] = cached
 
         super().__init__(
             output=parent.output,
@@ -6202,10 +6225,30 @@ class InliningInstructionTranslator(InstructionTranslatorBase):
         side_effects = self.output.side_effects
         inline_frame_cache_can_be_enabled = self._inline_frame_cache_can_be_enabled()
         if inline_frame_cache_can_be_enabled:
-            (
-                self._inline_frame_cache_static_globals_supported,
-                self._inline_frame_cache_loaded_global_names,
-            ) = _inline_frame_cache_analyze_globals(self.instructions, self.f_globals)
+            if cached is not None:
+                if cached.inline_frame_cache_global_instruction_analysis is None:
+                    cached.inline_frame_cache_global_instruction_analysis = (
+                        _inline_frame_cache_analyze_global_instructions(
+                            self.instructions
+                        )
+                    )
+                (
+                    self._inline_frame_cache_static_globals_supported,
+                    self._inline_frame_cache_loaded_global_names,
+                ) = _inline_frame_cache_analyze_global_values(
+                    cached.inline_frame_cache_global_instruction_analysis[1],
+                    self.f_globals,
+                )
+                self._inline_frame_cache_static_globals_supported &= (
+                    cached.inline_frame_cache_global_instruction_analysis[0]
+                )
+            else:
+                (
+                    self._inline_frame_cache_static_globals_supported,
+                    self._inline_frame_cache_loaded_global_names,
+                ) = _inline_frame_cache_analyze_globals(
+                    self.instructions, self.f_globals
+                )
         else:
             self._inline_frame_cache_static_globals_supported = False
             self._inline_frame_cache_loaded_global_names = frozenset()

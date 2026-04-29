@@ -433,6 +433,32 @@ class FunctionTests(torch._dynamo.test_case.TestCase):
 
         self.assertEqual(run_count, 2)
 
+    def test_monomorphic_inline_frame_cache_skips_generator(self):
+        from torch._dynamo.symbolic_convert import InliningInstructionTranslator
+
+        def leaf(x):
+            yield x + 1
+
+        def fn(x):
+            return next(leaf(x)) + next(leaf(x))
+
+        run_count = 0
+        original_run = InliningInstructionTranslator.run
+
+        def counted_run(tx):
+            nonlocal run_count
+            if tx.f_code is leaf.__code__:
+                run_count += 1
+            return original_run(tx)
+
+        x = torch.randn(4)
+
+        with patch.object(InliningInstructionTranslator, "run", counted_run):
+            opt_fn = torch.compile(fn, backend="eager", fullgraph=True)
+            self.assertTrue(same(opt_fn(x), fn(x)))
+
+        self.assertEqual(run_count, 2)
+
     def test_monomorphic_inline_frame_cache_late_enabled_start_node(self):
         from torch._dynamo import symbolic_convert
 
@@ -622,6 +648,37 @@ class FunctionTests(torch._dynamo.test_case.TestCase):
         self.assertEqual(run_count, 2)
         self.assertEqual(global_check_count, 2)
 
+    def test_monomorphic_inline_frame_cache_analyzes_globals_once(self):
+        from torch._dynamo import symbolic_convert
+
+        def leaf(x):
+            return torch.sin(x) + 1
+
+        def fn(x):
+            return leaf(x) + leaf(x) + leaf(x)
+
+        analyze_count = 0
+        original_analyze_globals = (
+            symbolic_convert._inline_frame_cache_analyze_global_instructions
+        )
+
+        def counted_analyze_globals(instructions):
+            nonlocal analyze_count
+            analyze_count += 1
+            return original_analyze_globals(instructions)
+
+        x = torch.randn(4)
+
+        with patch.object(
+            symbolic_convert,
+            "_inline_frame_cache_analyze_global_instructions",
+            counted_analyze_globals,
+        ):
+            opt_fn = torch.compile(fn, backend="eager", fullgraph=True)
+            self.assertTrue(same(opt_fn(x), fn(x)))
+
+        self.assertEqual(analyze_count, 1)
+
     def test_monomorphic_inline_frame_cache_skips_global_tensor(self):
         from torch._dynamo.symbolic_convert import InliningInstructionTranslator
 
@@ -738,6 +795,35 @@ class FunctionTests(torch._dynamo.test_case.TestCase):
 
         with (
             torch._dynamo.config.patch("use_graph_deduplication", True),
+            patch.object(InliningInstructionTranslator, "run", counted_run),
+        ):
+            opt_fn = torch.compile(fn, backend="eager", fullgraph=True)
+            self.assertTrue(same(opt_fn(x), fn(x)))
+
+        self.assertEqual(run_count, 3)
+
+    def test_monomorphic_inline_frame_cache_skips_when_disabled(self):
+        from torch._dynamo.symbolic_convert import InliningInstructionTranslator
+
+        def leaf(x):
+            return x + 1
+
+        def fn(x):
+            return leaf(x) + leaf(x) + leaf(x)
+
+        run_count = 0
+        original_run = InliningInstructionTranslator.run
+
+        def counted_run(tx):
+            nonlocal run_count
+            if tx.f_code is leaf.__code__:
+                run_count += 1
+            return original_run(tx)
+
+        x = torch.randn(4)
+
+        with (
+            torch._dynamo.config.patch("enable_inline_frame_cache", False),
             patch.object(InliningInstructionTranslator, "run", counted_run),
         ):
             opt_fn = torch.compile(fn, backend="eager", fullgraph=True)

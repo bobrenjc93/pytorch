@@ -1054,6 +1054,9 @@ class InlinedCodeCache:
     instructions: list[Any]
     indexof: dict[Any, int]
     code_options: dict[str, Any]
+    inline_frame_cache_global_instruction_analysis: (
+        tuple[bool, frozenset[str]] | None
+    ) = None
     inline_frame_cache: InlinedFrameCache | None = None
 
 
