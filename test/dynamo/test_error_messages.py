@@ -60,29 +60,6 @@ def _get_iter_has_positions() -> bool:
     return False
 
 
-def _generic_ctx_mgr_stack_source_attribution() -> str:
-    return (
-        "Stack variable source attribution:\n"
-        "  WithExitFunctionVariable() originated from:\n"
-        '  File "test_error_messages.py", line N\n'
-        "                with GenericCtxMgr():\n"
-        "  WithExitFunctionVariable() originated from:\n"
-        '  File "test_error_messages.py", line N\n'
-        "                    with GenericCtxMgr():\n"
-        "\n"
-    )
-
-
-def _assert_failure_stack_source_attribution() -> str:
-    return (
-        "Stack variable source attribution:\n"
-        "  WithExitFunctionVariable() originated from:\n"
-        '  File "test_error_messages.py", line N\n'
-        "                with GenericCtxMgr():\n"
-        "\n"
-    )
-
-
 @lru_cache(None)
 def _compile_wrapper_raise_source() -> str:
     source = "def f():\n    raise RuntimeError(\n        None\n    )\n"
