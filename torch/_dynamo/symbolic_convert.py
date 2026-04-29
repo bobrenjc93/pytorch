@@ -5370,6 +5370,8 @@ def _make_inline_frame_cache_value_key(value: VariableTracker) -> Any | None:
     if isinstance(value, TensorVariable):
         node = value.proxy.node
         example_value = node.meta.get("example_value")
+        # In-place updates can keep the same FX node while bumping the fake
+        # tensor version, so keep both in the monomorphic key.
         version = getattr(example_value, "_version", None)
         return ("tensor", id(node), version)
 
@@ -6194,7 +6196,8 @@ class InliningInstructionTranslator(InstructionTranslatorBase):
         self.funcvar = funcvar
         self.parent = parent
         side_effects = self.output.side_effects
-        if self._inline_frame_cache_can_be_enabled():
+        inline_frame_cache_can_be_enabled = self._inline_frame_cache_can_be_enabled()
+        if inline_frame_cache_can_be_enabled:
             (
                 self._inline_frame_cache_static_globals_supported,
                 self._inline_frame_cache_loaded_global_names,
@@ -6207,7 +6210,7 @@ class InliningInstructionTranslator(InstructionTranslatorBase):
         self._inline_frame_cache_start_node = next(
             reversed(parent.output.current_tracer.graph.nodes), None
         )
-        if self._inline_frame_cache_is_enabled():
+        if inline_frame_cache_can_be_enabled:
             self._inline_frame_cache_tracked_side_effect_ids = frozenset(
                 side_effects.id_to_variable.keys()
             )
@@ -6229,9 +6232,7 @@ class InliningInstructionTranslator(InstructionTranslatorBase):
                 _inline_frame_cache_store_attr_mutation_keys(side_effects)
             )
         else:
-            # These conservative defaults still matter if lazy locals make this frame
-            # eligible by the store path; they prevent silently ignoring pre-existing
-            # side effects captured before eligibility became knowable.
+            # Frames that fail the static precheck return before reading these fields.
             self._inline_frame_cache_tracked_side_effect_ids = frozenset()
             self._inline_frame_cache_modified_side_effect_ids = frozenset()
             self._inline_frame_cache_had_existing_dict_mutation = False

@@ -398,6 +398,40 @@ class FunctionTests(torch._dynamo.test_case.TestCase):
 
         self.assertTrue(same(opt_fn(x, y), fn(x, y)))
 
+    def test_monomorphic_inline_frame_cache_skips_nested_tracer(self):
+        from functorch.experimental import control_flow
+        from torch._dynamo.symbolic_convert import InliningInstructionTranslator
+
+        def leaf(y):
+            return y + 1
+
+        def true_fn(y):
+            return y.sin()
+
+        def false_fn(y):
+            return leaf(y) + leaf(y)
+
+        def fn(x, y):
+            return control_flow.cond(x.sum() > 0, true_fn, false_fn, [y])
+
+        run_count = 0
+        original_run = InliningInstructionTranslator.run
+
+        def counted_run(tx):
+            nonlocal run_count
+            if tx.f_code is leaf.__code__:
+                run_count += 1
+            return original_run(tx)
+
+        x = torch.ones(3, 2, 4, requires_grad=True)
+        y = torch.ones(4, requires_grad=True)
+
+        with patch.object(InliningInstructionTranslator, "run", counted_run):
+            opt_fn = torch.compile(fn, backend="eager", fullgraph=True)
+            self.assertTrue(same(opt_fn(x, y), fn(x, y)))
+
+        self.assertEqual(run_count, 4)
+
     def test_monomorphic_inline_frame_cache_skips_polymorphic_calls(self):
         from torch._dynamo.symbolic_convert import InliningInstructionTranslator
 
@@ -618,6 +652,62 @@ class FunctionTests(torch._dynamo.test_case.TestCase):
             self.assertTrue(same(opt_fn(x), fn(x)))
 
         self.assertEqual(run_count, 3)
+
+    def test_monomorphic_inline_frame_cache_skips_node_dedup_tracking(self):
+        from torch._dynamo.symbolic_convert import InliningInstructionTranslator
+
+        def leaf(x):
+            return x + 1
+
+        def fn(x):
+            return leaf(x) + leaf(x) + leaf(x)
+
+        run_count = 0
+        original_run = InliningInstructionTranslator.run
+
+        def counted_run(tx):
+            nonlocal run_count
+            if tx.f_code is leaf.__code__:
+                run_count += 1
+            return original_run(tx)
+
+        x = torch.randn(4)
+
+        with (
+            torch._dynamo.config.patch("track_nodes_for_deduplication", True),
+            patch.object(InliningInstructionTranslator, "run", counted_run),
+        ):
+            opt_fn = torch.compile(fn, backend="eager", fullgraph=True)
+            self.assertTrue(same(opt_fn(x), fn(x)))
+
+        self.assertEqual(run_count, 3)
+
+    def test_monomorphic_inline_frame_cache_skips_inconsistent_side_effects(self):
+        from torch._dynamo.symbolic_convert import InliningInstructionTranslator
+
+        def leaf(x):
+            torch.compiler.is_dynamo_compiling()
+            return x + 1
+
+        def fn(x):
+            return leaf(x) + leaf(x)
+
+        run_count = 0
+        original_run = InliningInstructionTranslator.run
+
+        def counted_run(tx):
+            nonlocal run_count
+            if tx.f_code is leaf.__code__:
+                run_count += 1
+            return original_run(tx)
+
+        x = torch.randn(4)
+
+        with patch.object(InliningInstructionTranslator, "run", counted_run):
+            opt_fn = torch.compile(fn, backend="eager", fullgraph=True)
+            self.assertTrue(same(opt_fn(x), fn(x)))
+
+        self.assertEqual(run_count, 2)
 
     def test_monomorphic_inline_frame_cache_skips_tensor_hooks(self):
         from torch._dynamo.symbolic_convert import InliningInstructionTranslator
