@@ -262,6 +262,36 @@ class FunctionTests(torch._dynamo.test_case.TestCase):
         self.assertEqual(cnt.frame_count, 1)
         self.assertEqual(cnt.op_count, 5)
 
+    def test_monomorphic_inline_frame_cache_replays_tuple_local(self):
+        from torch._dynamo.symbolic_convert import InliningInstructionTranslator
+
+        def leaf(pair):
+            return pair[0] + pair[1]
+
+        def fn(x):
+            pair = (x, x)
+            return leaf(pair) + leaf(pair)
+
+        run_count = 0
+        original_run = InliningInstructionTranslator.run
+
+        def counted_run(tx):
+            nonlocal run_count
+            if tx.f_code is leaf.__code__:
+                run_count += 1
+            return original_run(tx)
+
+        cnt = torch._dynamo.testing.CompileCounter()
+        x = torch.randn(4)
+
+        with patch.object(InliningInstructionTranslator, "run", counted_run):
+            opt_fn = torch.compile(fn, backend=cnt, fullgraph=True)
+            self.assertTrue(same(opt_fn(x), fn(x)))
+
+        self.assertEqual(cnt.frame_count, 1)
+        self.assertEqual(cnt.op_count, 3)
+        self.assertEqual(run_count, ifdynstaticdefault(1, 2))
+
     def test_monomorphic_inline_frame_cache_skips_mutated_arg_version(self):
         from torch._dynamo.symbolic_convert import InliningInstructionTranslator
 
@@ -315,6 +345,50 @@ class FunctionTests(torch._dynamo.test_case.TestCase):
             opt_fn = torch.compile(fn, backend="eager", fullgraph=True)
             self.assertTrue(same(opt_fn(x), fn(x)))
 
+        self.assertEqual(run_count, 2)
+
+    def test_monomorphic_inline_frame_cache_skips_unrealized_lazy_local(self):
+        from torch._dynamo import symbolic_convert
+        from torch._dynamo.symbolic_convert import InliningInstructionTranslator
+        from torch._dynamo.variables.lazy import LazyVariableTracker
+
+        def leaf(x, unused):
+            return x + 1
+
+        def fn(x, unused):
+            return leaf(x, unused) + leaf(x, unused)
+
+        run_count = 0
+        unrealized_lazy_key_attempts = 0
+        original_run = InliningInstructionTranslator.run
+        original_value_key = symbolic_convert._make_inline_frame_cache_value_key
+
+        def counted_run(tx):
+            nonlocal run_count
+            if tx.f_code is leaf.__code__:
+                run_count += 1
+            return original_run(tx)
+
+        def counted_value_key(value):
+            nonlocal unrealized_lazy_key_attempts
+            if isinstance(value, LazyVariableTracker) and not value.is_realized():
+                unrealized_lazy_key_attempts += 1
+            return original_value_key(value)
+
+        x = torch.randn(4)
+
+        with (
+            patch.object(InliningInstructionTranslator, "run", counted_run),
+            patch.object(
+                symbolic_convert,
+                "_make_inline_frame_cache_value_key",
+                counted_value_key,
+            ),
+        ):
+            opt_fn = torch.compile(fn, backend="eager", fullgraph=True)
+            self.assertTrue(same(opt_fn(x, 1), fn(x, 1)))
+
+        self.assertGreaterEqual(unrealized_lazy_key_attempts, 1)
         self.assertEqual(run_count, 2)
 
     def test_monomorphic_inline_frame_cache_skips_tensorless_leaf(self):

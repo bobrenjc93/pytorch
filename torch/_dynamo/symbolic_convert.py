@@ -5298,6 +5298,7 @@ def profile_inline_call(
 
 _INLINE_FRAME_CACHE_UNSUPPORTED = object()
 _INLINE_FRAME_CACHE_FRESH_META_KEYS = {
+    "creation_timestamp",
     "nn_module_stack",
     "source_fn_stack",
     "stack_trace",
@@ -5390,6 +5391,8 @@ def _make_inline_frame_cache_value_key(value: VariableTracker) -> Any | None:
             hash(constant)
         except Exception:
             return None
+        # Keep object identity in the key for identity-sensitive leaf frames
+        # such as operator.is_.
         return ("constant", type(constant), constant, id(constant))
 
     return None
