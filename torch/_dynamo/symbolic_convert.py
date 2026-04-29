@@ -5297,6 +5297,9 @@ def profile_inline_call(
 
 
 _INLINE_FRAME_CACHE_UNSUPPORTED = object()
+# These are fresh context keys we can skip deepcopying from cached nodes. Replay
+# still preserves every key populated by create_proxy via the fresh-meta merge;
+# this set is an optimization, not an exhaustive safety allowlist.
 _INLINE_FRAME_CACHE_FRESH_META_KEYS = {
     "creation_timestamp",
     "nn_module_stack",
@@ -5413,7 +5416,8 @@ def _make_inline_frame_cache_value_key(value: VariableTracker) -> Any | None:
         except Exception:
             return None
         # Keep object identity in the key for identity-sensitive leaf frames
-        # such as operator.is_.
+        # such as operator.is_. This intentionally trades hit rate for
+        # correctness; equal values from different allocations trace normally.
         return ("constant", type(constant), constant, id(constant))
 
     # Unsupported symbolic locals conservatively skip cache use. Additional
@@ -5461,6 +5465,10 @@ def _inline_frame_cache_node_is_replayable(node: torch.fx.Node) -> bool:
     if node.op != "call_function":
         return False
 
+    # Dynamo FX call_function targets are expected to be ATen/operator-style
+    # pure functions. Mutable ATen ops are rejected through _schema, and Python
+    # mutation builtins are denied explicitly. Existing-object mutations that do
+    # not appear in FX are also rejected by the side-effect snapshots on store.
     schema = getattr(node.target, "_schema", None)
     if schema is not None and getattr(schema, "is_mutable", False):
         return False
