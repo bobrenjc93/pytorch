@@ -5654,7 +5654,7 @@ class InliningInstructionTranslator(InstructionTranslatorBase):
             return result.clone(items=cast(list[VariableTracker], items))
 
         if isinstance(result, ConstantVariable):
-            return result
+            return result.clone()
 
         return None
 
@@ -5723,6 +5723,8 @@ class InliningInstructionTranslator(InstructionTranslatorBase):
             elif node is start_node:
                 found_start_node = True
         if not found_start_node:
+            return
+        if not new_nodes:
             return
         cached_nodes = set(new_nodes)
         if not all(_inline_frame_cache_node_is_replayable(node) for node in new_nodes):
