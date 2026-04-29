@@ -199,7 +199,7 @@ class FunctionTests(torch._dynamo.test_case.TestCase):
 
         self.assertEqual(cnt.frame_count, 1)
         self.assertEqual(cnt.op_count, 8)
-        self.assertEqual(run_count, 1)
+        self.assertEqual(run_count, ifdynstaticdefault(1, 3))
 
     def test_monomorphic_inline_frame_cache_fresh_tensor_result(self):
         def leaf(x):
@@ -572,6 +572,16 @@ class FunctionTests(torch._dynamo.test_case.TestCase):
         self.assertFalse(
             _inline_frame_cache_node_is_replayable(
                 graph.call_method("__ixor__", (x, 1), {})
+            )
+        )
+        self.assertFalse(
+            _inline_frame_cache_node_is_replayable(
+                graph.call_method("__setitem__", (x, 0, 1), {})
+            )
+        )
+        self.assertFalse(
+            _inline_frame_cache_node_is_replayable(
+                graph.call_method("__delattr__", (x, "attr"), {})
             )
         )
 
@@ -3631,6 +3641,8 @@ class GraphModule(torch.nn.Module):
 
         eager_result = fn(udf_mul, udf_mul, x)
         self.assertEqual(eager_result, dynamo_result)
+        # Static shapes replay the second partial call, shifting print_readable's
+        # stack-context separator. Dynamic shapes bypass this cache path.
         if torch._dynamo.config.assume_static_by_default:
             self.assertExpectedInline(
                 normalize_gm(backend.graphs[0].print_readable(print_output=False)),
@@ -3655,8 +3667,8 @@ class GraphModule(torch.nn.Module):
         l_lambda0_keywords_y_ = L_lambda0_keywords_y_
 
         mul: "f32[s9, s9]" = l_lambda0_keywords_y_ * l_lambda0_keywords_y_
-
         mul_1: "f32[s9, s9]" = l_lambda0_keywords_y_ * l_lambda0_keywords_y_;  l_lambda0_keywords_y_ = None
+
         mul_2: "f32[s9, s9]" = torch.mul(mul, mul_1);  mul = mul_1 = None
         return (mul_2,)
 """,

@@ -5422,7 +5422,12 @@ def _inline_frame_cache_node_is_replayable(node: torch.fx.Node) -> bool:
         target = node.target
         if not isinstance(target, str):
             return True
-        if target.startswith("__i") and target.endswith("__"):
+        if target in (
+            "__setitem__",
+            "__delitem__",
+            "__setattr__",
+            "__delattr__",
+        ) or (target.startswith("__i") and target.endswith("__")):
             return False
         return not (target.endswith("_") and not target.startswith("__"))
     if node.op != "call_function":
@@ -6013,6 +6018,8 @@ class InliningInstructionTranslator(InstructionTranslatorBase):
 
         cached_result = self._maybe_replay_inline_frame_cache()
         if cached_result is not None:
+            # No child tracer runs on a cache hit, so graph-break gating does not
+            # need the normal is_child_tracer_active toggle here.
             parent.error_on_graph_break = self.error_on_graph_break
             if self.f_globals is parent.f_globals:
                 parent.symbolic_globals.update(self.symbolic_globals)
