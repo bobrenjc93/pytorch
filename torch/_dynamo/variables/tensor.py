@@ -2264,7 +2264,7 @@ class TensorToListVariable(VariableTracker):
 
             assert self.materialized is not None
             self._cached_list_var = ListVariable(
-                self.materialized, mutation_type=ValueMutationNew()
+                self.materialized, mutation_type=self.mutation_type
             )
         return self._cached_list_var
 
