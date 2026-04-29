@@ -5398,11 +5398,11 @@ def _inline_frame_cache_node_is_replayable(node: torch.fx.Node) -> bool:
         return True
     if node.op == "call_method":
         target = node.target
-        return not (
-            isinstance(target, str)
-            and target.endswith("_")
-            and not target.startswith("__")
-        )
+        if not isinstance(target, str):
+            return True
+        if target.startswith("__i") and target.endswith("__"):
+            return False
+        return not (target.endswith("_") and not target.startswith("__"))
     if node.op != "call_function":
         return False
 

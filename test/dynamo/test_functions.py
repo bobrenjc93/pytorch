@@ -511,6 +511,25 @@ class FunctionTests(torch._dynamo.test_case.TestCase):
 
         self.assertEqual(run_count, 2)
 
+    def test_monomorphic_inline_frame_cache_rejects_inplace_dunders(self):
+        from torch._dynamo.symbolic_convert import (
+            _inline_frame_cache_node_is_replayable,
+        )
+
+        graph = torch.fx.Graph()
+        x = graph.placeholder("x")
+
+        self.assertFalse(
+            _inline_frame_cache_node_is_replayable(
+                graph.call_method("__iadd__", (x, 1), {})
+            )
+        )
+        self.assertFalse(
+            _inline_frame_cache_node_is_replayable(
+                graph.call_method("__ixor__", (x, 1), {})
+            )
+        )
+
     def test_monomorphic_inline_frame_cache_skips_non_leaf(self):
         from torch._dynamo.symbolic_convert import InliningInstructionTranslator
 
