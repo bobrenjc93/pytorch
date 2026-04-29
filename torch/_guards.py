@@ -1044,6 +1044,7 @@ class InlinedFrameCache:
     key: Any
     nodes: list[Any]
     result: Any
+    f_globals_id: int
 
 
 @dataclass

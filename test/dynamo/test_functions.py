@@ -153,6 +153,7 @@ def inline_script_if_tracing_fn_with_default_args(x, y, c=1.2):
 
 
 _inline_frame_cache_global_tensor = torch.ones(4)
+_inline_frame_cache_global_offset = 0
 _inline_frame_cache_global_store = None
 
 
@@ -510,6 +511,44 @@ class FunctionTests(torch._dynamo.test_case.TestCase):
         def counted_run(tx):
             nonlocal run_count
             if tx.f_code is leaf.__code__:
+                run_count += 1
+            return original_run(tx)
+
+        x = torch.randn(4)
+
+        with patch.object(InliningInstructionTranslator, "run", counted_run):
+            opt_fn = torch.compile(fn, backend="eager", fullgraph=True)
+            self.assertTrue(same(opt_fn(x), fn(x)))
+
+        self.assertEqual(run_count, 2)
+
+    def test_monomorphic_inline_frame_cache_skips_different_f_globals(self):
+        from torch._dynamo.symbolic_convert import InliningInstructionTranslator
+
+        def leaf_template(x):
+            return x + _inline_frame_cache_global_offset
+
+        common_globals = {"__builtins__": globals()["__builtins__"]}
+        leaf_one = types.FunctionType(
+            leaf_template.__code__,
+            {**common_globals, "_inline_frame_cache_global_offset": 1},
+            "leaf",
+        )
+        leaf_two = types.FunctionType(
+            leaf_template.__code__,
+            {**common_globals, "_inline_frame_cache_global_offset": 2},
+            "leaf",
+        )
+
+        def fn(x):
+            return leaf_one(x) + leaf_two(x)
+
+        run_count = 0
+        original_run = InliningInstructionTranslator.run
+
+        def counted_run(tx):
+            nonlocal run_count
+            if tx.f_code is leaf_template.__code__:
                 run_count += 1
             return original_run(tx)
 

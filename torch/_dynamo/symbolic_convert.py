@@ -5620,6 +5620,8 @@ class InliningInstructionTranslator(InstructionTranslatorBase):
         cached = cache_entry.inline_frame_cache if cache_entry is not None else None
         if cached is None:
             return None
+        if cached.f_globals_id != id(self.f_globals):
+            return None
 
         key = _make_inline_frame_cache_key(self.symbolic_locals)
         if key != cached.key:
@@ -5809,6 +5811,7 @@ class InliningInstructionTranslator(InstructionTranslatorBase):
             key=key,
             nodes=new_nodes,
             result=result,
+            f_globals_id=id(self.f_globals),
         )
 
     @classmethod
