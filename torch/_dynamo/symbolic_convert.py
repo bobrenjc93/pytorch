@@ -5371,6 +5371,28 @@ def _make_inline_frame_cache_value_key(value: VariableTracker) -> Any | None:
     return None
 
 
+def _inline_frame_cache_value_has_tensor(value: VariableTracker) -> bool:
+    value = value.unwrap()
+    if isinstance(value, LazyVariableTracker):
+        return value.is_realized() and _inline_frame_cache_value_has_tensor(
+            value.unwrap()
+        )
+    if isinstance(value, TensorVariable):
+        return True
+    if isinstance(value, TupleVariable):
+        return any(_inline_frame_cache_value_has_tensor(item) for item in value.items)
+    return False
+
+
+def _inline_frame_cache_locals_have_tensor(
+    symbolic_locals: dict[str, VariableTracker],
+) -> bool:
+    return any(
+        _inline_frame_cache_value_has_tensor(value)
+        for value in symbolic_locals.values()
+    )
+
+
 def _inline_frame_cache_node_is_replayable(node: torch.fx.Node) -> bool:
     if node.op in ("placeholder", "get_attr"):
         return True
@@ -5539,6 +5561,7 @@ class InliningInstructionTranslator(InstructionTranslatorBase):
             or config.use_graph_deduplication
             or config.track_nodes_for_deduplication
             or self.output.current_tracer.parent is not None
+            or not _inline_frame_cache_locals_have_tensor(self.symbolic_locals)
         )
 
     def _inline_frame_cache_globals_are_supported(self) -> bool:
@@ -5592,12 +5615,12 @@ class InliningInstructionTranslator(InstructionTranslatorBase):
                 return None
             cloned_meta[node] = meta
 
+        def remap_arg(arg: torch.fx.Node) -> Any:
+            return tracer.proxy(node_remap.get(arg, arg))
+
         for node in cached.nodes:
             if node.op == "placeholder":
                 continue
-
-            def remap_arg(arg: torch.fx.Node) -> Any:
-                return tracer.proxy(node_remap.get(arg, arg))
 
             args = torch.fx.node.map_arg(node.args, remap_arg)
             kwargs = torch.fx.node.map_arg(node.kwargs, remap_arg)

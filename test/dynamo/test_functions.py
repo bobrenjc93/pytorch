@@ -271,6 +271,30 @@ class FunctionTests(torch._dynamo.test_case.TestCase):
 
         self.assertEqual(run_count, 2)
 
+    def test_monomorphic_inline_frame_cache_skips_tensorless_leaf(self):
+        from torch._dynamo.symbolic_convert import InliningInstructionTranslator
+
+        def leaf():
+            return torch.ones(4)
+
+        def fn():
+            return leaf() + leaf()
+
+        run_count = 0
+        original_run = InliningInstructionTranslator.run
+
+        def counted_run(tx):
+            nonlocal run_count
+            if tx.f_code is leaf.__code__:
+                run_count += 1
+            return original_run(tx)
+
+        with patch.object(InliningInstructionTranslator, "run", counted_run):
+            opt_fn = torch.compile(fn, backend="eager", fullgraph=True)
+            self.assertTrue(same(opt_fn(), fn()))
+
+        self.assertEqual(run_count, 2)
+
     def test_monomorphic_inline_frame_cache_replays_hop_operand(self):
         from functorch.experimental import control_flow
 
