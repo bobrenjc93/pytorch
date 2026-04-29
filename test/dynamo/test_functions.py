@@ -369,6 +369,51 @@ class FunctionTests(torch._dynamo.test_case.TestCase):
 
         self.assertEqual(run_count, 2)
 
+    def test_monomorphic_inline_frame_cache_skips_dynamic_shapes(self):
+        from torch._dynamo import symbolic_convert
+        from torch._dynamo.symbolic_convert import InliningInstructionTranslator
+
+        def leaf(x):
+            return torch.sin(x) + x
+
+        def fn(x):
+            return leaf(x) + leaf(x)
+
+        run_count = 0
+        original_run = InliningInstructionTranslator.run
+
+        def counted_run(tx):
+            nonlocal run_count
+            if tx.f_code is leaf.__code__:
+                run_count += 1
+            return original_run(tx)
+
+        x = torch.randn(4, 3)
+        global_check_count = 0
+        original_global_value_is_supported = (
+            symbolic_convert._inline_frame_cache_global_value_is_supported
+        )
+
+        def counted_global_value_is_supported(value):
+            nonlocal global_check_count
+            if value is torch:
+                global_check_count += 1
+            return original_global_value_is_supported(value)
+
+        with (
+            patch.object(InliningInstructionTranslator, "run", counted_run),
+            patch.object(
+                symbolic_convert,
+                "_inline_frame_cache_global_value_is_supported",
+                counted_global_value_is_supported,
+            ),
+        ):
+            opt_fn = torch.compile(fn, backend="eager", fullgraph=True, dynamic=True)
+            self.assertTrue(same(opt_fn(x), fn(x)))
+
+        self.assertEqual(run_count, 2)
+        self.assertEqual(global_check_count, 2)
+
     def test_monomorphic_inline_frame_cache_skips_global_tensor(self):
         from torch._dynamo.symbolic_convert import InliningInstructionTranslator
 

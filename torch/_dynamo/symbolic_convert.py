@@ -55,7 +55,11 @@ from torch._dynamo.exc import ObservedException, TensorifyScalarRestartAnalysis
 from torch._guards import InlinedCodeCache, InlinedFrameCache, tracing, TracingContext
 from torch._logging.structured import dump_file
 from torch._subclasses.fake_tensor import FakeTensor, is_fake
-from torch.fx.experimental.symbolic_shapes import guard_bool, statically_known_true
+from torch.fx.experimental.symbolic_shapes import (
+    guard_bool,
+    has_free_symbols,
+    statically_known_true,
+)
 from torch.utils._functools import cache_method
 
 from . import (
@@ -5326,6 +5330,24 @@ def _inline_frame_cache_store_attr_mutation_keys(
     )
 
 
+def _inline_frame_cache_analyze_globals(
+    instructions: list[Instruction], f_globals: dict[str, Any]
+) -> tuple[bool, frozenset[str]]:
+    loaded_global_names: set[str] = set()
+    for inst in instructions:
+        if inst.opname in ("STORE_GLOBAL", "DELETE_GLOBAL"):
+            return False, frozenset()
+        if inst.opname != "LOAD_GLOBAL":
+            continue
+        name = inst.argval
+        if not isinstance(name, str) or name not in f_globals:
+            continue
+        if not _inline_frame_cache_global_value_is_supported(f_globals[name]):
+            return False, frozenset()
+        loaded_global_names.add(name)
+    return True, frozenset(loaded_global_names)
+
+
 def _make_inline_frame_cache_key(
     symbolic_locals: dict[str, VariableTracker],
 ) -> tuple[Any, ...] | None:
@@ -5430,6 +5452,7 @@ def _inline_frame_cache_fake_is_supported(value: Any, tx: Any) -> bool:
             or value.is_quantized
             or value.is_conj()
             or value.is_neg()
+            or has_free_symbols((value.size(), value.stride()))
             or not statically_known_true(value.storage_offset() == 0)
         ):
             return False
@@ -5565,19 +5588,12 @@ class InliningInstructionTranslator(InstructionTranslatorBase):
         )
 
     def _inline_frame_cache_globals_are_supported(self) -> bool:
-        for inst in self.instructions:
-            if inst.opname in ("STORE_GLOBAL", "DELETE_GLOBAL"):
-                return False
-            if inst.opname != "LOAD_GLOBAL":
-                continue
-            name = inst.argval
-            if not isinstance(name, str) or name not in self.f_globals:
-                continue
-            if name in self.symbolic_globals:
-                return False
-            if not _inline_frame_cache_global_value_is_supported(self.f_globals[name]):
-                return False
-        return True
+        return (
+            self._inline_frame_cache_static_globals_supported
+            and self._inline_frame_cache_loaded_global_names.isdisjoint(
+                self.symbolic_globals
+            )
+        )
 
     def _maybe_replay_inline_frame_cache(self) -> VariableTracker | None:
         if not self._inline_frame_cache_is_enabled():
@@ -6140,6 +6156,10 @@ class InliningInstructionTranslator(InstructionTranslatorBase):
         self.funcvar = funcvar
         self.parent = parent
         side_effects = self.output.side_effects
+        (
+            self._inline_frame_cache_static_globals_supported,
+            self._inline_frame_cache_loaded_global_names,
+        ) = _inline_frame_cache_analyze_globals(self.instructions, self.f_globals)
         if self._inline_frame_cache_is_enabled():
             self._inline_frame_cache_start_node = next(
                 reversed(parent.output.current_tracer.graph.nodes), None
@@ -6165,6 +6185,7 @@ class InliningInstructionTranslator(InstructionTranslatorBase):
                 _inline_frame_cache_store_attr_mutation_keys(side_effects)
             )
         else:
+            # Locals may be lazy at construction and realized before the store path.
             self._inline_frame_cache_start_node = None
             self._inline_frame_cache_tracked_side_effect_ids = frozenset()
             self._inline_frame_cache_modified_side_effect_ids = frozenset()
