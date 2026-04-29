@@ -295,6 +295,42 @@ class FunctionTests(torch._dynamo.test_case.TestCase):
 
         self.assertEqual(run_count, 2)
 
+    def test_monomorphic_inline_frame_cache_late_enabled_start_node(self):
+        from torch._dynamo import symbolic_convert
+
+        def leaf(x):
+            return torch.sin(x) + 1
+
+        def fn(x):
+            y = torch.cos(x)
+            return y + leaf(x) + leaf(x)
+
+        original_locals_have_tensor = (
+            symbolic_convert._inline_frame_cache_locals_have_tensor
+        )
+        force_disabled_once = True
+
+        def locals_have_tensor_after_init(symbolic_locals):
+            nonlocal force_disabled_once
+            if force_disabled_once:
+                force_disabled_once = False
+                return False
+            return original_locals_have_tensor(symbolic_locals)
+
+        cnt = torch._dynamo.testing.CompileCounter()
+        x = torch.randn(4)
+
+        with patch.object(
+            symbolic_convert,
+            "_inline_frame_cache_locals_have_tensor",
+            locals_have_tensor_after_init,
+        ):
+            opt_fn = torch.compile(fn, backend=cnt, fullgraph=True)
+            self.assertTrue(same(opt_fn(x), fn(x)))
+
+        self.assertEqual(cnt.frame_count, 1)
+        self.assertEqual(cnt.op_count, 7)
+
     def test_monomorphic_inline_frame_cache_replays_hop_operand(self):
         from functorch.experimental import control_flow
 

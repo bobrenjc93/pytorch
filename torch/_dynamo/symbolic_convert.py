@@ -5581,6 +5581,15 @@ class InliningInstructionTranslator(InstructionTranslatorBase):
     symbolic_result: VariableTracker | None
     # pyrefly: ignore [bad-override]
     parent: InstructionTranslatorBase
+    _inline_frame_cache_static_globals_supported: bool
+    _inline_frame_cache_loaded_global_names: frozenset[str]
+    _inline_frame_cache_start_node: torch.fx.Node | None
+    _inline_frame_cache_tracked_side_effect_ids: frozenset[int]
+    _inline_frame_cache_modified_side_effect_ids: frozenset[int]
+    _inline_frame_cache_had_existing_dict_mutation: bool
+    _inline_frame_cache_save_for_backward_count: int
+    _inline_frame_cache_tensor_hook_ids: frozenset[int]
+    _inline_frame_cache_store_attr_mutation_keys: frozenset[tuple[int, str, int]]
 
     def _inline_frame_cache_is_enabled(self) -> bool:
         return not (
@@ -6176,10 +6185,11 @@ class InliningInstructionTranslator(InstructionTranslatorBase):
             self._inline_frame_cache_static_globals_supported,
             self._inline_frame_cache_loaded_global_names,
         ) = _inline_frame_cache_analyze_globals(self.instructions, self.f_globals)
+        # Locals may be lazy at construction and realized before the store path.
+        self._inline_frame_cache_start_node = next(
+            reversed(parent.output.current_tracer.graph.nodes), None
+        )
         if self._inline_frame_cache_is_enabled():
-            self._inline_frame_cache_start_node = next(
-                reversed(parent.output.current_tracer.graph.nodes), None
-            )
             self._inline_frame_cache_tracked_side_effect_ids = frozenset(
                 side_effects.id_to_variable.keys()
             )
@@ -6201,8 +6211,6 @@ class InliningInstructionTranslator(InstructionTranslatorBase):
                 _inline_frame_cache_store_attr_mutation_keys(side_effects)
             )
         else:
-            # Locals may be lazy at construction and realized before the store path.
-            self._inline_frame_cache_start_node = None
             self._inline_frame_cache_tracked_side_effect_ids = frozenset()
             self._inline_frame_cache_modified_side_effect_ids = frozenset()
             self._inline_frame_cache_had_existing_dict_mutation = False
