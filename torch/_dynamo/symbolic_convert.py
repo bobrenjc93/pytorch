@@ -5503,6 +5503,8 @@ def _clone_inline_frame_cache_fake(value: Any, tx: Any) -> Any:
     if not _inline_frame_cache_fake_is_supported(value, tx):
         return _INLINE_FRAME_CACHE_UNSUPPORTED
     try:
+        # FakeTensor example metadata is structural here; replay clones do not
+        # preserve real autograd history.
         with tx.fake_mode:
             return torch.empty_strided(
                 tuple(value.size()),
@@ -5601,6 +5603,49 @@ def _inline_frame_cache_result_is_supported(
             for item in result.items
         )
     return isinstance(result, ConstantVariable)
+
+
+def _clone_inline_frame_cache_result_template(
+    result: VariableTracker,
+) -> VariableTracker | None:
+    result = result.unwrap()
+    if isinstance(result, LazyVariableTracker):
+        if not result.is_realized():
+            return None
+        return _clone_inline_frame_cache_result_template(result.unwrap())
+    if isinstance(result, TensorVariable):
+        return result.clone(mutation_type=None)
+    if isinstance(result, TupleVariable):
+        items = [
+            _clone_inline_frame_cache_result_template(item) for item in result.items
+        ]
+        if any(item is None for item in items):
+            return None
+        return result.clone(
+            items=cast(list[VariableTracker], items),
+            mutation_type=None,
+        )
+    if isinstance(result, ConstantVariable):
+        return result.clone()
+    return None
+
+
+def _inline_frame_cache_graph_nodes_after(
+    graph: torch.fx.Graph, start_node: torch.fx.Node | None
+) -> list[torch.fx.Node] | None:
+    if start_node is None:
+        return list(graph.nodes)
+    if start_node.graph is not graph or getattr(start_node, "_erased", False):
+        return None
+
+    new_nodes: list[torch.fx.Node] = []
+    node = start_node.next
+    for _ in range(len(graph.nodes)):
+        if node.op == "root":
+            return new_nodes
+        new_nodes.append(node)
+        node = node.next
+    return None
 
 
 class InliningInstructionTranslator(InstructionTranslatorBase):
@@ -5815,14 +5860,10 @@ class InliningInstructionTranslator(InstructionTranslatorBase):
             return
 
         start_node = self._inline_frame_cache_start_node
-        new_nodes: list[torch.fx.Node] = []
-        found_start_node = start_node is None
-        for node in self.output.current_tracer.graph.nodes:
-            if found_start_node:
-                new_nodes.append(node)
-            elif node is start_node:
-                found_start_node = True
-        if not found_start_node:
+        new_nodes = _inline_frame_cache_graph_nodes_after(
+            self.output.current_tracer.graph, start_node
+        )
+        if new_nodes is None:
             return
         if not new_nodes:
             return
@@ -5836,6 +5877,10 @@ class InliningInstructionTranslator(InstructionTranslatorBase):
         if not _inline_frame_cache_result_is_supported(result, cached_nodes):
             return
 
+        cached_result = _clone_inline_frame_cache_result_template(result)
+        if cached_result is None:
+            return
+
         cache_entry = self.output.tracing_context.inlined_code_cache.get(self.f_code)
         if cache_entry is None:
             return
@@ -5844,7 +5889,7 @@ class InliningInstructionTranslator(InstructionTranslatorBase):
         cache_entry.inline_frame_cache = InlinedFrameCache(
             key=key,
             nodes=new_nodes,
-            result=result,
+            result=cached_result,
             f_globals_id=id(self.f_globals),
         )
 
