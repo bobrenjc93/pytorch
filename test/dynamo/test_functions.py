@@ -153,6 +153,7 @@ def inline_script_if_tracing_fn_with_default_args(x, y, c=1.2):
 
 
 _inline_frame_cache_global_tensor = torch.ones(4)
+_inline_frame_cache_global_store = None
 
 
 class FunctionTests(torch._dynamo.test_case.TestCase):
@@ -214,6 +215,27 @@ class FunctionTests(torch._dynamo.test_case.TestCase):
         opt_fn = torch.compile(fn, backend="eager", fullgraph=True)
 
         self.assertTrue(same(opt_fn(x), fn(x)))
+
+    def test_monomorphic_inline_frame_cache_replays_hop_operand(self):
+        from functorch.experimental import control_flow
+
+        def true_fn(y):
+            return y.sin()
+
+        def false_fn(y):
+            def leaf(z):
+                return z + 1
+
+            return leaf(y) + leaf(y)
+
+        def fn(x, y):
+            return control_flow.cond(x.shape[0] > 4, true_fn, false_fn, [y])
+
+        x = torch.ones(3, 2, 4, requires_grad=True)
+        y = torch.ones(4, requires_grad=True)
+        opt_fn = torch.compile(fn, backend="eager", fullgraph=True)
+
+        self.assertTrue(same(opt_fn(x, y), fn(x, y)))
 
     def test_monomorphic_inline_frame_cache_skips_polymorphic_calls(self):
         from torch._dynamo.symbolic_convert import InliningInstructionTranslator
@@ -286,6 +308,36 @@ class FunctionTests(torch._dynamo.test_case.TestCase):
                 run_count += 1
             return original_run(tx)
 
+        x = torch.randn(4)
+
+        with patch.object(InliningInstructionTranslator, "run", counted_run):
+            opt_fn = torch.compile(fn, backend="eager", fullgraph=True)
+            self.assertTrue(same(opt_fn(x), fn(x)))
+
+        self.assertEqual(run_count, 2)
+
+    def test_monomorphic_inline_frame_cache_skips_store_global(self):
+        from torch._dynamo.symbolic_convert import InliningInstructionTranslator
+
+        def leaf(x):
+            global _inline_frame_cache_global_store
+            _inline_frame_cache_global_store = x
+            return x + 1
+
+        def fn(x):
+            return leaf(x) + leaf(x)
+
+        run_count = 0
+        original_run = InliningInstructionTranslator.run
+
+        def counted_run(tx):
+            nonlocal run_count
+            if tx.f_code is leaf.__code__:
+                run_count += 1
+            return original_run(tx)
+
+        global _inline_frame_cache_global_store
+        _inline_frame_cache_global_store = None
         x = torch.randn(4)
 
         with patch.object(InliningInstructionTranslator, "run", counted_run):

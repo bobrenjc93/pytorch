@@ -5543,6 +5543,8 @@ class InliningInstructionTranslator(InstructionTranslatorBase):
 
     def _inline_frame_cache_globals_are_supported(self) -> bool:
         for inst in self.instructions:
+            if inst.opname in ("STORE_GLOBAL", "DELETE_GLOBAL"):
+                return False
             if inst.opname != "LOAD_GLOBAL":
                 continue
             name = inst.argval
@@ -5550,9 +5552,7 @@ class InliningInstructionTranslator(InstructionTranslatorBase):
                 continue
             if name in self.symbolic_globals:
                 return False
-            if not _inline_frame_cache_global_value_is_supported(
-                self.f_globals[name]
-            ):
+            if not _inline_frame_cache_global_value_is_supported(self.f_globals[name]):
                 return False
         return True
 
@@ -5596,8 +5596,8 @@ class InliningInstructionTranslator(InstructionTranslatorBase):
             if node.op == "placeholder":
                 continue
 
-            def remap_arg(arg: torch.fx.Node) -> torch.fx.node.Argument:
-                return node_remap.get(arg, arg)
+            def remap_arg(arg: torch.fx.Node) -> Any:
+                return tracer.proxy(node_remap.get(arg, arg))
 
             args = torch.fx.node.map_arg(node.args, remap_arg)
             kwargs = torch.fx.node.map_arg(node.kwargs, remap_arg)
@@ -5973,6 +5973,9 @@ class InliningInstructionTranslator(InstructionTranslatorBase):
         cached_result = self._maybe_replay_inline_frame_cache()
         if cached_result is not None:
             parent.error_on_graph_break = self.error_on_graph_break
+            if self.f_globals is parent.f_globals:
+                parent.symbolic_globals.update(self.symbolic_globals)
+            parent.inconsistent_side_effects |= self.inconsistent_side_effects
             log.debug("DONE INLINING %s (inline frame cache hit)", code)
             self.output.tracing_context.traced_code.append(code)
             return cached_result
@@ -6140,18 +6143,10 @@ class InliningInstructionTranslator(InstructionTranslatorBase):
             self._inline_frame_cache_start_node = None
             self._inline_frame_cache_tracked_side_effect_ids = frozenset()
             self._inline_frame_cache_modified_side_effect_ids = frozenset()
-            self._inline_frame_cache_had_existing_dict_mutation = (
-                side_effects.has_existing_dict_mutation()
-            )
-            self._inline_frame_cache_save_for_backward_count = len(
-                side_effects.save_for_backward
-            )
-            self._inline_frame_cache_tensor_hook_ids = frozenset(
-                side_effects.tensor_hooks.keys()
-            )
-            self._inline_frame_cache_store_attr_mutation_keys = (
-                _inline_frame_cache_store_attr_mutation_keys(side_effects)
-            )
+            self._inline_frame_cache_had_existing_dict_mutation = False
+            self._inline_frame_cache_save_for_backward_count = 0
+            self._inline_frame_cache_tensor_hook_ids = frozenset()
+            self._inline_frame_cache_store_attr_mutation_keys = frozenset()
         self.num_calls = parent.num_calls
         self.symbolic_result = None
         self.nn_module_stack = parent.nn_module_stack.copy()
