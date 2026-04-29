@@ -2189,12 +2189,15 @@ class TensorToListVariable(VariableTracker):
         tensor_variable: TensorVariable,
         tx: "InstructionTranslator",
         materialized: list[VariableTracker] | None = None,
+        _cached_list_var: ListVariable | None = None,
+        _example_value_cache: torch.Tensor | None = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(**kwargs)
         self.tensor_variable = tensor_variable
         self.tx = tx
         self.materialized = materialized
+        # clone() forwards derived cache fields from __dict__; rebuild them.
         self._cached_list_var: ListVariable | None = None
         self._example_value_cache = self.tensor_variable.as_proxy().node.meta[
             "example_value"
@@ -2422,9 +2425,9 @@ def materialize_tensor_tolist_args_kwargs(
     tx: "InstructionTranslatorBase",
     args: Sequence[VariableTracker],
     kwargs: dict[str, VariableTracker],
-) -> tuple[list[VariableTracker], dict[str, VariableTracker]]:
+) -> tuple[tuple[VariableTracker, ...], dict[str, VariableTracker]]:
     return (
-        [materialize_tensor_tolist_arg(arg, tx) for arg in args],
+        tuple(materialize_tensor_tolist_arg(arg, tx) for arg in args),
         {key: materialize_tensor_tolist_arg(arg, tx) for key, arg in kwargs.items()},
     )
 

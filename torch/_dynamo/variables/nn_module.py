@@ -127,6 +127,7 @@ def initialize_lazy_module(
                 args=["AttributeError during lazy module initialization"],
             )
 
+
 @contextmanager
 def record_nn_module_stack(
     module_key: str, source: Source, tx: "InstructionTranslator", mod: torch.nn.Module
