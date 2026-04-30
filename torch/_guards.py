@@ -39,7 +39,6 @@ if TYPE_CHECKING:
     from torch._dynamo.guards import GuardCheckSpec
     from torch._functorch._aot_autograd.schemas import ViewAndMutationMeta
     from torch._higher_order_ops.invoke_subgraph import NestedCompileRegionOptions
-    from torch._inductor.runtime.autotune_cache import AutotuneCacheBundler
     from torch._subclasses.fake_tensor import FakeTensorMode
 
 
@@ -1020,7 +1019,6 @@ class CompileContext:
         self.attempt = 0
         # Verbose ShapeEnv guards produced.
         self.shape_env_guards: list[str] = []
-        self.autotune_cache_bundler: AutotuneCacheBundler | None = None
 
     @staticmethod
     def current_compile_id() -> CompileId | None:

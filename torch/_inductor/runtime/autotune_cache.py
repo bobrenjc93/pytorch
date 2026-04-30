@@ -29,6 +29,8 @@ import logging
 import os
 import os.path
 import re
+import threading
+import weakref
 from typing import Any
 from typing_extensions import override
 
@@ -459,6 +461,11 @@ class _AutotuneCacheBundlerImpl:
 class AutotuneCacheBundler:
     """Manages one bundled autotune cache write scope for a compile context."""
 
+    _context_bundlers: weakref.WeakKeyDictionary[
+        CompileContext, AutotuneCacheBundler
+    ] = weakref.WeakKeyDictionary()
+    _context_bundlers_lock = threading.Lock()
+
     def __init__(self) -> None:
         self._bundler: _AutotuneCacheBundlerImpl | None = None
 
@@ -472,12 +479,13 @@ class AutotuneCacheBundler:
         if ctx is None:
             return None
 
-        bundler = ctx.autotune_cache_bundler
-        if bundler is None and create:
-            bundler = cls()
-            ctx.autotune_cache_bundler = bundler
-        assert bundler is None or isinstance(bundler, cls)
-        return bundler
+        with cls._context_bundlers_lock:
+            bundler = cls._context_bundlers.get(ctx)
+            if bundler is None and create:
+                bundler = cls()
+                cls._context_bundlers[ctx] = bundler
+            assert bundler is None or isinstance(bundler, cls)
+            return bundler
 
     @classmethod
     def has_active_compile(cls, compile_context: CompileContext | None) -> bool:
