@@ -42,7 +42,7 @@ def _capture_y_source_location(ctx) -> None:
 
 
 def _strip_source_markers(message: str) -> str:
-    return re.sub(r"\n[ ]*[~^]+\n", "\n", message)
+    return re.sub(r"(?m)^[ ]*[~^]+\n?", "", message)
 
 
 def _unsupported_error_source_attribution() -> str:
@@ -547,7 +547,7 @@ Failed Source Expressions:
 """,
         )
 
-        if sys.version_info >= (3, 13):
+        if sys.version_info >= (3, 11):
             self.assertExpectedInline(
                 result,
                 """\
@@ -560,21 +560,6 @@ Failed Source Expressions:
         ^~~~~
     )
     ~
-""",
-            )
-        elif sys.version_info >= (3, 11):
-            self.assertExpectedInline(
-                result,
-                """\
-  File "<source_path>", line 1
-    value = (
-            ^
-        foo
-        ^^^
-        + bar
-        ^^^^^
-    )
-    ^
 """,
             )
 
