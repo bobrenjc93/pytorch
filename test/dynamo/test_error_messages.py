@@ -194,7 +194,13 @@ def _skip_frame_in_loop_message_stack_source_attribution() -> str:
 
 def _munge_graph_break_message(message: str) -> str:
     munged = munge_exc(message, suppress_suffix=True, skip=0)
-    return re.sub(r"(?m)^[ ]*[~^]+\n?", "", munged)
+    munged = re.sub(r"(?m)^[ ]*[~^]+\n?", "", munged)
+    return re.sub(
+        r'(?m)(^  File "test_error_messages.py", line N\n[ ]{12,}.*\n)'
+        r"(?:[ ]{12,}.*\n)+",
+        r"\1",
+        munged,
+    )
 
 
 class ErrorMessagesTest(LoggingTestCase):
@@ -1157,41 +1163,9 @@ User code traceback:
 
         # only 1 graph break message
         self.assertEqual(len(records), 1)
-        if sys.version_info[:2] == (3, 11):
-            self.assertExpectedInline(
-                _munge_graph_break_message(records[0].getMessage()),
-                """\
-Graph break in user code at test_error_messages.py:N
-Graph Break Reason: Failed to handle graph break gracefully. Skipping the function and falling back to eager. Graph break encountered:
-
-Data-dependent assertion failed (cannot compile partial graph)
-  Explanation: Dynamo has determined when encountering a data-dependent assert failure that it should not compile the partial graph.
-  Hint: This graph break is fundamental - it is unlikely that Dynamo will ever be able to trace through your code. Consider finding a workaround.
-  Hint: Use `torch._assert()` to raise a hard AssertionError when the check fails. This error will propagate back the user code that called the compiled function (i.e. Dynamo will not trace any exception handling).
-  Hint: Remove the assert statement.
-  Hint: Move the assert statement outside of any context managers in order to graph break with partial graph compilation (if fullgraph=False).
-
-  Developer debug context: value: ConstantVariable(bool: False)
-
- For more details about this graph break, please visit: https://meta-pytorch.github.io/compile-graph-break-site/gb/gb0034.html
-
-Stack variable source attribution:
-  WithExitFunctionVariable() originated from:
-  File "test_error_messages.py", line N
-                with GenericCtxMgr():
-                    assert x is None  # noqa: S101
-
-User code traceback:
-  File "test_error_messages.py", line N, in test_assert_failure_in_generic_ctx_mgr
-    torch.compile(fn, backend="eager")(torch.randn(3))
-  File "test_error_messages.py", line N, in fn
-    assert x is None  # noqa: S101
-""",
-            )
-        else:
-            self.assertExpectedInline(
-                _munge_graph_break_message(records[0].getMessage()),
-                """\
+        self.assertExpectedInline(
+            _munge_graph_break_message(records[0].getMessage()),
+            """\
 Graph break in user code at test_error_messages.py:N
 Graph Break Reason: Failed to handle graph break gracefully. Skipping the function and falling back to eager. Graph break encountered:
 
@@ -1217,7 +1191,7 @@ User code traceback:
   File "test_error_messages.py", line N, in fn
     assert x is None  # noqa: S101
 """,
-            )
+        )
 
     def test_no_internal_compiler_stacktrace(self):
         def fn():
