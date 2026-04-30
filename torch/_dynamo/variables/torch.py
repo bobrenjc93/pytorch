@@ -994,7 +994,10 @@ class TorchInGraphFunctionVariable(BaseTorchVariable):
 
         @register(torch.use_deterministic_algorithms)
         def handle_use_deterministic_algorithms(
-            self, tx: "InstructionTranslator", mode: Any, warn_only: bool = False
+            self,
+            tx: "InstructionTranslator",
+            mode: Any,
+            warn_only: VariableTracker | bool = False,
         ) -> VariableTracker:
             value = mode.as_python_constant()
             warn_only_value = (
