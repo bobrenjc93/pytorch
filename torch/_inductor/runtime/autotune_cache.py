@@ -457,23 +457,25 @@ class _AutotuneCacheBundlerImpl:
 
 
 class AutotuneCacheBundler:
+    """Manages one bundled autotune cache write scope for a compile context."""
+
     def __init__(self) -> None:
         self._bundler: _AutotuneCacheBundlerImpl | None = None
 
     @classmethod
     def _get_context_bundler(
         cls,
-        compile_context: CompileContext | None = None,
+        ctx: CompileContext | None = None,
         *,
         create: bool,
     ) -> AutotuneCacheBundler | None:
-        if compile_context is None:
+        if ctx is None:
             return None
 
-        bundler = compile_context.autotune_cache_bundler
+        bundler = ctx.autotune_cache_bundler
         if bundler is None and create:
             bundler = cls()
-            compile_context.autotune_cache_bundler = bundler
+            ctx.autotune_cache_bundler = bundler
         assert bundler is None or isinstance(bundler, cls)
         return bundler
 

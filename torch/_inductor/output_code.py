@@ -31,7 +31,7 @@ from typing import Any, TYPE_CHECKING, TypeAlias
 
 import torch
 from torch._dynamo.utils import counters, get_runtime_metrics_context
-from torch._guards import CompileContext, compile_context
+from torch._guards import compile_context, CompileContext
 from torch._higher_order_ops.wrap import inductor_compiled_code
 from torch._inductor.cudagraph_utils import (
     BoxedDeviceIndex,
@@ -537,7 +537,6 @@ class CompiledFxGraph(OutputCode):
         inductor_provenance_mapping_str: str | None = None,
         inductor_provenance_stack_traces_str: str | None = None,
     ) -> None:
-        self._set_compile_context_for_autotune_cache()
         self.current_callable = current_callable
         self.compiled_fn_runner = compiled_fn_runner
         self.recursively_apply_fns = (
@@ -672,6 +671,7 @@ class CompiledFxGraph(OutputCode):
         self.compile_region_name = compile_region_name
         self.inputs_to_check = inputs_to_check
         self.fx_kwargs = fx_kwargs
+        self._set_compile_context_for_autotune_cache()
 
         # aot autograd needs to know to pass in inputs as a list
         self._boxed_call = True
@@ -738,6 +738,9 @@ class CompiledFxGraph(OutputCode):
             if has_active_autotune_cache_bundler
             else contextlib.nullcontext()
         )
+        # Autotune cache writes happen during the first call. End the bundler
+        # while its saved compile context is restored, then clear the saved
+        # context after leaving the compile_context manager.
         try:
             with autotune_cache_context:
                 try:

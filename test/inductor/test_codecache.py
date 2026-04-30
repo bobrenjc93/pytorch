@@ -3527,7 +3527,7 @@ class TestAutotuneCache(TestCase):
 
     @config.patch({"bundled_autotune_remote_cache": True})
     def test_autotune_cache_bundler_is_compile_context_scoped(self):
-        from torch._guards import CompileContext, compile_context
+        from torch._guards import compile_context, CompileContext
         from torch._inductor.runtime.autotune_cache import AutotuneCacheBundler
 
         class FakeBundledCache:
@@ -3582,7 +3582,7 @@ class TestAutotuneCache(TestCase):
 
     @config.patch({"bundled_autotune_remote_cache": True})
     def test_autotune_cache_bundler_runs_in_saved_compile_context(self):
-        from torch._guards import CompileContext, compile_context
+        from torch._guards import compile_context, CompileContext
         from torch._inductor.output_code import CompiledFxGraph
         from torch._inductor.runtime.autotune_cache import AutotuneCacheBundler
 
