@@ -160,9 +160,8 @@ def fake_signature(fn: Callable[_P, R], nargs: int) -> Callable[_P, R]:
 @contextmanager
 def decompose(
     decomposition_table: Mapping[OpOverload, Callable[..., Any]] | None,
-    proxy_mode: ProxyTorchDispatchMode | None = None,
 ) -> Generator[Mapping[OpOverload, Callable[..., Any]], None, None]:
-    mode = proxy_mode or get_proxy_mode()
+    mode = get_proxy_mode()
     if mode is None:
         raise AssertionError("Expected proxy mode to be set")
     with mode.enable_decompositions(decomposition_table) as table:
@@ -1928,10 +1927,10 @@ class ProxyTorchDispatchMode(TorchDispatchMode):
         self,
         tracer: _ProxyTracer,
         tracing_mode: _TracingMode,
-        decomposition_table: Mapping[OpOverload, Callable[..., Any]] | None = None,
         pre_dispatch: bool = False,
         _allow_fake_constant: bool = False,
         _error_on_data_dependent_ops: bool = True,
+        decomposition_table: Mapping[OpOverload, Callable[..., Any]] | None = None,
     ) -> None:
         dk = torch._C.DispatchKey.PreDispatch if pre_dispatch else None
         super().__init__(dk)
@@ -2234,10 +2233,7 @@ class _SelectiveDecomposeInterpreter(fx.Interpreter):
 
     def run_node(self, n: fx.Node) -> Any:
         if self.should_decompose(n):
-            mode = get_proxy_mode()
-            if mode is None:
-                raise AssertionError("Expected proxy mode to be set")
-            with decompose(self.decomposition_table, proxy_mode=mode):
+            with decompose(self.decomposition_table):
                 result = super().run_node(n)
         else:
             result = super().run_node(n)
