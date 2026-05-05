@@ -397,9 +397,7 @@ class GenericAOTAutogradResult(Generic[TForward, TBackward]):
         if self.compiled_bw is not None:
             self.compiled_bw.pre_save()
 
-    def _log_cached_graphs(
-        self, aot_config: AOTConfig | CacheableAOTConfig
-    ) -> None:
+    def _log_cached_graphs(self, aot_config: AOTConfig | CacheableAOTConfig) -> None:
         if not aot_config.enable_log:
             return
 
