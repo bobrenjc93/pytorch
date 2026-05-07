@@ -4,6 +4,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+import torch._logging
 from torch import _C, _ops, autograd, Tensor
 from torch.utils import _pytree
 
@@ -79,6 +80,16 @@ def _codegen_autograd_forward(
         )
 
     source = "\n".join(lines)
+
+    torch._logging.trace_structured(
+        "artifact",
+        metadata_fn=lambda: {
+            "name": "custom_op_autograd_forward",
+            "encoding": "string",
+        },
+        payload_fn=lambda: source,
+    )
+
     code = compile(source, f"<custom_op_autograd_{op._namespace}_{op._opname}>", "exec")
     local_dict: dict[str, object] = {}
     exec(code, code_globals, local_dict)
