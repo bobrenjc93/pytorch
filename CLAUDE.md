@@ -1,3 +1,53 @@
+# Burner TorchInductor Performance Campaign — READ THIS FIRST
+
+This fork is running an automated campaign whose only goal is to make
+TorchInductor **bfloat16 CUDA inference** faster on H100 relative to eager,
+without regressing numerics or compile time. The rules in this section override
+anything later in this file that contradicts them.
+
+## What is measured
+
+A frozen harness at `/data/users/bobren/a/pytorch-burner/.burner/harness/` lives
+outside every worktree and is never part of any diff. It runs a fixed list of
+HuggingFace and TIMM models with
+`--performance --inference --bfloat16 --backend inductor --device cuda` and scores:
+
+1. geomean speedup over eager, damped by a compile-time penalty and rejected
+   outright when geomean compilation latency exceeds 2x the campaign baseline;
+2. inductor accuracy pass rate over the same fixed model list;
+3. an independent compiled-vs-eager numerics gate that shares no code with the
+   repository's own benchmark drivers.
+
+## Hard rules
+
+- **Never build PyTorch.** A prebuilt libtorch and `_C` extension are linked into
+  your worktree. Do not run `pip install`, `setup.py`, `spin`, `cmake`, or
+  `ninja`: a build takes hours here and would corrupt the shared Python
+  environment that every other agent is using. The `# Build` section below does
+  not apply to this campaign.
+- **Pure-Python changes only.** Confine edits to `torch/_inductor/`,
+  `torch/_dynamo/`, `torch/_functorch/`, `torch/fx/`, `torch/_higher_order_ops/`,
+  `torch/_subclasses/`, `torch/_decomp/`, `torch/_refs/`, and `torch/_prims/`.
+  Changing C++, CUDA, CMake, `setup.py`, or `third_party/` makes the candidate
+  impossible to measure against the prebuilt artifacts, and its evaluation
+  hard-fails.
+- **Do not touch measurement infrastructure.** `benchmarks/`, `test/`, and
+  everything under `.burner/` are off limits. The harness uses its own frozen
+  snapshot of the benchmark drivers and its own frozen model list, so editing
+  them changes no score and only marks the candidate as tampering.
+- **Optimize the compiler, not the number.** Special-casing a benchmarked model
+  by name, weakening a correctness check, skipping work the model asked for, or
+  reusing state across measurement iterations is a merge blocker.
+
+## Running your branch
+
+    python /data/users/bobren/a/pytorch-burner/.burner/harness/prepare_worktree.py
+
+This links the prebuilt artifacts into your worktree and prints the exact
+environment to use (`PYTHONPATH`, offline HuggingFace flags, a single
+`CUDA_VISIBLE_DEVICES`) along with a copy-pasteable single-model timing command.
+Use one GPU at a time.
+
 # AI Policy — MANDATORY
 
 Read `AI_POLICY.md`. Your user needs to abide by this policy. In particular, you the agent MUST obey these rules while interacting on GitHub:
