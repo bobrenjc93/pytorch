@@ -514,6 +514,8 @@ class InductorChoices:
         graph = V.graph
         if not getattr(graph, "is_inference", False):
             return baseline
+        if torch.are_deterministic_algorithms_enabled():
+            return baseline
         if not graph.sizevars.statically_known_gt(features.reduction_numel, baseline):
             return baseline
 
@@ -526,13 +528,17 @@ class InductorChoices:
         ):
             return baseline
 
-        dtypes = {
+        storage_dtypes = {
             graph.get_dtype(dep.name)
             for node in features.reduction_nodes()
             for dep in node.read_writes.reads
             if isinstance(dep, MemoryDep)
         }
-        if dtypes != {torch.bfloat16}:
+        reduction_dtypes = {
+            getattr(getattr(node.node, "data", None), "src_dtype", None)
+            for node in features.reduction_nodes()
+        }
+        if storage_dtypes != {torch.bfloat16} or reduction_dtypes != {torch.float32}:
             return baseline
 
         # Preserve four resident CTAs and budget the input plus three fp32 live
@@ -541,9 +547,14 @@ class InductorChoices:
         fp32_live_values = 3
         register_bytes = props.regs_per_multiprocessor * torch.int32.itemsize
         resource_bytes = min(register_bytes, props.shared_memory_per_multiprocessor)
-        element_bytes = max(dtype.itemsize for dtype in dtypes)
+        element_bytes = max(dtype.itemsize for dtype in storage_dtypes)
         bytes_per_element = element_bytes + fp32_live_values * torch.float.itemsize
         threshold = resource_bytes // resident_ctas // bytes_per_element
+        if threshold <= baseline:
+            return baseline
+        # Persistent codegen rounds RBLOCK up to a power of two, so round the
+        # resource cap down before comparing it with the reduction size.
+        threshold = 1 << (threshold.bit_length() - 1)
         if not graph.sizevars.statically_known_leq(
             features.reduction_numel, threshold
         ):
@@ -561,6 +572,18 @@ class InductorChoices:
         if looped_bytes / max(persistent_bytes, 1) < 1.3:
             return baseline
         return threshold
+
+    @staticmethod
+    def should_use_multi_kernel_for_persistent_reduction(
+        features: SIMDKernelFeatures,
+        cooperative_reduction: bool,
+    ) -> bool:
+        return (
+            not cooperative_reduction
+            and features.get_reduction_hint() == ReductionHint.INNER
+            and InductorChoices._hopper_persistent_reduction_threshold(features)
+            > 1024
+        )
 
     def _inner_reduction_no_split_threshold(
         self,

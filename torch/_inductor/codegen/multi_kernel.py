@@ -339,7 +339,7 @@ class MultiKernelCall:
         key = code_hash(
             ",".join(
                 [
-                    f"{k.fn.cache_key}{k.size_hints!r}{k.triton_meta!r}"
+                    f"{k.kernel_hash or k.fn.cache_key}{k.size_hints!r}{k.triton_meta!r}"
                     for k in self.kernels
                 ]
             )
