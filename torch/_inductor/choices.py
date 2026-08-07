@@ -516,7 +516,9 @@ class InductorChoices:
     ) -> int:
         baseline = 1024
         graph = V.graph
-        if not getattr(graph, "is_inference", False):
+        is_inference = getattr(graph, "is_inference", False)
+        is_backward = not is_inference and getattr(graph, "is_backward", False)
+        if not is_inference and not is_backward:
             return baseline
         if (
             config.deterministic
@@ -555,7 +557,8 @@ class InductorChoices:
             return baseline
 
         # Preserve four resident CTAs and budget the input plus three fp32 live
-        # values per reduction element. On H100 this admits 4096 bf16 elements.
+        # values per reduction element. On H100 inference this admits 4096 bf16
+        # elements.
         resident_ctas = 4
         fp32_live_values = 3
         register_bytes = props.regs_per_multiprocessor * torch.int32.itemsize
@@ -563,6 +566,9 @@ class InductorChoices:
         element_bytes = max(dtype.itemsize for dtype in storage_dtypes)
         bytes_per_element = element_bytes + fp32_live_values * torch.float.itemsize
         threshold = resource_bytes // resident_ctas // bytes_per_element
+        if is_backward:
+            # Leave an additional occupancy margin for fused gradient epilogues.
+            threshold //= 2
         if threshold <= baseline:
             return baseline
         # Persistent codegen rounds RBLOCK up to a power of two, so round the
@@ -576,7 +582,10 @@ class InductorChoices:
         # Avoid increasing register pressure unless persistence also removes
         # enough memory traffic to offset the lower occupancy.
         memory_stats = features.memory_stats()
-        if memory_stats.persistent.memory.dim[-1].count_per_thread > 10:
+        # Backward graphs commonly fuse heavier epilogues than inference. Keep
+        # their extended range to two reduction-dimension memory operations.
+        max_memory_ops = 2 if is_backward else 10
+        if memory_stats.persistent.memory.dim[-1].count_per_thread > max_memory_ops:
             return baseline
         looped_bytes = graph.sizevars.optimization_hint(memory_stats.looped.memory.bytes)
         persistent_bytes = graph.sizevars.optimization_hint(
