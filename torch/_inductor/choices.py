@@ -516,9 +516,7 @@ class InductorChoices:
     ) -> int:
         baseline = 1024
         graph = V.graph
-        if not getattr(graph, "is_inference", False) and not getattr(
-            graph, "is_backward", False
-        ):
+        if not getattr(graph, "is_inference", False):
             return baseline
         if (
             config.deterministic
