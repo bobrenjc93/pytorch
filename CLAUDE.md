@@ -46,7 +46,11 @@ HuggingFace and TIMM models with
 This links the prebuilt artifacts into your worktree and prints the exact
 environment to use (`PYTHONPATH`, offline HuggingFace flags, a single
 `CUDA_VISIBLE_DEVICES`) along with a copy-pasteable single-model timing command.
-Use one GPU at a time.
+
+**GPUs 0-3 are reserved for campaign measurement. Only ever use GPUs 4-7 for your
+own experiments, one at a time.** The evaluation harness refuses to report any
+timing taken while a foreign process is on a measurement GPU, so running work
+there does not just add noise, it stalls the campaign.
 
 # AI Policy — MANDATORY
 
