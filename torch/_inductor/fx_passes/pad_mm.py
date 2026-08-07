@@ -45,6 +45,9 @@ aten = torch.ops.aten
 # between original pattern and padded one.
 _skip_do_bench_times = False
 
+_HOPPER_BF16_ALIGNMENT = 16
+_HOPPER_BF16_MIN_PAD_MACS = 1 << 34
+
 
 def fetch_fake_tensors(match: Match, kwarg_names: Sequence[str]) -> list[Tensor]:
     kwargs = match.kwargs
@@ -66,6 +69,78 @@ def unwrap_fake_args(
 
 def get_alignment_size(x: Tensor) -> int:
     return get_alignment_size_dtype(x.dtype)
+
+
+def should_use_hopper_wgmma_padding(
+    mat1: Tensor,
+    mat2: Tensor,
+    m: int | torch.SymInt,
+    k: int | torch.SymInt,
+    n: int | torch.SymInt,
+    batch: int | torch.SymInt = 1,
+) -> bool:
+    if (
+        mat1.dtype is not torch.bfloat16
+        or mat2.dtype is not torch.bfloat16
+        or not mat1.is_cuda
+        or not mat2.is_cuda
+        or torch.version.hip is not None
+        or not torch.cuda.is_available()
+        or torch.cuda.get_device_capability(mat1.device) != (9, 0)
+        or not all(isinstance(dim, int) for dim in (batch, m, k, n))
+    ):
+        return False
+
+    batch, m, k, n = typing.cast(tuple[int, int, int, int], (batch, m, k, n))
+    old_alignment = get_alignment_size(mat1)
+    new_m = m + get_padded_length(m, old_alignment)
+    old_k = k + get_padded_length(k, old_alignment)
+    old_n = n + get_padded_length(n, old_alignment)
+    new_k = k + get_padded_length(k, _HOPPER_BF16_ALIGNMENT)
+    new_n = n + get_padded_length(n, _HOPPER_BF16_ALIGNMENT)
+    # Only widen shapes already eligible under the legacy alignment.
+    if (old_k == k and old_n == n) or (old_k == new_k and old_n == new_n):
+        return False
+
+    # Keep the extra tensor-core work below 1%, and require about 34 GFLOPs so
+    # the fixed cost of launching the padding kernels is amortized on Hopper.
+    original_macs = batch * m * k * n
+    padded_macs = batch * new_m * new_k * new_n
+    return (
+        original_macs >= _HOPPER_BF16_MIN_PAD_MACS
+        and padded_macs * 100 <= original_macs * 101
+    )
+
+
+def get_matmul_alignment_sizes(
+    mat1: Tensor,
+    mat2: Tensor,
+    m: int | torch.SymInt,
+    k: int | torch.SymInt,
+    n: int | torch.SymInt,
+    batch: int | torch.SymInt = 1,
+) -> tuple[int, int]:
+    if should_use_hopper_wgmma_padding(mat1, mat2, m, k, n, batch):
+        return _HOPPER_BF16_ALIGNMENT, _HOPPER_BF16_ALIGNMENT
+    return get_alignment_size(mat1), get_alignment_size(mat2)
+
+
+def get_matmul_padded_lengths(
+    mat1: Tensor,
+    mat2: Tensor,
+    m: int | torch.SymInt,
+    k: int | torch.SymInt,
+    n: int | torch.SymInt,
+    batch: int | torch.SymInt = 1,
+) -> tuple[int, int, int]:
+    mat1_alignment, mat2_alignment = get_matmul_alignment_sizes(
+        mat1, mat2, m, k, n, batch
+    )
+    return (
+        get_padded_length(m, get_alignment_size(mat1)),
+        get_padded_length(k, mat1_alignment),
+        get_padded_length(n, mat2_alignment),
+    )
 
 
 def get_alignment_size_dtype(dtype: torch.dtype) -> int:
@@ -144,16 +219,22 @@ def can_pad(
             m = mat1.shape[0]
             k = mat1.shape[1]
             n = mat2.shape[1]
+            batch = 1
         elif op is torch.ops.aten.bmm:
             m = mat1.shape[1]
             k = mat1.shape[2]
             n = mat2.shape[2]
+            batch = mat1.shape[0]
         else:
             return False
 
-        k_padded_length = get_padded_length(k, get_alignment_size(mat1))
-        n_padded_length = get_padded_length(n, get_alignment_size(mat2))
-        m_padded_length = get_padded_length(m, get_alignment_size(mat1))
+        (
+            m_padded_length,
+            k_padded_length,
+            n_padded_length,
+        ) = get_matmul_padded_lengths(
+            mat1, mat2, m, k, n, batch
+        )
 
         # No padding needed - can't pad if there's nothing to pad
         if m_padded_length == k_padded_length == n_padded_length == 0:
@@ -272,9 +353,14 @@ def addmm_replace(
     beta: float = 1.0,
     alpha: float = 1.0,
 ) -> Tensor:
-    k_padded_length = get_padded_length(mat1.shape[1], get_alignment_size(mat1))
-    n_padded_length = get_padded_length(mat2.shape[1], get_alignment_size(mat2))
-    m_padded_length = get_padded_length(mat1.shape[0], get_alignment_size(mat1))
+    m, k, n = mat1.shape[0], mat1.shape[1], mat2.shape[1]
+    (
+        m_padded_length,
+        k_padded_length,
+        n_padded_length,
+    ) = get_matmul_padded_lengths(
+        mat1, mat2, m, k, n
+    )
     return pad_addmm(
         input,
         mat1,
@@ -481,7 +567,34 @@ def should_pad(
     _can_pad = can_pad(mat1, mat2, op, input)
     # Note that if you're tempted to insert a dynamo_timed call here, this function can
     # be called enough that the dynamo_timed overhead is not negligible.
-    return _can_pad and _should_pad(match, mat1, mat2, op, input)
+    if not _can_pad:
+        return False
+
+    with no_dispatch():
+        if op is torch.ops.aten.mm or op is torch.ops.aten.addmm:
+            m, k, n = mat1.shape[0], mat1.shape[1], mat2.shape[1]
+            batch = 1
+        elif op is torch.ops.aten.bmm:
+            batch, m, k, n = (
+                mat1.shape[0],
+                mat1.shape[1],
+                mat1.shape[2],
+                mat2.shape[2],
+            )
+        else:
+            return False
+
+        # Cached and learned decisions use the legacy alignment. Own the wider
+        # Hopper decision here so neither can replay a stale padding choice.
+        if should_use_hopper_wgmma_padding(mat1, mat2, m, k, n, batch):
+            if torch._inductor.config.force_shape_pad:
+                return True
+            m_concrete, k_concrete, n_concrete = hint_symbols((m, k, n))
+            return is_mm_compute_bound(
+                m_concrete, k_concrete, n_concrete, mat1.dtype
+            )
+
+    return _should_pad(match, mat1, mat2, op, input)
 
 
 def get_do_bench() -> Callable[[Callable[[], Any]], float]:
@@ -513,16 +626,26 @@ def _should_pad(
             m = mat1.shape[0]
             k = mat1.shape[1]
             n = mat2.shape[1]
-            k_padded_length = get_padded_length(k, get_alignment_size(mat1))
-            n_padded_length = get_padded_length(n, get_alignment_size(mat2))
-            m_padded_length = get_padded_length(m, get_alignment_size(mat1))
+            batch = 1
+            (
+                m_padded_length,
+                k_padded_length,
+                n_padded_length,
+            ) = get_matmul_padded_lengths(
+                mat1, mat2, m, k, n
+            )
         elif op is torch.ops.aten.bmm:
             m = mat1.shape[1]
             k = mat1.shape[2]
             n = mat2.shape[2]
-            k_padded_length = get_padded_length(k, get_alignment_size(mat1))
-            m_padded_length = get_padded_length(m, get_alignment_size(mat1))
-            n_padded_length = get_padded_length(n, get_alignment_size(mat2))
+            batch = mat1.shape[0]
+            (
+                m_padded_length,
+                k_padded_length,
+                n_padded_length,
+            ) = get_matmul_padded_lengths(
+                mat1, mat2, m, k, n, batch
+            )
         else:
             return False
 
@@ -870,9 +993,14 @@ def pad_mm(
 
 
 def mm_replace(mat1: Tensor, mat2: Tensor) -> Tensor:
-    k_padded_length = get_padded_length(mat1.shape[1], get_alignment_size(mat1))
-    m_padded_length = get_padded_length(mat1.shape[0], get_alignment_size(mat1))
-    n_padded_length = get_padded_length(mat2.shape[1], get_alignment_size(mat2))
+    m, k, n = mat1.shape[0], mat1.shape[1], mat2.shape[1]
+    (
+        m_padded_length,
+        k_padded_length,
+        n_padded_length,
+    ) = get_matmul_padded_lengths(
+        mat1, mat2, m, k, n
+    )
     return pad_mm(
         mat1,
         mat2,
@@ -923,9 +1051,14 @@ def pad_bmm(
 
 
 def bmm_replace(mat1: Tensor, mat2: Tensor) -> Tensor:
-    k_padded_length = get_padded_length(mat1.shape[2], get_alignment_size(mat1))
-    n_padded_length = get_padded_length(mat2.shape[2], get_alignment_size(mat2))
-    m_padded_length = get_padded_length(mat1.shape[1], get_alignment_size(mat1))
+    batch, m, k, n = mat1.shape[0], mat1.shape[1], mat1.shape[2], mat2.shape[2]
+    (
+        m_padded_length,
+        k_padded_length,
+        n_padded_length,
+    ) = get_matmul_padded_lengths(
+        mat1, mat2, m, k, n, batch
+    )
     return pad_bmm(
         mat1,
         mat2,
