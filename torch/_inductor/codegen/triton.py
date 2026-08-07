@@ -8264,12 +8264,13 @@ class TritonScheduling(SIMDScheduling):
         kernel_kwargs: dict[str, Any],
     ) -> list[TritonKernel]:
         kernels: list[TritonKernel] = [kernel]
+        scored_features = kernel.features.with_tiling_scores(kernel.tiling_scores)
         auto_persistent_multi_kernel = (
             config.triton.multi_kernel is None
             and kernel.persistent_reduction
             and not kernel_kwargs.get("override_persistent_reduction")
             and V.choices.should_use_multi_kernel_for_persistent_reduction(
-                kernel.features, kernel.cooperative_reduction
+                scored_features, kernel.cooperative_reduction
             )
         )
         if config.triton.multi_kernel in (None, 0) and not auto_persistent_multi_kernel:

@@ -4,6 +4,7 @@ import logging
 import math
 import os
 import pathlib
+import threading
 from typing import Any
 
 from torch._inductor.ir import MultiTemplateBuffer
@@ -320,6 +321,7 @@ class MultiKernelCall:
 
         self.picked_kernel = None
         self.arg_index = arg_index
+        self._init_lock = threading.Lock()
         multi_kernel = config.triton.multi_kernel
         if multi_kernel is not None and multi_kernel > 1:
             # manually force a subkernel to ease perf testing
@@ -484,33 +486,36 @@ class MultiKernelCall:
         return V.graph.multi_kernel_to_choice[multi_kernel_name]
 
     def run(self, *args, **kwargs):
-        if self.picked_kernel is None:
-            timings = self.benchmark_sub_kernels(*args, **kwargs)
-            self.picked_kernel = timings.index(min(timings))
-            k0 = self.kernels[0]
-            log.debug(
-                "pick %dth sub-kernel in %s. Size hints %s. Reduction hint %s. Timings %s",
-                self.picked_kernel,
-                [k.inductor_meta.get("kernel_name") for k in self.kernels],
-                k0.size_hints,
-                k0.inductor_meta.get("reduction_hint"),
-                timings,
-            )
-            get_metric_table("persistent_red_perf").add_row(
-                functools.partial(self._metrics_table_row, timings)
-            )
+        if self.picked_kernel is None or not self._recorded:
+            with self._init_lock:
+                if self.picked_kernel is None:
+                    timings = self.benchmark_sub_kernels(*args, **kwargs)
+                    self.picked_kernel = timings.index(min(timings))
+                    k0 = self.kernels[0]
+                    log.debug(
+                        "pick %dth sub-kernel in %s. Size hints %s. Reduction hint %s. Timings %s",
+                        self.picked_kernel,
+                        [k.inductor_meta.get("kernel_name") for k in self.kernels],
+                        k0.size_hints,
+                        k0.inductor_meta.get("reduction_hint"),
+                        timings,
+                    )
+                    get_metric_table("persistent_red_perf").add_row(
+                        functools.partial(self._metrics_table_row, timings)
+                    )
 
-            if not self.disable_cache:
-                self.store_cache()
+                    if not self.disable_cache:
+                        self.store_cache()
 
-        if not self._recorded:
-            self._recorded = True
-            picked_kernel_name = self.kernels[self.picked_kernel].inductor_meta.get(
-                "kernel_name"
-            )
-            if picked_kernel_name is None:
-                raise AssertionError("expected picked_kernel_name to not be None")
-            self.record_choice(self.multi_kernel_name, picked_kernel_name)
+                if not self._recorded:
+                    selected_kernel = self.kernels[self.picked_kernel]
+                    picked_kernel_name = selected_kernel.inductor_meta.get("kernel_name")
+                    if picked_kernel_name is None:
+                        raise AssertionError(
+                            "expected picked_kernel_name to not be None"
+                        )
+                    self.record_choice(self.multi_kernel_name, picked_kernel_name)
+                    self._recorded = True
 
         run = self.kernels[self.picked_kernel].run  # type: ignore[method-assign]
         filtered_args = self._get_filtered_args(args, self.picked_kernel)
