@@ -23,6 +23,7 @@ class ShouldPadEncodedParams(TypedDict):
     mat1_exclude_padding_time: bool
     mat2_exclude_padding_time: bool
     tf32: bool
+    padding_decision_key: tuple[int, int, int] | None
 
 
 def should_pad_params_encoder(
@@ -31,6 +32,7 @@ def should_pad_params_encoder(
     mat2: Tensor,
     op: torch._ops.OpOverloadPacket,
     input: Tensor | None = None,
+    padding_decision_key: tuple[int, int, int] | None = None,
 ) -> ShouldPadEncodedParams:
     """Encode parameters for _should_pad into a human-readable dict.
 
@@ -38,6 +40,7 @@ def should_pad_params_encoder(
     - Tensor shape, stride, dtype, and device (not the actual data)
     - Whether padding time should be excluded for mat1 and mat2
     - The operation as a string
+    - Padding-decision version and candidate alignments
 
     Args:
         match: The pattern match object
@@ -45,6 +48,7 @@ def should_pad_params_encoder(
         mat2: Second matrix tensor
         op: The operation being performed
         input: Optional input tensor for addmm
+        padding_decision_key: Version and alignments for the padded candidate
 
     Returns:
         A dict containing the encoded parameters in human-readable form
@@ -65,4 +69,5 @@ def should_pad_params_encoder(
             torch.backends.cuda.matmul.fp32_precision == "tf32"
             or torch.backends.mkldnn.fp32_precision == "tf32"
         ),
+        padding_decision_key=padding_decision_key,
     )

@@ -47,6 +47,7 @@ _skip_do_bench_times = False
 
 _HOPPER_BF16_ALIGNMENT = 16
 _HOPPER_BF16_MIN_PAD_MACS = 1 << 34
+_PAD_MM_BENCHMARK_VERSION = 2  # Version 1 did not encode candidate alignments.
 
 
 def fetch_fake_tensors(match: Match, kwarg_names: Sequence[str]) -> list[Tensor]:
@@ -441,6 +442,7 @@ def should_pad_bench_key(
     op: torch._ops.OpOverloadPacket,
     input: Tensor | None = None,
     is_base_time_key: bool = False,
+    padding_decision_key: tuple[int, int, int] | None = None,
 ) -> str:
     def tensor_key(
         t: Tensor,
@@ -467,6 +469,7 @@ def should_pad_bench_key(
         op,
         input if input is None else tensor_key(input),
         tf32_key,
+        None if is_base_time_key else padding_decision_key,
     )
 
     key = str(key)
@@ -603,20 +606,16 @@ def should_pad(
         else:
             return False
 
-        # Cached and learned decisions use the legacy alignment. Own the wider
-        # Hopper decision here so neither can replay a stale padding choice.
-        legacy_alignments = get_alignment_size(mat1), get_alignment_size(mat2)
-        if get_matmul_alignment_sizes(
+        mat1_alignment, mat2_alignment = get_matmul_alignment_sizes(
             mat1, mat2, m, k, n, batch
-        ) != legacy_alignments:
-            if torch._inductor.config.force_shape_pad:
-                return True
-            m_concrete, k_concrete, n_concrete = hint_symbols((m, k, n))
-            return is_mm_compute_bound(
-                m_concrete, k_concrete, n_concrete, mat1.dtype, mat1.device
-            )
+        )
+        padding_decision_key = (
+            _PAD_MM_BENCHMARK_VERSION,
+            mat1_alignment,
+            mat2_alignment,
+        )
 
-    return _should_pad(match, mat1, mat2, op, input)
+    return _should_pad(match, mat1, mat2, op, input, padding_decision_key)
 
 
 def get_do_bench() -> Callable[[Callable[[], Any]], float]:
@@ -636,6 +635,7 @@ def _should_pad(
     mat2: Tensor,
     op: torch._ops.OpOverloadPacket,
     input: Tensor | None = None,
+    padding_decision_key: tuple[int, int, int] | None = None,
 ) -> bool:
     """
     Determines if an operation SHOULD be padded (performance checks).
@@ -649,27 +649,36 @@ def _should_pad(
             k = mat1.shape[1]
             n = mat2.shape[1]
             batch = 1
-            (
-                m_padded_length,
-                k_padded_length,
-                n_padded_length,
-            ) = get_matmul_padded_lengths(
-                mat1, mat2, m, k, n
-            )
         elif op is torch.ops.aten.bmm:
             m = mat1.shape[1]
             k = mat1.shape[2]
             n = mat2.shape[2]
             batch = mat1.shape[0]
-            (
-                m_padded_length,
-                k_padded_length,
-                n_padded_length,
-            ) = get_matmul_padded_lengths(
-                mat1, mat2, m, k, n, batch
-            )
         else:
             return False
+
+        if padding_decision_key is None:
+            mat1_alignment, mat2_alignment = get_matmul_alignment_sizes(
+                mat1, mat2, m, k, n, batch
+            )
+            padding_decision_key = (
+                _PAD_MM_BENCHMARK_VERSION,
+                mat1_alignment,
+                mat2_alignment,
+            )
+        else:
+            version, mat1_alignment, mat2_alignment = padding_decision_key
+            if version != _PAD_MM_BENCHMARK_VERSION:
+                raise AssertionError(f"unexpected pad mm benchmark version {version}")
+
+        legacy_alignments = get_alignment_size(mat1), get_alignment_size(mat2)
+        uses_wider_alignment = (
+            mat1_alignment,
+            mat2_alignment,
+        ) != legacy_alignments
+        m_padded_length = get_padded_length(m, legacy_alignments[0])
+        k_padded_length = get_padded_length(k, mat1_alignment)
+        n_padded_length = get_padded_length(n, mat2_alignment)
 
         # Force padding when explicitly requested - performance override
         if torch._inductor.config.force_shape_pad:
@@ -696,7 +705,14 @@ def _should_pad(
 
         # We don't want to look up the cache for cases that are trivially false
         # since it does file io
-        key = should_pad_bench_key(match, mat1, mat2, op, input)
+        key = should_pad_bench_key(
+            match,
+            mat1,
+            mat2,
+            op,
+            input,
+            padding_decision_key=padding_decision_key,
+        )
 
         cached_pad = get_cached_should_pad(key)
         if cached_pad is not None:
@@ -820,7 +836,8 @@ def _should_pad(
                 fn()
 
         if (
-            torch._inductor.config.run_autoheuristic("pad_mm")
+            not uses_wider_alignment
+            and torch._inductor.config.run_autoheuristic("pad_mm")
             and op is torch.ops.aten.mm
         ):
             ah_should_pad = run_autoheuristic(
