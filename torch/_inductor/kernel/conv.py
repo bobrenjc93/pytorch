@@ -423,44 +423,14 @@ def channels_last_order(rank):
     return order
 
 
-def has_copy_free_channels_last_layout(x, weight, kwargs: ConvLayoutParams):
-    try:
-        _, layout = ir.as_storage_and_layout(x, freeze=False)
-        input_strides = ir.FlexibleLayout.stride_ordered(
-            layout.size, channels_last_order(len(layout.size))
-        )
-        if not isinstance(layout, ir.FlexibleLayout) and not (
-            V.graph.sizevars.statically_known_list_equals(
-                layout.stride, input_strides
-            )
-        ):
-            return False
-
-        output_layout = conv_layout(x, weight, None, **kwargs)
-        output_strides = ir.FlexibleLayout.stride_ordered(
-            output_layout.size, channels_last_order(len(output_layout.size))
-        )
-        return V.graph.sizevars.statically_known_list_equals(
-            output_layout.stride, output_strides
-        )
-    except NotImplementedError:
-        return False
-
-
-def convert_1x1_conv_to_mm(x, weight, bias, *, exact_channels_last=False):
+def convert_1x1_conv_to_mm(x, weight, bias):
     # special case for 1x1 convolution, which is actually just a matmul
     rank = len(weight.get_size())
     for _ in range(rank - 2):
         weight = L[aten.squeeze](weight, dim=-1)
     weight = L[aten.permute](weight, [1, 0])
 
-    if exact_channels_last:
-        channels_last_strides = ir.FlexibleLayout.stride_ordered(
-            x.get_size(), channels_last_order(rank)
-        )
-        x = ir.ExternKernel.require_exact_strides(x, channels_last_strides)
-    else:
-        x = ir.ExternKernel.require_stride_order(x, channels_last_order(rank))
+    x = ir.ExternKernel.require_stride_order(x, channels_last_order(rank))
     x_permute = list(range(rank))
     x_permute.append(x_permute.pop(1))
     x = L[aten.permute](x, x_permute)
@@ -487,7 +457,6 @@ def convolution(
     transposed: bool,
     output_padding: Sequence[int],
     groups: int,
-    _allow_default_1x1_as_mm: bool = True,
 ):
     """Lower aten.convolution using Inductor convolution kernels or fallbacks."""
     stride = tuple(stride)
@@ -571,41 +540,9 @@ def convolution(
         return req_stride_order == ir.NHWC_STRIDE_ORDER
 
     autotuning_gemm = config.max_autotune or config.max_autotune_gemm
-    legacy_1x1_as_mm = config.conv_1x1_as_mm or (
-        autotuning_gemm and channels_last_conv()
-    )
-    # FP32 convolution and matmul use independent precision controls.
-    default_cuda_1x1_as_mm = (
-        _allow_default_1x1_as_mm
-        and V.graph.is_inference
-        and device_type == "cuda"
-        and not torch.version.hip
-        and x.get_dtype() == torch.bfloat16
-        and torch.backends.cuda.matmul.allow_bf16_reduced_precision_reduction
-        and torch.backends.cuda.matmul.allow_bf16_reduced_precision_reduction_split_k
-        and ndim > 1
-        and is_ones(kernel_shape)
-        and is_ones(stride)
-        and is_zeros(padding)
-        and is_ones(dilation)
-        and not transposed
-        and is_zeros(output_padding)
-        and groups == 1
-        and bias is None
-        and V.graph.sizevars.statically_known_gt(sympy_product(x.get_size()), 0)
-        and V.graph.sizevars.statically_known_leq(
-            sympy_product((x.get_size()[0], *x.get_size()[2:])),
-            torch.iinfo(torch.int32).max,
-        )
-        and has_copy_free_channels_last_layout(x, weight, kwargs)
-    )
-
-    if default_cuda_1x1_as_mm and not legacy_1x1_as_mm:
-        # Exact strides avoid padding for ambiguous singleton dimensions.
-        return convert_1x1_conv_to_mm(x, weight, None, exact_channels_last=True)
 
     if (
-        legacy_1x1_as_mm
+        (config.conv_1x1_as_mm or (autotuning_gemm and channels_last_conv()))
         and is_ones(kernel_shape)
         and is_ones(stride)
         and is_zeros(padding)
@@ -619,9 +556,7 @@ def convolution(
 
     if bias is not None and device_type != "cpu":
         # peel off the bias, cudnn is slower with it
-        result = convolution(
-            x, weight, None, **kwargs, _allow_default_1x1_as_mm=False
-        )
+        result = convolution(x, weight, None, **kwargs)
         if V.graph.sizevars.statically_known_equals(result.get_size()[1], 0):
             # we should not add bias when the output channel is 0
             return result
