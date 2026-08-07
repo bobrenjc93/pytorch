@@ -2927,6 +2927,7 @@ class TMACompatibilityChecker:
         if auto_hopper_tma and (
             self.for_store
             or self.kernel.inside_reduction
+            or self.kernel.is_combo_kernel
             # Amortize descriptor setup only on late streams in load-heavy kernels.
             or self.kernel.num_load < config.triton.hopper_tma_min_loads
         ):
@@ -3003,6 +3004,12 @@ class TMACompatibilityChecker:
             not config.triton.use_tensor_descriptor
             and use_auto_hopper_tma(self.dtype)
         )
+        # The host descriptor builder cannot resolve runtime size arguments.
+        if auto_hopper_tma and any(
+            not isinstance(dim, (int, sympy.Integer))
+            for dim in (*block_params.shape, *block_params.strides)
+        ):
+            return False
         if auto_hopper_tma and any(
             not isinstance(dim, sympy.Symbol)
             or not any(symbol_is_type(dim, symt) for symt in TritonSymbols.block_types)
@@ -3549,15 +3556,15 @@ class TritonKernel(SIMDKernel[TritonCSEVariable]):
 
         return any(stride == 1 for stride in stride_vars)
 
-    @staticmethod
-    def _use_auto_hopper_tma(dtype: torch.dtype) -> bool:
+    def _use_auto_hopper_tma(self, dtype: torch.dtype) -> bool:
         return (
-            not config.triton.use_tensor_descriptor and use_auto_hopper_tma(dtype)
+            not self.is_combo_kernel
+            and not config.triton.use_tensor_descriptor
+            and use_auto_hopper_tma(dtype)
         )
 
-    @classmethod
-    def _use_host_tma(cls, dtype: torch.dtype) -> bool:
-        return config.triton.enable_host_side_tma or cls._use_auto_hopper_tma(dtype)
+    def _use_host_tma(self, dtype: torch.dtype) -> bool:
+        return config.triton.enable_host_side_tma or self._use_auto_hopper_tma(dtype)
 
     @staticmethod
     def _is_host_tma_materializable(

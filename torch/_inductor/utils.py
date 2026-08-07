@@ -1950,13 +1950,39 @@ def use_auto_hopper_tma(
 
     from .virtualized import V
 
+    # Auto descriptors are materialized only by the Python launcher. AOT
+    # multi-arch packaging may also retarget the generated source.
+    if (
+        V.graph.cpp_wrapper
+        or V.graph.aot_mode
+        or config.aot_inductor.emit_multi_arch_kernel
+    ):
+        return False
     if device is None:
         device = V.graph.get_current_device_or_throw()
+    if (
+        not V.graph.is_inference
+        or device.type != "cuda"
+        or torch.version.hip is not None
+    ):
+        return False
+    physical_capability = torch.cuda.get_device_capability(device)
+    physical_cc = physical_capability[0] * 10 + physical_capability[1]
+    target_cc = physical_cc
+    if config.cuda.arch is not None:
+        match = re.fullmatch(
+            r"(\d+)[a-z]?",
+            str(config.cuda.arch)
+            .removeprefix("sm_")
+            .removeprefix("compute_")
+            .replace(".", ""),
+        )
+        if match is None:
+            return False
+        target_cc = int(match.group(1))
     return (
-        V.graph.is_inference
-        and device.type == "cuda"
-        and torch.version.hip is None
-        and torch.cuda.get_device_capability(device)[0] == 9
+        physical_cc == 90
+        and target_cc == 90
         and has_triton_stable_tma_api()
         and has_triton_tensor_descriptor_host_tma()
     )
