@@ -177,6 +177,7 @@ class DeviceProperties(typing.NamedTuple):
     max_threads_per_multi_processor: int | None = None
     max_threads_per_block: int | None = None
     warp_size: int | None = None
+    shared_memory_per_multiprocessor: int | None = None
 
     @property
     def warp_size_or_default(self) -> int:
@@ -220,6 +221,9 @@ class DeviceProperties(typing.NamedTuple):
             ),
             max_threads_per_block=getattr(props, "max_threads_per_block", 1024),
             warp_size=getattr(props, "warp_size", None),
+            shared_memory_per_multiprocessor=getattr(
+                props, "shared_memory_per_multiprocessor", None
+            ),
         )
 
 

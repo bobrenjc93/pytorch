@@ -13,6 +13,7 @@ from torch.utils._sympy.value_ranges import bound_sympy
 
 from . import config
 from .codecache import write_text
+from .dependencies import MemoryDep
 from .heuristics.template import get_template_heuristic
 from .heuristics.template.triton import (
     _origami_enabled,
@@ -495,10 +496,107 @@ class InductorChoices:
         # to pick the faster one.
         if config.triton.multi_kernel:
             threshold *= 16
+        elif (
+            config.triton.multi_kernel is None
+            and reduction_hint == ReductionHint.INNER
+            and not cooperative_reduction
+        ):
+            threshold = max(
+                threshold,
+                InductorChoices._hopper_persistent_reduction_threshold(features),
+            )
 
         return V.graph.sizevars.statically_known_leq(
             features.reduction_numel, threshold
         )  # type: ignore[arg-types]
+
+    @staticmethod
+    def _hopper_persistent_reduction_threshold(
+        features: SIMDKernelFeatures,
+    ) -> int:
+        baseline = 1024
+        graph = V.graph
+        if not getattr(graph, "is_inference", False):
+            return baseline
+        if (
+            config.deterministic
+            or config.batch_invariant
+            or torch.are_deterministic_algorithms_enabled()
+        ):
+            return baseline
+        if (
+            getattr(graph, "cpp_wrapper", False)
+            and not config.triton.autotune_at_compile_time
+        ):
+            return baseline
+        if not graph.sizevars.statically_known_gt(features.reduction_numel, baseline):
+            return baseline
+
+        props = DeviceProperties.create(graph.get_current_device_or_throw())
+        if (
+            props.type != "cuda"
+            or props.major != 9
+            or props.regs_per_multiprocessor is None
+            or props.shared_memory_per_multiprocessor is None
+        ):
+            return baseline
+
+        storage_dtypes = {
+            graph.get_dtype(dep.name)
+            for node in features.reduction_nodes()
+            for dep in node.read_writes.reads
+            if isinstance(dep, MemoryDep)
+        }
+        reduction_dtypes = {
+            getattr(getattr(node.node, "data", None), "src_dtype", None)
+            for node in features.reduction_nodes()
+        }
+        if storage_dtypes != {torch.bfloat16} or reduction_dtypes != {torch.float32}:
+            return baseline
+
+        # Preserve four resident CTAs and budget the input plus three fp32 live
+        # values per reduction element. On H100 this admits 4096 bf16 elements.
+        resident_ctas = 4
+        fp32_live_values = 3
+        register_bytes = props.regs_per_multiprocessor * torch.int32.itemsize
+        resource_bytes = min(register_bytes, props.shared_memory_per_multiprocessor)
+        element_bytes = max(dtype.itemsize for dtype in storage_dtypes)
+        bytes_per_element = element_bytes + fp32_live_values * torch.float.itemsize
+        threshold = resource_bytes // resident_ctas // bytes_per_element
+        if threshold <= baseline:
+            return baseline
+        # Persistent codegen rounds RBLOCK up to a power of two, so round the
+        # resource cap down before comparing it with the reduction size.
+        threshold = 1 << (threshold.bit_length() - 1)
+        if not graph.sizevars.statically_known_leq(
+            features.reduction_numel, threshold
+        ):
+            return baseline
+
+        # Avoid increasing register pressure unless persistence also removes
+        # enough memory traffic to offset the lower occupancy.
+        memory_stats = features.memory_stats()
+        if memory_stats.persistent.memory.dim[-1].count_per_thread > 10:
+            return baseline
+        looped_bytes = graph.sizevars.optimization_hint(memory_stats.looped.memory.bytes)
+        persistent_bytes = graph.sizevars.optimization_hint(
+            memory_stats.persistent.memory.bytes
+        )
+        if looped_bytes / max(persistent_bytes, 1) < 1.3:
+            return baseline
+        return threshold
+
+    @staticmethod
+    def should_use_multi_kernel_for_persistent_reduction(
+        features: SIMDKernelFeatures,
+        cooperative_reduction: bool,
+    ) -> bool:
+        return (
+            not cooperative_reduction
+            and features.get_reduction_hint() == ReductionHint.INNER
+            and InductorChoices._hopper_persistent_reduction_threshold(features)
+            > 1024
+        )
 
     def _inner_reduction_no_split_threshold(
         self,

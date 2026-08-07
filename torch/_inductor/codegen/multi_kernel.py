@@ -4,6 +4,7 @@ import logging
 import math
 import os
 import pathlib
+import threading
 from typing import Any
 
 from torch._inductor.ir import MultiTemplateBuffer
@@ -320,9 +321,11 @@ class MultiKernelCall:
 
         self.picked_kernel = None
         self.arg_index = arg_index
-        if config.triton.multi_kernel > 1:
+        self._init_lock = threading.Lock()
+        multi_kernel = config.triton.multi_kernel
+        if multi_kernel is not None and multi_kernel > 1:
             # manually force a subkernel to ease perf testing
-            picked_by_config = config.triton.multi_kernel - 2
+            picked_by_config = multi_kernel - 2
             if picked_by_config >= len(self._kernels):
                 raise AssertionError(
                     f"expected picked_by_config < len(self._kernels), "
@@ -336,14 +339,24 @@ class MultiKernelCall:
         self._recorded = False
 
     def cache_file_path(self):
-        key = code_hash(
-            ",".join(
-                [
-                    f"{k.fn.cache_key}{k.size_hints!r}{k.triton_meta!r}"
-                    for k in self.kernels
-                ]
+        kernel_keys = []
+        for kernel in self.kernels:
+            # fn.hash caches the dependency-aware cache_key and remains readable
+            # when compile-worker pickling clears fn._hash_lock.
+            dependency_hash = (
+                getattr(kernel.fn, "hash", None) or kernel.fn.cache_key
             )
-        )
+            kernel_keys.append(
+                repr(
+                    (
+                        kernel.kernel_hash,
+                        dependency_hash,
+                        kernel.size_hints,
+                        kernel.triton_meta,
+                    )
+                )
+            )
+        key = code_hash(",".join(kernel_keys))
         _, _, path = get_path(key, "picked_kernel")
         return pathlib.Path(path)
 
@@ -473,33 +486,36 @@ class MultiKernelCall:
         return V.graph.multi_kernel_to_choice[multi_kernel_name]
 
     def run(self, *args, **kwargs):
-        if self.picked_kernel is None:
-            timings = self.benchmark_sub_kernels(*args, **kwargs)
-            self.picked_kernel = timings.index(min(timings))
-            k0 = self.kernels[0]
-            log.debug(
-                "pick %dth sub-kernel in %s. Size hints %s. Reduction hint %s. Timings %s",
-                self.picked_kernel,
-                [k.inductor_meta.get("kernel_name") for k in self.kernels],
-                k0.size_hints,
-                k0.inductor_meta.get("reduction_hint"),
-                timings,
-            )
-            get_metric_table("persistent_red_perf").add_row(
-                functools.partial(self._metrics_table_row, timings)
-            )
+        if self.picked_kernel is None or not self._recorded:
+            with self._init_lock:
+                if self.picked_kernel is None:
+                    timings = self.benchmark_sub_kernels(*args, **kwargs)
+                    self.picked_kernel = timings.index(min(timings))
+                    k0 = self.kernels[0]
+                    log.debug(
+                        "pick %dth sub-kernel in %s. Size hints %s. Reduction hint %s. Timings %s",
+                        self.picked_kernel,
+                        [k.inductor_meta.get("kernel_name") for k in self.kernels],
+                        k0.size_hints,
+                        k0.inductor_meta.get("reduction_hint"),
+                        timings,
+                    )
+                    get_metric_table("persistent_red_perf").add_row(
+                        functools.partial(self._metrics_table_row, timings)
+                    )
 
-            if not self.disable_cache:
-                self.store_cache()
+                    if not self.disable_cache:
+                        self.store_cache()
 
-        if not self._recorded:
-            self._recorded = True
-            picked_kernel_name = self.kernels[self.picked_kernel].inductor_meta.get(
-                "kernel_name"
-            )
-            if picked_kernel_name is None:
-                raise AssertionError("expected picked_kernel_name to not be None")
-            self.record_choice(self.multi_kernel_name, picked_kernel_name)
+                if not self._recorded:
+                    selected_kernel = self.kernels[self.picked_kernel]
+                    picked_kernel_name = selected_kernel.inductor_meta.get("kernel_name")
+                    if picked_kernel_name is None:
+                        raise AssertionError(
+                            "expected picked_kernel_name to not be None"
+                        )
+                    self.record_choice(self.multi_kernel_name, picked_kernel_name)
+                    self._recorded = True
 
         run = self.kernels[self.picked_kernel].run  # type: ignore[method-assign]
         filtered_args = self._get_filtered_args(args, self.picked_kernel)

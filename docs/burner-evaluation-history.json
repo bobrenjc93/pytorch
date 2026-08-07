@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "evaluations": {
+    "eval_9988a59a": {
+      "name": "Inductor bf16 CUDA inference speedup",
+      "color": "#ff6b35"
+    },
+    "eval_3ccb006f": {
+      "name": "Inductor bf16 CUDA inference accuracy",
+      "color": "#7c5cff"
+    },
+    "eval_fdff0dc0": {
+      "name": "Independent compiled-vs-eager numerics gate",
+      "color": "#00a7a5"
+    }
+  },
+  "points": [
+    {
+      "key": "base:a21035f32d15ad44ae57475d7dcc2215f69e703b",
+      "commit": "a21035f32d15ad44ae57475d7dcc2215f69e703b",
+      "recordedAt": "2026-08-07T02:53:12.327Z",
+      "label": "base a21035f",
+      "kind": "baseline",
+      "title": "main",
+      "scores": {
+        "eval_9988a59a": 46.2,
+        "eval_3ccb006f": 100,
+        "eval_fdff0dc0": 100
+      }
+    },
+    {
+      "key": "pr:7",
+      "recordedAt": "2026-08-07T02:53:12.327Z",
+      "label": "PR #7",
+      "kind": "leaf",
+      "prNumber": 7,
+      "title": "Tune persistent-reduction eligibility for bf16 H100 reductions",
+      "scores": {
+        "eval_9988a59a": 47.3,
+        "eval_3ccb006f": 100,
+        "eval_fdff0dc0": 100
+      }
+    }
+  ]
+}
