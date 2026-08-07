@@ -5344,7 +5344,13 @@ class Scheduler:
                 config.loop_ordering_after_fusion
                 or config.loop_index_inversion_in_fusion
             ):
-                nodes = self.fuse_nodes_once(nodes, is_reorder_round=True)
+                # A successful reorder fusion can make another pair legal.
+                max_rounds = 10 if config.loop_ordering_after_fusion else 1
+                for _ in range(max_rounds):
+                    old_len = len(nodes)
+                    nodes = self.fuse_nodes_once(nodes, is_reorder_round=True)
+                    if len(nodes) == old_len or len(nodes) == 1:
+                        break
             return nodes
 
     def process_grouped_nodes(self) -> None:
@@ -6340,7 +6346,11 @@ class Scheduler:
                 if self.get_fused_node(node_key2) is not node_key2:
                     raise AssertionError("expected node_key2 to be its own fused node")
 
-                if not is_speedup() or self.will_fusion_create_cycle(node1, node2):
+                if (
+                    not self.can_fuse(node_key1, node_key2, is_reorder_round)
+                    or self.will_fusion_create_cycle(node_key1, node_key2)
+                    or not is_speedup()
+                ):
                     continue
 
                 self.fuse_two_nodes(node_key1, node_key2, fused_nodes)
@@ -6880,11 +6890,9 @@ class Scheduler:
         is_reorder_round: bool,
     ) -> list[tuple[BaseSchedulerNode, BaseSchedulerNode]]:
         """
-        Find fusion opportunities. Legal pairs are sorted by self.score_fusion(),
-        followed by rejected pairs that an earlier fusion may make legal.
+        Helper to find all legal fusion opportunities, sorted by self.score_fusion()
         """
         possible_fusions = []
-        deferred_fusions = []
         seen = OrderedSet[tuple[BaseSchedulerNode, BaseSchedulerNode]]()
 
         def check_all_pairs(nodes: list[BaseSchedulerNode]) -> None:
@@ -6906,20 +6914,6 @@ class Scheduler:
                     ):
                         # foreach fusions and epilogue fusions are order dependent
                         possible_fusions.append((node2, node1))
-                    elif (
-                        is_reorder_round
-                        and config.loop_ordering_after_fusion
-                        and not node1.is_cpu()
-                        and node1.get_device() == node2.get_device()
-                        and not node1.is_template()
-                        and not node2.is_template()
-                        and node1.get_operation_names() & node2.ancestors
-                        and self.score_fusion_memory(node1, node2)
-                        < config.score_fusion_memory_threshold
-                    ):
-                        # A prior candidate can reorder this consumer and make the
-                        # vertical fusion legal when it is rechecked below.
-                        deferred_fusions.append(key)
 
         buffer_names_grouping = collections.defaultdict(list)
         for node in nodes:
@@ -6939,14 +6933,10 @@ class Scheduler:
             for node_grouping in group_grouping.values():
                 check_all_pairs(node_grouping)
 
-        # Deferred pairs are currently rejected, so they must not suppress a
-        # legal backend priority group.
         possible_fusions = self.get_possible_fusions_with_highest_priority(
             possible_fusions
         )
         possible_fusions.sort(key=self.score_fusion_key, reverse=True)
-        deferred_fusions.sort(key=self.score_fusion_key, reverse=True)
-        possible_fusions.extend(deferred_fusions)
         fusion_log.debug("found %d possible fusions", len(possible_fusions))
         return possible_fusions
 
