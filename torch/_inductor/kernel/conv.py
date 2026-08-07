@@ -423,6 +423,22 @@ def channels_last_order(rank):
     return order
 
 
+def is_copy_free_channels_last_input(x):
+    try:
+        _, layout = ir.as_storage_and_layout(x, freeze=False)
+        if isinstance(layout, ir.FlexibleLayout):
+            return True
+
+        channels_last_strides = ir.FlexibleLayout.stride_ordered(
+            layout.size, channels_last_order(len(layout.size))
+        )
+        return ir.significant_strides_equal(
+            layout.stride, channels_last_strides, layout.size
+        )
+    except NotImplementedError:
+        return False
+
+
 def convert_1x1_conv_to_mm(x, weight, bias):
     # special case for 1x1 convolution, which is actually just a matmul
     rank = len(weight.get_size())
@@ -540,9 +556,28 @@ def convolution(
         return req_stride_order == ir.NHWC_STRIDE_ORDER
 
     autotuning_gemm = config.max_autotune or config.max_autotune_gemm
+    default_cuda_1x1_as_mm = (
+        V.graph.is_inference
+        and device_type == "cuda"
+        and not torch.version.hip
+        and x.get_dtype() in (torch.bfloat16, torch.float32)
+        and is_ones(kernel_shape)
+        and is_ones(stride)
+        and is_zeros(padding)
+        and is_ones(dilation)
+        and not transposed
+        and is_zeros(output_padding)
+        and groups == 1
+        and V.graph.sizevars.statically_known_gt(sympy_product(x.get_size()), 0)
+        and is_copy_free_channels_last_input(x)
+    )
 
     if (
-        (config.conv_1x1_as_mm or (autotuning_gemm and channels_last_conv()))
+        (
+            config.conv_1x1_as_mm
+            or (autotuning_gemm and channels_last_conv())
+            or default_cuda_1x1_as_mm
+        )
         and is_ones(kernel_shape)
         and is_ones(stride)
         and is_zeros(padding)
