@@ -6880,7 +6880,7 @@ class Scheduler:
         is_reorder_round: bool,
     ) -> list[tuple[BaseSchedulerNode, BaseSchedulerNode]]:
         """
-        Helper to find all legal fusion opportunities, sorted by self.score_fusion()
+        Helper to find fusion opportunities, sorted by self.score_fusion()
         """
         possible_fusions = []
         seen = OrderedSet[tuple[BaseSchedulerNode, BaseSchedulerNode]]()
@@ -6904,6 +6904,20 @@ class Scheduler:
                     ):
                         # foreach fusions and epilogue fusions are order dependent
                         possible_fusions.append((node2, node1))
+                    elif (
+                        is_reorder_round
+                        and config.loop_ordering_after_fusion
+                        and not node1.is_cpu()
+                        and node1.get_device() == node2.get_device()
+                        and not node1.is_template()
+                        and not node2.is_template()
+                        and node1.get_operation_names() & node2.ancestors
+                        and self.score_fusion_memory(node1, node2)
+                        < config.score_fusion_memory_threshold
+                    ):
+                        # A prior candidate can reorder this consumer and make the
+                        # vertical fusion legal when it is rechecked below.
+                        possible_fusions.append(key)
 
         buffer_names_grouping = collections.defaultdict(list)
         for node in nodes:
