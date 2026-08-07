@@ -423,17 +423,25 @@ def channels_last_order(rank):
     return order
 
 
-def can_require_exact_channels_last_without_copy(x):
+def has_copy_free_channels_last_layout(x, weight, kwargs: ConvLayoutParams):
     try:
         _, layout = ir.as_storage_and_layout(x, freeze=False)
-        if isinstance(layout, ir.FlexibleLayout):
-            return True
-
-        channels_last_strides = ir.FlexibleLayout.stride_ordered(
+        input_strides = ir.FlexibleLayout.stride_ordered(
             layout.size, channels_last_order(len(layout.size))
         )
-        return ir.significant_strides_equal(
-            layout.stride, channels_last_strides, layout.size
+        if not isinstance(layout, ir.FlexibleLayout) and not (
+            V.graph.sizevars.statically_known_list_equals(
+                layout.stride, input_strides
+            )
+        ):
+            return False
+
+        output_layout = conv_layout(x, weight, None, **kwargs)
+        output_strides = ir.FlexibleLayout.stride_ordered(
+            output_layout.size, channels_last_order(len(output_layout.size))
+        )
+        return V.graph.sizevars.statically_known_list_equals(
+            output_layout.stride, output_strides
         )
     except NotImplementedError:
         return False
@@ -573,6 +581,9 @@ def convolution(
         and device_type == "cuda"
         and not torch.version.hip
         and x.get_dtype() == torch.bfloat16
+        and torch.backends.cuda.matmul.allow_bf16_reduced_precision_reduction
+        and torch.backends.cuda.matmul.allow_bf16_reduced_precision_reduction_split_k
+        and ndim > 1
         and is_ones(kernel_shape)
         and is_ones(stride)
         and is_zeros(padding)
@@ -586,7 +597,7 @@ def convolution(
             sympy_product((x.get_size()[0], *x.get_size()[2:])),
             torch.iinfo(torch.int32).max,
         )
-        and can_require_exact_channels_last_without_copy(x)
+        and has_copy_free_channels_last_layout(x, weight, kwargs)
     )
 
     if default_cuda_1x1_as_mm and not legacy_1x1_as_mm:
