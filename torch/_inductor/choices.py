@@ -524,6 +524,11 @@ class InductorChoices:
             or torch.are_deterministic_algorithms_enabled()
         ):
             return baseline
+        if (
+            getattr(graph, "cpp_wrapper", False)
+            and not config.triton.autotune_at_compile_time
+        ):
+            return baseline
         if not graph.sizevars.statically_known_gt(features.reduction_numel, baseline):
             return baseline
 

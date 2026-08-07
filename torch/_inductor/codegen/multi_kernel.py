@@ -337,14 +337,24 @@ class MultiKernelCall:
         self._recorded = False
 
     def cache_file_path(self):
-        key = code_hash(
-            ",".join(
-                [
-                    f"{k.kernel_hash or k.fn.cache_key}{k.size_hints!r}{k.triton_meta!r}"
-                    for k in self.kernels
-                ]
+        kernel_keys = []
+        for kernel in self.kernels:
+            # fn.hash caches the dependency-aware cache_key and remains readable
+            # when compile-worker pickling clears fn._hash_lock.
+            dependency_hash = (
+                getattr(kernel.fn, "hash", None) or kernel.fn.cache_key
             )
-        )
+            kernel_keys.append(
+                repr(
+                    (
+                        kernel.kernel_hash,
+                        dependency_hash,
+                        kernel.size_hints,
+                        kernel.triton_meta,
+                    )
+                )
+            )
+        key = code_hash(",".join(kernel_keys))
         _, _, path = get_path(key, "picked_kernel")
         return pathlib.Path(path)
 
