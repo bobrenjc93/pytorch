@@ -48,6 +48,7 @@ class EncodedTensor(TypedDict):
     shape: tuple[int, ...]
     stride: tuple[int, ...]
     dtype: str
+    device: str
 
 
 def _encode_tensor(t: Tensor) -> EncodedTensor:
@@ -57,10 +58,11 @@ def _encode_tensor(t: Tensor) -> EncodedTensor:
         t: PyTorch tensor to encode
 
     Returns:
-        Dict containing shape, stride, and dtype information
+        Dict containing shape, stride, dtype, and device information
     """
     return EncodedTensor(
         shape=tuple(t.shape),
         stride=tuple(t.stride()),
         dtype=str(t.dtype),
+        device=str(t.device),
     )

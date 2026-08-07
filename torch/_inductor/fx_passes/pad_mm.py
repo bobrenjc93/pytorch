@@ -71,14 +71,15 @@ def get_alignment_size(x: Tensor) -> int:
     return get_alignment_size_dtype(x.dtype)
 
 
-def should_use_hopper_wgmma_padding(
+def get_matmul_alignment_sizes(
     mat1: Tensor,
     mat2: Tensor,
     m: int | torch.SymInt,
     k: int | torch.SymInt,
     n: int | torch.SymInt,
     batch: int | torch.SymInt = 1,
-) -> bool:
+) -> tuple[int, int]:
+    legacy_alignments = get_alignment_size(mat1), get_alignment_size(mat2)
     if (
         mat1.dtype is not torch.bfloat16
         or mat2.dtype is not torch.bfloat16
@@ -89,40 +90,36 @@ def should_use_hopper_wgmma_padding(
         or torch.cuda.get_device_capability(mat1.device) != (9, 0)
         or not all(isinstance(dim, int) for dim in (batch, m, k, n))
     ):
-        return False
+        return legacy_alignments
 
     batch, m, k, n = typing.cast(tuple[int, int, int, int], (batch, m, k, n))
-    old_alignment = get_alignment_size(mat1)
-    new_m = m + get_padded_length(m, old_alignment)
-    old_k = k + get_padded_length(k, old_alignment)
-    old_n = n + get_padded_length(n, old_alignment)
+    mat1_alignment, mat2_alignment = legacy_alignments
+    new_m = m + get_padded_length(m, mat1_alignment)
+    old_k = k + get_padded_length(k, mat1_alignment)
+    old_n = n + get_padded_length(n, mat2_alignment)
     new_k = k + get_padded_length(k, _HOPPER_BF16_ALIGNMENT)
     new_n = n + get_padded_length(n, _HOPPER_BF16_ALIGNMENT)
-    # Only widen shapes already eligible under the legacy alignment.
-    if (old_k == k and old_n == n) or (old_k == new_k and old_n == new_n):
-        return False
+    # Do not turn a legacy-aligned axis into another padding allocation.
+    widen_k = old_k != k and old_k != new_k
+    widen_n = old_n != n and old_n != new_n
+    if not widen_k and not widen_n:
+        return legacy_alignments
 
     # Keep the extra tensor-core work below 1%, and require about 34 GFLOPs so
     # the fixed cost of launching the padding kernels is amortized on Hopper.
     original_macs = batch * m * k * n
-    padded_macs = batch * new_m * new_k * new_n
+    padded_k = new_k if widen_k else old_k
+    padded_n = new_n if widen_n else old_n
+    padded_macs = batch * new_m * padded_k * padded_n
+    if (
+        original_macs < _HOPPER_BF16_MIN_PAD_MACS
+        or padded_macs * 100 > original_macs * 101
+    ):
+        return legacy_alignments
     return (
-        original_macs >= _HOPPER_BF16_MIN_PAD_MACS
-        and padded_macs * 100 <= original_macs * 101
+        _HOPPER_BF16_ALIGNMENT if widen_k else mat1_alignment,
+        _HOPPER_BF16_ALIGNMENT if widen_n else mat2_alignment,
     )
-
-
-def get_matmul_alignment_sizes(
-    mat1: Tensor,
-    mat2: Tensor,
-    m: int | torch.SymInt,
-    k: int | torch.SymInt,
-    n: int | torch.SymInt,
-    batch: int | torch.SymInt = 1,
-) -> tuple[int, int]:
-    if should_use_hopper_wgmma_padding(mat1, mat2, m, k, n, batch):
-        return _HOPPER_BF16_ALIGNMENT, _HOPPER_BF16_ALIGNMENT
-    return get_alignment_size(mat1), get_alignment_size(mat2)
 
 
 def get_matmul_padded_lengths(
@@ -373,7 +370,13 @@ def addmm_replace(
     )
 
 
-def is_mm_compute_bound(M: int, K: int, N: int, dtype: torch.dtype) -> bool:
+def is_mm_compute_bound(
+    M: int,
+    K: int,
+    N: int,
+    dtype: torch.dtype,
+    device: torch.device | None = None,
+) -> bool:
     denominator = M * K + N * K + M * N
     if denominator == 0:
         return False
@@ -384,15 +387,19 @@ def is_mm_compute_bound(M: int, K: int, N: int, dtype: torch.dtype) -> bool:
         dtype is torch.bfloat16
         and K > M
         and K > N
-        and (torch.xpu.is_available() or torch.cuda.get_device_capability() < (9, 0))
+        and (
+            (device is None and torch.xpu.is_available())
+            or (device is not None and device.type == "xpu")
+            or torch.cuda.get_device_capability(device) < (9, 0)
+        )
     ):  # doesn't repro on h100s:
         return True
 
     # Fails with AMD
     try:
-        machine_balance = (
-            1000 * utils.get_device_tflops(dtype)
-        ) / utils.get_gpu_dram_gbps()
+        machine_balance = (1000 * utils.get_device_tflops(dtype, device)) / (
+            utils.get_gpu_dram_gbps(device)
+        )
     except Exception:
         return True
 
@@ -435,8 +442,10 @@ def should_pad_bench_key(
     input: Tensor | None = None,
     is_base_time_key: bool = False,
 ) -> str:
-    def tensor_key(t: Tensor) -> tuple[torch.Size, tuple[int, ...], torch.dtype]:
-        return (t.shape, t.stride(), t.dtype)
+    def tensor_key(
+        t: Tensor,
+    ) -> tuple[torch.Size, tuple[int, ...], torch.dtype, torch.device]:
+        return (t.shape, t.stride(), t.dtype, t.device)
 
     tf32_key = (
         None
@@ -540,7 +549,13 @@ def is_padded_faster(key: str, ori_time: float, pad_time: float) -> bool:
     return padded_is_faster
 
 
-def should_pad_mm_bf16(dtype: torch.dtype, M: int, N: int, K: int) -> bool:
+def should_pad_mm_bf16(
+    dtype: torch.dtype,
+    M: int,
+    N: int,
+    K: int,
+    device: torch.device | None = None,
+) -> bool:
     # always force pad for mm with bf16 when the following are satisfied to avoid perf regression
     large_k_threshold_to_pad = torch._inductor.config.post_grad_fusion_options[
         "pad_aten_mm_pass"
@@ -551,7 +566,11 @@ def should_pad_mm_bf16(dtype: torch.dtype, M: int, N: int, K: int) -> bool:
         and K > N
         and N % 2 == 1
         and K >= large_k_threshold_to_pad
-        and (torch.xpu.is_available() or torch.cuda.get_device_capability() < (9, 0))
+        and (
+            (device is None and torch.xpu.is_available())
+            or (device is not None and device.type == "xpu")
+            or torch.cuda.get_device_capability(device) < (9, 0)
+        )
     ):  # doesn't repro on h100s:
         return True
     return False
@@ -586,12 +605,15 @@ def should_pad(
 
         # Cached and learned decisions use the legacy alignment. Own the wider
         # Hopper decision here so neither can replay a stale padding choice.
-        if should_use_hopper_wgmma_padding(mat1, mat2, m, k, n, batch):
+        legacy_alignments = get_alignment_size(mat1), get_alignment_size(mat2)
+        if get_matmul_alignment_sizes(
+            mat1, mat2, m, k, n, batch
+        ) != legacy_alignments:
             if torch._inductor.config.force_shape_pad:
                 return True
             m_concrete, k_concrete, n_concrete = hint_symbols((m, k, n))
             return is_mm_compute_bound(
-                m_concrete, k_concrete, n_concrete, mat1.dtype
+                m_concrete, k_concrete, n_concrete, mat1.dtype, mat1.device
             )
 
     return _should_pad(match, mat1, mat2, op, input)
@@ -660,12 +682,16 @@ def _should_pad(
         # Performance heuristic for bf16 large K scenarios
         if (
             "pad_aten_mm_pass" in torch._inductor.config.post_grad_fusion_options
-            and should_pad_mm_bf16(mat1.dtype, m_concrete, n_concrete, k_concrete)
+            and should_pad_mm_bf16(
+                mat1.dtype, m_concrete, n_concrete, k_concrete, mat1.device
+            )
         ):
             return True
 
         # Check if operation is compute bound (performance check)
-        if not is_mm_compute_bound(m_concrete, k_concrete, n_concrete, mat1.dtype):
+        if not is_mm_compute_bound(
+            m_concrete, k_concrete, n_concrete, mat1.dtype, mat1.device
+        ):
             return False
 
         # We don't want to look up the cache for cases that are trivially false

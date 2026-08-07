@@ -35,7 +35,7 @@ def should_pad_params_encoder(
     """Encode parameters for _should_pad into a human-readable dict.
 
     This encoder extracts only the information needed for caching:
-    - Tensor shape, stride, and dtype (not the actual data)
+    - Tensor shape, stride, dtype, and device (not the actual data)
     - Whether padding time should be excluded for mat1 and mat2
     - The operation as a string
 

@@ -2985,20 +2985,56 @@ def get_backend_num_stages() -> int:
     return options.get("num_stages", 2 if torch.version.hip else 3)
 
 
+def _get_gpu_device(device: torch.device | None) -> torch.device | None:
+    if device is None:
+        if torch.cuda.is_available():
+            device = torch.device("cuda")
+        elif torch.xpu.is_available():
+            device = torch.device("xpu")
+        else:
+            return None
+    if device.index is not None:
+        return device
+    device_interface = getattr(torch, device.type, None)
+    if device_interface is None or not hasattr(device_interface, "current_device"):
+        return device
+    return torch.device(device.type, device_interface.current_device())
+
+
+def _get_gpu_device_name(device: torch.device | None) -> str | None:
+    if device is None:
+        return None
+    if device.type == "cuda":
+        return torch.cuda.get_device_name(device)
+    if device.type == "xpu":
+        return torch.xpu.get_device_name(device)
+    return None
+
+
+def get_device_tflops(
+    dtype: torch.dtype, device: torch.device | None = None
+) -> float:
+    return _get_device_tflops(dtype, _get_gpu_device(device))
+
+
 @functools.cache
-def get_device_tflops(dtype: torch.dtype) -> float:
+def _get_device_tflops(
+    dtype: torch.dtype, device: torch.device | None
+) -> float:
     """
     We don't want to throw errors in this function. First check to see if the device is in device_info.py,
     then fall back to the inaccurate triton estimation.
     """
     is_tf32 = torch.backends.cuda.matmul.fp32_precision == "tf32"
-    if torch.xpu.is_available():
+    if device is not None and device.type == "xpu":
         is_tf32 = torch.backends.mkldnn.allow_tf32
-    ds_tops = datasheet_tops(dtype, is_tf32=is_tf32)
+    ds_tops = datasheet_tops(
+        dtype, is_tf32=is_tf32, device_name=_get_gpu_device_name(device)
+    )
     if ds_tops is not None:
         return ds_tops
 
-    if not torch.cuda.is_available():
+    if device is None or device.type != "cuda":
         log.warning(
             "get_device_tflops: no Triton fallback available for non-CUDA devices. "
             "Returning 0.0; roofline estimates will use memory bandwidth only."
@@ -3007,10 +3043,7 @@ def get_device_tflops(dtype: torch.dtype) -> float:
 
     from triton.testing import get_max_simd_tflops, get_max_tensorcore_tflops
 
-    SM80OrLater = torch.cuda.is_available() and torch.cuda.get_device_capability() >= (
-        8,
-        0,
-    )
+    SM80OrLater = torch.cuda.get_device_capability(device) >= (8, 0)
 
     if dtype not in (torch.float16, torch.bfloat16, torch.float32):
         raise AssertionError(
@@ -3019,41 +3052,47 @@ def get_device_tflops(dtype: torch.dtype) -> float:
 
     if inspect.signature(get_max_simd_tflops).parameters.get("clock_rate"):
         # Triton API change in https://github.com/triton-lang/triton/pull/2293
-        from torch._utils_internal import max_clock_rate
+        sm_clock = torch.cuda.get_device_properties(device).clock_rate / 1000
+        with torch.cuda.device(device):
+            if dtype in (torch.float16, torch.bfloat16) and SM80OrLater:
+                return get_max_tensorcore_tflops(dtype, sm_clock, device.index)
 
-        sm_clock = max_clock_rate()
-        if dtype in (torch.float16, torch.bfloat16) and SM80OrLater:
-            return get_max_tensorcore_tflops(dtype, sm_clock)
-
-        if torch.backends.cuda.matmul.fp32_precision == "tf32":
-            return get_max_tensorcore_tflops(torch.float32, sm_clock)
-        else:
-            return get_max_simd_tflops(torch.float32, sm_clock)
+            if torch.backends.cuda.matmul.fp32_precision == "tf32":
+                return get_max_tensorcore_tflops(
+                    torch.float32, sm_clock, device.index
+                )
+            else:
+                return get_max_simd_tflops(torch.float32, sm_clock, device.index)
     else:
-        if dtype in (torch.float16, torch.bfloat16) and SM80OrLater:
-            return get_max_tensorcore_tflops(dtype)
+        with torch.cuda.device(device):
+            if dtype in (torch.float16, torch.bfloat16) and SM80OrLater:
+                return get_max_tensorcore_tflops(dtype)
 
-        if torch.backends.cuda.matmul.fp32_precision == "tf32":
-            return get_max_tensorcore_tflops(torch.float32)
-        else:
-            return get_max_simd_tflops(torch.float32)
+            if torch.backends.cuda.matmul.fp32_precision == "tf32":
+                return get_max_tensorcore_tflops(torch.float32)
+            else:
+                return get_max_simd_tflops(torch.float32)
+
+
+def get_gpu_dram_gbps(device: torch.device | None = None) -> float:
+    return _get_gpu_dram_gbps(_get_gpu_device(device))
 
 
 @functools.cache
-def get_gpu_dram_gbps() -> float:
+def _get_gpu_dram_gbps(device: torch.device | None) -> float:
     """
     We don't want to throw errors in this function. First check to see if the device is in device_info.py,
     then fall back to the inaccurate triton estimation.
     """
     from .analysis.device_info import datasheet_dram_bw_gbs
 
-    ds_bw = datasheet_dram_bw_gbs()
+    ds_bw = datasheet_dram_bw_gbs(_get_gpu_device_name(device))
     if ds_bw is not None:
         return ds_bw
 
     from triton.testing import get_dram_gbps
 
-    return get_dram_gbps()
+    return get_dram_gbps(None if device is None else device.index)
 
 
 def get_gpu_shared_memory() -> int:
