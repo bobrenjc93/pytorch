@@ -7722,7 +7722,8 @@ class ExternKernel(InputsKernel):
             return x
 
         view = x.data if isinstance(x, TensorBox) else x
-        if isinstance(view, View):
+        # SliceView subclasses View but is not a reshape.
+        if type(view) is View:
             output_layout = FlexibleLayout(
                 view.get_device_or_error(),
                 view.get_dtype(),
