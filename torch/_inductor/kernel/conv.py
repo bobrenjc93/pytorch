@@ -423,7 +423,7 @@ def channels_last_order(rank):
     return order
 
 
-def is_copy_free_channels_last_input(x):
+def can_require_exact_channels_last_without_copy(x):
     try:
         _, layout = ir.as_storage_and_layout(x, freeze=False)
         if isinstance(layout, ir.FlexibleLayout):
@@ -439,14 +439,20 @@ def is_copy_free_channels_last_input(x):
         return False
 
 
-def convert_1x1_conv_to_mm(x, weight, bias):
+def convert_1x1_conv_to_mm(x, weight, bias, *, exact_channels_last=False):
     # special case for 1x1 convolution, which is actually just a matmul
     rank = len(weight.get_size())
     for _ in range(rank - 2):
         weight = L[aten.squeeze](weight, dim=-1)
     weight = L[aten.permute](weight, [1, 0])
 
-    x = ir.ExternKernel.require_stride_order(x, channels_last_order(rank))
+    if exact_channels_last:
+        channels_last_strides = ir.FlexibleLayout.stride_ordered(
+            x.get_size(), channels_last_order(rank)
+        )
+        x = ir.ExternKernel.require_exact_strides(x, channels_last_strides)
+    else:
+        x = ir.ExternKernel.require_stride_order(x, channels_last_order(rank))
     x_permute = list(range(rank))
     x_permute.append(x_permute.pop(1))
     x = L[aten.permute](x, x_permute)
@@ -473,6 +479,7 @@ def convolution(
     transposed: bool,
     output_padding: Sequence[int],
     groups: int,
+    _allow_default_1x1_as_mm: bool = True,
 ):
     """Lower aten.convolution using Inductor convolution kernels or fallbacks."""
     stride = tuple(stride)
@@ -556,11 +563,16 @@ def convolution(
         return req_stride_order == ir.NHWC_STRIDE_ORDER
 
     autotuning_gemm = config.max_autotune or config.max_autotune_gemm
+    legacy_1x1_as_mm = config.conv_1x1_as_mm or (
+        autotuning_gemm and channels_last_conv()
+    )
+    # FP32 convolution and matmul use independent precision controls.
     default_cuda_1x1_as_mm = (
-        V.graph.is_inference
+        _allow_default_1x1_as_mm
+        and V.graph.is_inference
         and device_type == "cuda"
         and not torch.version.hip
-        and x.get_dtype() in (torch.bfloat16, torch.float32)
+        and x.get_dtype() == torch.bfloat16
         and is_ones(kernel_shape)
         and is_ones(stride)
         and is_zeros(padding)
@@ -568,16 +580,21 @@ def convolution(
         and not transposed
         and is_zeros(output_padding)
         and groups == 1
+        and bias is None
         and V.graph.sizevars.statically_known_gt(sympy_product(x.get_size()), 0)
-        and is_copy_free_channels_last_input(x)
+        and V.graph.sizevars.statically_known_leq(
+            sympy_product((x.get_size()[0], *x.get_size()[2:])),
+            torch.iinfo(torch.int32).max,
+        )
+        and can_require_exact_channels_last_without_copy(x)
     )
 
+    if default_cuda_1x1_as_mm and not legacy_1x1_as_mm:
+        # Exact strides avoid padding for ambiguous singleton dimensions.
+        return convert_1x1_conv_to_mm(x, weight, None, exact_channels_last=True)
+
     if (
-        (
-            config.conv_1x1_as_mm
-            or (autotuning_gemm and channels_last_conv())
-            or default_cuda_1x1_as_mm
-        )
+        legacy_1x1_as_mm
         and is_ones(kernel_shape)
         and is_ones(stride)
         and is_zeros(padding)
@@ -591,7 +608,9 @@ def convolution(
 
     if bias is not None and device_type != "cpu":
         # peel off the bias, cudnn is slower with it
-        result = convolution(x, weight, None, **kwargs)
+        result = convolution(
+            x, weight, None, **kwargs, _allow_default_1x1_as_mm=False
+        )
         if V.graph.sizevars.statically_known_equals(result.get_size()[1], 0):
             # we should not add bias when the output channel is 0
             return result
