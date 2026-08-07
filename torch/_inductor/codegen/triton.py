@@ -91,6 +91,7 @@ from ..utils import (
     triton_type,
     triton_version_uses_attrs_dict,
     upcast_compute_type,
+    use_auto_hopper_tma,
 )
 from ..virtualized import _ops as ops, ReductionType, StoreMode, V
 from ..wrapper_benchmark import get_kernel_category_by_source_code
@@ -2919,6 +2920,18 @@ class TMACompatibilityChecker:
         if self.force:
             return True
 
+        auto_hopper_tma = (
+            not config.triton.use_tensor_descriptor
+            and use_auto_hopper_tma(self.dtype)
+        )
+        if auto_hopper_tma and (
+            self.for_store
+            or self.kernel.inside_reduction
+            # Amortize descriptor setup only on late streams in load-heavy kernels.
+            or self.kernel.num_load < config.triton.hopper_tma_min_loads
+        ):
+            return False
+
         device_type = V.graph.get_current_device_or_throw().type
         if device_type == "cpu":
             if not (
@@ -2941,11 +2954,11 @@ class TMACompatibilityChecker:
                 (
                     device_type == "cuda"
                     and torch.cuda.get_device_capability()[0] >= 9
-                    and config.assume_aligned_inputs
+                    and (config.assume_aligned_inputs or auto_hopper_tma)
                 )
                 or device_type == "xpu"
             )
-            and config.triton.use_tensor_descriptor
+            and (config.triton.use_tensor_descriptor or auto_hopper_tma)
             and has_triton_stable_tma_api()
         ):
             log.debug(
@@ -2986,6 +2999,22 @@ class TMACompatibilityChecker:
         If force, we allow relying on symbolic hints equivalent
         to what we check for Triton templates.
         """
+        auto_hopper_tma = (
+            not config.triton.use_tensor_descriptor
+            and use_auto_hopper_tma(self.dtype)
+        )
+        if auto_hopper_tma and any(
+            not isinstance(dim, sympy.Symbol)
+            or not any(symbol_is_type(dim, symt) for symt in TritonSymbols.block_types)
+            for dim in block_params.block_shape
+        ):
+            return False
+        if auto_hopper_tma and not V.graph.sizevars.statically_known_geq(
+            sympy_product(block_params.shape) * self.dtype.itemsize,
+            config.triton.hopper_tma_min_bytes,
+        ):
+            return False
+
         device_type = V.graph.get_current_device_or_throw().type
         if self.force:
             strides = [
@@ -3521,6 +3550,16 @@ class TritonKernel(SIMDKernel[TritonCSEVariable]):
         return any(stride == 1 for stride in stride_vars)
 
     @staticmethod
+    def _use_auto_hopper_tma(dtype: torch.dtype) -> bool:
+        return (
+            not config.triton.use_tensor_descriptor and use_auto_hopper_tma(dtype)
+        )
+
+    @classmethod
+    def _use_host_tma(cls, dtype: torch.dtype) -> bool:
+        return config.triton.enable_host_side_tma or cls._use_auto_hopper_tma(dtype)
+
+    @staticmethod
     def _is_host_tma_materializable(
         indexing: TensorDescriptorOptions,
         dtype: torch.dtype | None = None,
@@ -3541,7 +3580,10 @@ class TritonKernel(SIMDKernel[TritonCSEVariable]):
     def _prescan_host_tma_materializability(self) -> None:
         """Populate _host_tma_non_materializable_buffers with buffers that
         can't be expressed as a single host-side TMA descriptor."""
-        if not config.triton.use_tensor_descriptor:
+        if (
+            not config.triton.use_tensor_descriptor
+            and not config.triton.enable_hopper_tma
+        ):
             # Host TMA is off; mark as scanned (no bad buffers, won't change).
             self._host_tma_non_materializable_buffers = OrderedSet()
             return
@@ -3599,7 +3641,9 @@ class TritonKernel(SIMDKernel[TritonCSEVariable]):
         statically known to be a multiple of TMA_ALIGNMENT is treated as
         misaligned (conservative).
         """
-        if not config.triton.use_tensor_descriptor:
+        if not (
+            config.triton.use_tensor_descriptor or self._use_auto_hopper_tma(dtype)
+        ):
             return False
         if V.graph.get_current_device_or_throw().type != "cuda":
             return False
@@ -3609,6 +3653,10 @@ class TritonKernel(SIMDKernel[TritonCSEVariable]):
             if real_name != name:
                 buf = V.graph.try_get_buffer(real_name)
         if buf is None:
+            if self._use_auto_hopper_tma(dtype):
+                self._host_tma_non_materializable.add(var)
+                self.host_tma_descriptor_args.pop(var, None)
+                return True
             return False
         layout_offset = getattr(buf.get_layout(), "offset", 0)
         if layout_offset == 0:
@@ -4274,6 +4322,7 @@ class TritonKernel(SIMDKernel[TritonCSEVariable]):
         """
         check = indexing.boundary_check()
         if isinstance(indexing, TensorDescriptorOptions):
+            use_host_tma = self._use_host_tma(V.graph.get_dtype(name))
             if check and other:
                 # The TMA API currently does not support padding values
                 # but the default is zero
@@ -4286,7 +4335,7 @@ class TritonKernel(SIMDKernel[TritonCSEVariable]):
             # no in-kernel tl.make_tensor_descriptor is emitted for it.
             if (
                 has_triton_stable_tma_api()
-                and config.triton.enable_host_side_tma
+                and use_host_tma
                 and not indexing.can_lift
                 and indexing.constant_offset == 0
                 and var not in self._host_tma_non_materializable
@@ -4299,7 +4348,7 @@ class TritonKernel(SIMDKernel[TritonCSEVariable]):
             # non-materializable and fall through to device-side TMA below.
             elif (
                 has_triton_stable_tma_api()
-                and config.triton.enable_host_side_tma
+                and use_host_tma
                 and not indexing.can_lift
                 and indexing.constant_offset != 0
             ):
@@ -4752,14 +4801,23 @@ class TritonKernel(SIMDKernel[TritonCSEVariable]):
         dtype = V.graph.get_dtype(name)
         uses_uint8_storage = use_uint8_triton_storage_for_cuda_float8_e4m3fn(dtype, var)
 
-        if config.triton.enable_host_side_tma:
+        use_auto_tma = self._use_auto_hopper_tma(dtype)
+        use_host_tma = self._use_host_tma(dtype)
+        if use_host_tma:
             if self._host_tma_non_materializable_buffers is None:
                 self._prescan_host_tma_materializability()
             if name in (self._host_tma_non_materializable_buffers or ()):
                 self._host_tma_non_materializable.add(var)
 
-        skip_tma = config.triton.enable_host_side_tma and self._check_buffer_alignment(
-            name, var, dtype
+        skip_tma = use_host_tma and (
+            (
+                use_auto_tma
+                and (
+                    name in self.args.inplace_buffers
+                    or var in self._host_tma_non_materializable
+                )
+            )
+            or self._check_buffer_alignment(name, var, dtype)
         )
         tma_checker = (
             None
@@ -4777,6 +4835,12 @@ class TritonKernel(SIMDKernel[TritonCSEVariable]):
             block_ptr=True,
             tma_compatibility_checker=tma_checker,
         )
+        if use_auto_tma and isinstance(indexing, TensorDescriptorOptions) and (
+            indexing.can_lift
+            or indexing.constant_offset != 0
+            or not self._is_host_tma_materializable(indexing, dtype)
+        ):
+            indexing = self.indexing(index, block_ptr=True)
 
         if isinstance(indexing, IndexingOptions) and self._has_stride1_on_rdim(
             indexing.index
@@ -6085,6 +6149,8 @@ class TritonKernel(SIMDKernel[TritonCSEVariable]):
         self._handle_pdl_before_access(self.post_loop_store, var)
 
         if isinstance(indexing, (BlockPtrOptions, TensorDescriptorOptions)):
+            if isinstance(indexing, TensorDescriptorOptions):
+                self._emitted_device_tma = True
             self.post_loop_store.writeline(
                 DeferredLine(
                     name,
@@ -7242,15 +7308,18 @@ class TritonKernel(SIMDKernel[TritonCSEVariable]):
         self.inductor_meta = inductor_meta
 
         self.codegen_prologue(self.body)
-        self._prescan_host_tma_materializability()
+        if config.triton.use_tensor_descriptor or config.triton.enable_host_side_tma:
+            self._prescan_host_tma_materializability()
         self.codegen_body()
 
-        # TMA probing sets tma_min_block_sizes even when the access falls back
-        # to tl.load; a stale constraint regresses non-TMA kernels.
-        if (
-            not self.inductor_meta.get("host_tma_descriptor_args")
-            and not self._emitted_device_tma
+        if self.tma_min_block_sizes and (
+            self.inductor_meta.get("host_tma_descriptor_args")
+            or self._emitted_device_tma
         ):
+            self.inductor_meta["tma_min_block_sizes"] = self.tma_min_block_sizes
+        else:
+            # TMA probing can set minimums before the access falls back to tl.load.
+            # Do not constrain heuristics for a kernel that emits no descriptors.
             self.inductor_meta.pop("tma_min_block_sizes", None)
 
         self._filter_pdl(self.body)

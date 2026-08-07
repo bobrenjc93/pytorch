@@ -2207,6 +2207,17 @@ class triton:
     # can be satisfied, along with any existing requirements for index expressions
     use_tensor_descriptor = False
 
+    # Automatically use host-side tensor descriptors for eligible bfloat16
+    # inference loads on Hopper NVIDIA GPUs. This is intentionally
+    # narrower than use_tensor_descriptor, which remains the opt-in switch for
+    # general tensor descriptor codegen.
+    enable_hopper_tma = (
+        os.environ.get("TORCHINDUCTOR_ENABLE_HOPPER_TMA", "1") == "1"
+    )
+    hopper_tma_min_bytes = 16 * 1024 * 1024
+    # Number of earlier loads required before a descriptor-backed load.
+    hopper_tma_min_loads = 5
+
     # (Experimental)
     # Whether to allow reordering tensor descriptor matches with descending
     # strides, at the expense of transposing values after load / before store.

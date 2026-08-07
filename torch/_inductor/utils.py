@@ -1936,6 +1936,32 @@ def use_triton_template(
     )
 
 
+def use_auto_hopper_tma(
+    dtype: torch.dtype, device: torch.device | None = None
+) -> bool:
+    """Whether the current graph can use the conservative Hopper TMA path."""
+    if not config.triton.enable_hopper_tma or dtype != torch.bfloat16:
+        return False
+
+    from torch.utils._triton import (
+        has_triton_stable_tma_api,
+        has_triton_tensor_descriptor_host_tma,
+    )
+
+    from .virtualized import V
+
+    if device is None:
+        device = V.graph.get_current_device_or_throw()
+    return (
+        V.graph.is_inference
+        and device.type == "cuda"
+        and torch.version.hip is None
+        and torch.cuda.get_device_capability(device)[0] == 9
+        and has_triton_stable_tma_api()
+        and has_triton_tensor_descriptor_host_tma()
+    )
+
+
 def can_use_tma(
     *matrices: IRNode, output_layout: Layout | None = None, add_guards: bool = False
 ) -> bool:
@@ -2097,7 +2123,13 @@ def _descriptor_shape_fits_in_int32(
 def use_triton_tma_template(
     *matrices: IRNode, output_layout: Layout, add_guards: bool = False
 ) -> bool:
-    if not config.triton.enable_persistent_tma_matmul:
+    auto_hopper_tma = (
+        bool(matrices)
+        and output_layout.dtype == torch.bfloat16
+        and all(matrix.get_dtype() == torch.bfloat16 for matrix in matrices)
+        and use_auto_hopper_tma(torch.bfloat16, matrices[0].get_device())
+    )
+    if not config.triton.enable_persistent_tma_matmul and not auto_hopper_tma:
         return False
     if not all(len(m.get_size()) == 2 for m in matrices):
         return False

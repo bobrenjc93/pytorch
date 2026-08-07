@@ -4,7 +4,7 @@ from functools import cached_property
 from typing import Any
 from typing_extensions import Unpack
 
-from ..utils import is_rocm
+from ..utils import is_rocm, TMA_DESCRIPTOR_SIZE
 from .triton_compat import ASTSource, CompiledKernel, knobs as triton_knobs
 from .triton_helpers import get_constexprs
 
@@ -12,15 +12,45 @@ from .triton_helpers import get_constexprs
 @functools.lru_cache(None)
 def _tma_arg_helpers():
     """Cached (make_arg, TensorDescriptor) for host-side TMA arg expansion.
-    make_arg(arg, metadata) -> [CUtensorMap, *shape, *strides]; the nvidia
-    backend's make_tensordesc_arg ignores its third arg, so we pass None."""
+    make_arg(arg, metadata) -> [CUtensorMap, *shape, *strides]."""
+    import inspect
+
     from triton.backends.nvidia.driver import make_tensordesc_arg
     from triton.tools.tensor_descriptor import TensorDescriptor
 
-    def make_arg(arg, metadata):
-        return make_tensordesc_arg(arg, metadata, None)
+    num_params = len(inspect.signature(make_tensordesc_arg).parameters)
+    if num_params == 2:
+        make_arg = make_tensordesc_arg
+    elif num_params == 3:
+
+        def make_arg(arg, metadata):
+            return make_tensordesc_arg(arg, metadata, None)
+
+    else:
+        raise RuntimeError(
+            f"Unsupported make_tensordesc_arg signature: {num_params} parameters"
+        )
 
     return make_arg, TensorDescriptor
+
+
+class _TMADescriptorProxy:
+    """Expose Triton's trailing CUtensorMap through the static launcher ABI.
+
+    CUDA versions give CUtensorMap different alignments, so Triton's container
+    can change size while its final 128-byte driver ABI value remains stable.
+    """
+
+    def __init__(self, descriptor: object) -> None:
+        self.descriptor = descriptor
+
+    def tma_desc_cpu_ptr(self) -> int:
+        object_size = getattr(type(self.descriptor), "__basicsize__", 0)
+        if object_size < TMA_DESCRIPTOR_SIZE:
+            raise RuntimeError(
+                f"Invalid CUtensorMap container size: {object_size} bytes"
+            )
+        return id(self.descriptor) + object_size - TMA_DESCRIPTOR_SIZE
 
 
 class StaticallyLaunchedTritonKernel:
@@ -320,7 +350,10 @@ class StaticallyLaunchedTritonKernel:
             if isinstance(arg, TensorDescriptor):
                 per_desc_meta = meta[td_idx] if meta else None
                 td_idx += 1
-                out.extend(make_tensordesc_arg(arg, per_desc_meta))
+                expanded = list(make_tensordesc_arg(arg, per_desc_meta))
+                if per_desc_meta is not None:
+                    expanded[0] = _TMADescriptorProxy(expanded[0])
+                out.extend(expanded)
             else:
                 out.append(arg)
         return tuple(out)
