@@ -3914,6 +3914,55 @@ class View(GenericView):
         # View not possible with current strides
         return handle_unbacked_or_dynamic_reshape(x)
 
+    def try_reinterpret_with_layout(
+        self, output_layout: FixedLayout
+    ) -> ReinterpretView | None:
+        """Transfer a requested layout through this view to a flexible producer."""
+        if not is_storage_and_layout(self.data):
+            return None
+
+        storage, input_layout = as_storage_and_layout(self.data, freeze=False)
+        if not isinstance(input_layout, FlexibleLayout):
+            return None
+        output_layout = FixedLayout(
+            output_layout.device,
+            output_layout.dtype,
+            output_layout.size,
+            output_layout.stride,
+            input_layout.offset,
+            input_layout.is_pinned,
+        )
+
+        from torch._subclasses.fake_impls import _compute_stride
+
+        sizevars = V.graph.sizevars
+        output_size = sizevars.to_symints_or_ints(self.get_size())
+        output_stride = sizevars.to_symints_or_ints(output_layout.stride)
+        input_size = sizevars.to_symints_or_ints(self.data.get_size())
+        size_oblivious = bool(
+            free_unbacked_symbols(self.get_size())
+            or free_unbacked_symbols(self.data.get_size())
+            or free_unbacked_symbols(output_layout.stride)
+        )
+        try:
+            input_stride = _compute_stride(
+                output_size,
+                output_stride,
+                input_size,
+                size_oblivious=size_oblivious,
+            )
+        except GuardOnDataDependentSymNode:
+            return None
+        if input_stride is None:
+            return None
+
+        input_stride_expr = [
+            stride.node.expr if hasattr(stride, "node") else sympy.Integer(stride)
+            for stride in input_stride
+        ]
+        storage.freeze_layout_with_exact_strides(input_stride_expr)
+        return ReinterpretView(data=storage, layout=output_layout)
+
     @staticmethod
     def resolve_negative_size(
         old_size: Sequence[Expr], new_size: Sequence[Expr]
@@ -7671,6 +7720,31 @@ class ExternKernel(InputsKernel):
             )
         ):
             return x
+
+        view = x.data if isinstance(x, TensorBox) else x
+        if isinstance(view, View):
+            output_layout = FlexibleLayout(
+                view.get_device_or_error(),
+                view.get_dtype(),
+                view.get_size(),
+            )
+            if order is not None:
+                fixed_output_layout = output_layout.as_stride_order(
+                    order, allow_padding=allow_padding
+                )
+            else:
+                if exact_strides is None:
+                    raise AssertionError("Expected exact_strides is not None")
+                fixed_output_layout = output_layout.as_exact_strides(
+                    exact_strides, allow_padding=allow_padding
+                )
+            reinterpret_view = view.try_reinterpret_with_layout(fixed_output_layout)
+            if reinterpret_view is not None:
+                if isinstance(x, TensorBox):
+                    x.data = reinterpret_view
+                    return x
+                return reinterpret_view
+
         if (
             isinstance(x, TensorBox)
             and isinstance(x.data, BaseView)
