@@ -320,9 +320,10 @@ class MultiKernelCall:
 
         self.picked_kernel = None
         self.arg_index = arg_index
-        if config.triton.multi_kernel > 1:
+        multi_kernel = config.triton.multi_kernel
+        if multi_kernel is not None and multi_kernel > 1:
             # manually force a subkernel to ease perf testing
-            picked_by_config = config.triton.multi_kernel - 2
+            picked_by_config = multi_kernel - 2
             if picked_by_config >= len(self._kernels):
                 raise AssertionError(
                     f"expected picked_by_config < len(self._kernels), "

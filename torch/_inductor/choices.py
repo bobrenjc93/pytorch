@@ -496,7 +496,11 @@ class InductorChoices:
         # to pick the faster one.
         if config.triton.multi_kernel:
             threshold *= 16
-        elif reduction_hint == ReductionHint.INNER and not cooperative_reduction:
+        elif (
+            config.triton.multi_kernel is None
+            and reduction_hint == ReductionHint.INNER
+            and not cooperative_reduction
+        ):
             threshold = max(
                 threshold,
                 InductorChoices._hopper_persistent_reduction_threshold(features),
@@ -514,7 +518,11 @@ class InductorChoices:
         graph = V.graph
         if not getattr(graph, "is_inference", False):
             return baseline
-        if torch.are_deterministic_algorithms_enabled():
+        if (
+            config.deterministic
+            or config.batch_invariant
+            or torch.are_deterministic_algorithms_enabled()
+        ):
             return baseline
         if not graph.sizevars.statically_known_gt(features.reduction_numel, baseline):
             return baseline

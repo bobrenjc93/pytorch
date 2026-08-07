@@ -2149,13 +2149,16 @@ class triton:
     use_two_step_variance_min_numel = 1024
     use_two_step_variance_threshold = 32768
 
+    # None: automatically tune eligible persistent reductions
     # 0: disable
     # 1/True: enable, use tuning to pick between different subkernels
     # 2: enable, force using persistent reduction (for debugging)
     # 3: enable, force using non-persistent reduction (for debugging)
     # pyrefly: ignore [bad-assignment]
-    multi_kernel: Literal[0, 1, 2, 3] = int(
-        os.environ.get("TORCHINDUCTOR_MULTI_KERNEL", "0")
+    multi_kernel: Literal[0, 1, 2, 3] | None = (
+        int(os.environ["TORCHINDUCTOR_MULTI_KERNEL"])
+        if "TORCHINDUCTOR_MULTI_KERNEL" in os.environ
+        else None
     )  # type: ignore[assignment]
 
     # hint to Triton when arguments are divisible by 16
