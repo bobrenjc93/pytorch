@@ -611,3 +611,11 @@ Note: This project is unrelated to [hughperkins/pytorch](https://github.com/hugh
 ## License
 
 PyTorch has a BSD-style license, as found in the [LICENSE](LICENSE) file.
+
+<!-- burner-progress:start -->
+## Burner evaluation progress
+
+![Burner evaluation progress](docs/burner-evaluation-progress.svg)
+
+_Updated automatically on every Burner merge. [Raw history](docs/burner-evaluation-history.json)._
+<!-- burner-progress:end -->
