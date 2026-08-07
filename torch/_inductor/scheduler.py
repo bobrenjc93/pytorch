@@ -6880,9 +6880,11 @@ class Scheduler:
         is_reorder_round: bool,
     ) -> list[tuple[BaseSchedulerNode, BaseSchedulerNode]]:
         """
-        Helper to find fusion opportunities, sorted by self.score_fusion()
+        Find fusion opportunities. Legal pairs are sorted by self.score_fusion(),
+        followed by rejected pairs that an earlier fusion may make legal.
         """
         possible_fusions = []
+        deferred_fusions = []
         seen = OrderedSet[tuple[BaseSchedulerNode, BaseSchedulerNode]]()
 
         def check_all_pairs(nodes: list[BaseSchedulerNode]) -> None:
@@ -6917,7 +6919,7 @@ class Scheduler:
                     ):
                         # A prior candidate can reorder this consumer and make the
                         # vertical fusion legal when it is rechecked below.
-                        possible_fusions.append(key)
+                        deferred_fusions.append(key)
 
         buffer_names_grouping = collections.defaultdict(list)
         for node in nodes:
@@ -6937,10 +6939,14 @@ class Scheduler:
             for node_grouping in group_grouping.values():
                 check_all_pairs(node_grouping)
 
+        # Deferred pairs are currently rejected, so they must not suppress a
+        # legal backend priority group.
         possible_fusions = self.get_possible_fusions_with_highest_priority(
             possible_fusions
         )
         possible_fusions.sort(key=self.score_fusion_key, reverse=True)
+        deferred_fusions.sort(key=self.score_fusion_key, reverse=True)
+        possible_fusions.extend(deferred_fusions)
         fusion_log.debug("found %d possible fusions", len(possible_fusions))
         return possible_fusions
 
