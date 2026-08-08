@@ -1613,6 +1613,13 @@ class FxGraphHashDetails:
             torch.backends.cuda.matmul.allow_fp16_reduced_precision_reduction,
             torch.backends.cuda.matmul.allow_bf16_reduced_precision_reduction,
         )
+        # Conditional CUDA graph capture is incompatible with one allocator mode.
+        if config.triton.cudagraphs:
+            from torch._higher_order_ops.cudagraph_conditional_nodes import (
+                _can_use_cuda_graph_conditional_nodes,
+            )
+
+            self.cuda_graph_conditional_nodes = _can_use_cuda_graph_conditional_nodes()
 
         # Include cudagraph annotation in cache key only when it changes
         # behavior. When both fwd and bwd are overridden to the same value,

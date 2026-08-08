@@ -9325,7 +9325,7 @@ class Scheduler:
             return "DeviceCopy ops"
 
         if isinstance(node.node, ir.Switch):
-            return "Switch ops"
+            return None if node.node.capture_cond else "Switch ops"
 
         if getattr(node.node, "unbacked_bindings", None):
             return "unbacked binding ops"

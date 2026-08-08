@@ -7,6 +7,28 @@ import torch.utils._pytree as pytree
 from torch.utils._python_dispatch import TorchDispatchMode
 
 
+def _can_use_cuda_graph_conditional_nodes() -> bool:
+    cuda_version = torch.version.cuda
+    if cuda_version is None:
+        return False
+    try:
+        version = tuple(int(part) for part in cuda_version.split(".")[:2])
+        allocator_settings = torch._C._accelerator_getAllocatorSettings()
+    except (AttributeError, RuntimeError, TypeError, ValueError):
+        return False
+    if version < (12, 4):
+        return False
+    for setting in allocator_settings.lower().replace(" ", "").split(","):
+        name, separator, value = setting.partition(":")
+        if (
+            separator
+            and name == "graph_capture_record_stream_reuse"
+            and value in ("1", "true")
+        ):
+            return False
+    return True
+
+
 class CUDAGraphCaptureControlFlowOpDispatchMode(TorchDispatchMode):
     @classmethod
     def ignore_compile_internals(cls) -> bool:

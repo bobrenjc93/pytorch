@@ -4786,6 +4786,31 @@ class PythonWrapperCodegen(CodeGen):
 
         outer_inputs = [buf.codegen_reference() for buf in node.operands]
 
+        if node.capture_cond and not V.graph.aot_mode:
+            if len(node.branches) != 2:
+                raise AssertionError("torch.cond must have two branches")
+            false_branch, true_branch = node.branches
+            self.codegen_subgraph_common(false_branch)
+            self.codegen_subgraph_common(true_branch)
+            false_name = false_branch.graph.name
+            true_name = true_branch.graph.name
+            selector_ref = node.selector.codegen_reference()
+            operands = ", ".join(outer_inputs)
+            operand_tuple = f"({operands},)"
+            # Lazy Triton launchers cannot autotune while CUDA is capturing.
+            self.writeline(f"if not hasattr({true_name}, '_cond_warmed'):")
+            self.writeline(EnterSubgraphLine(self, true_branch.graph))
+            self.writeline(f"{true_name}(list({operand_tuple}))")
+            self.writeline(f"{false_name}(list({operand_tuple}))")
+            self.writeline(f"{true_name}._cond_warmed = True")
+            self.writeline(ExitSubgraphLine(self))
+            self.writeline(
+                f"{name} = torch.ops.higher_order.cond({selector_ref}, "
+                f"lambda *args: {true_name}(list(args)), "
+                f"lambda *args: {false_name}(list(args)), {operand_tuple})"
+            )
+            return
+
         selector_ref = node.selector.codegen_reference()
         # Evaluate the selector once into a named local.
         selector_var = f"{name}_selector"
