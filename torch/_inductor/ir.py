@@ -260,6 +260,9 @@ class GraphPartitionSignature:
     # name of constants read/written by the graph partition
     constant_names: list[str]
 
+    # whether capture needs CUDA graph conditional-node support
+    requires_cuda_graph_conditional_nodes: bool = False
+
 
 def validate_ir(node_or_nodes: _NodeOrNodes | None) -> None:
     def _check_tensorbox(nodes: _NodeOrNodes | None) -> None:

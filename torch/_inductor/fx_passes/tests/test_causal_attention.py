@@ -7,6 +7,7 @@ import torch
 from torch._dynamo.utils import counters
 from torch._higher_order_ops.cudagraph_conditional_nodes import (
     _can_use_cuda_graph_conditional_nodes,
+    _has_cuda_graph_conditional_node_support,
 )
 from torch._inductor.cudagraph_trees import CUDAGraphNode, get_container
 from torch._inductor.decomposition import select_decomp_table
@@ -25,6 +26,7 @@ aten = torch.ops.aten
 prims = torch.ops.prims
 
 
+@torch._dynamo.dont_skip_tracing
 def _attention(
     query: torch.Tensor,
     key: torch.Tensor,
@@ -35,6 +37,7 @@ def _attention(
     wrong_axis: bool = False,
     diagonal_offset: int = 0,
     and_depth: int = 0,
+    scale: float | None = None,
 ) -> torch.Tensor:
     batch, heads, q_length, _ = query.shape
     k_length = key.shape[-2]
@@ -73,7 +76,7 @@ def _attention(
         batch, heads, q_length, k_length
     )
     return aten._scaled_dot_product_efficient_attention.default(
-        query, key, value, bias, False, 0.0, False
+        query, key, value, bias, False, 0.0, False, scale=scale
     )[0]
 
 
@@ -86,6 +89,7 @@ def _trace_attention(
     wrong_axis: bool = False,
     diagonal_offset: int = 0,
     and_depth: int = 0,
+    scale: float | None = None,
 ) -> torch.fx.GraphModule:
     def fn(*args: torch.Tensor) -> torch.Tensor:
         return _attention(
@@ -94,6 +98,7 @@ def _trace_attention(
             wrong_axis=wrong_axis,
             diagonal_offset=diagonal_offset,
             and_depth=and_depth,
+            scale=scale,
         )
 
     fake_mode = FakeTensorMode()
@@ -222,11 +227,52 @@ class CausalAttentionPassTests(TestCase):
             self.assertEqual(replace_causal_bias_with_is_causal(gm), 0)
         gm.graph.lint()
 
+    def test_requires_implicit_fallbacks(self):
+        gm = _trace_attention()
+
+        with torch._inductor.config.patch({"implicit_fallbacks": False}):
+            self.assertEqual(replace_causal_bias_with_is_causal(gm), 0)
+        gm.graph.lint()
+
+    def test_rejects_float32_overflowing_scale(self):
+        gm = _trace_attention(scale=1e39)
+
+        self.assertEqual(replace_causal_bias_with_is_causal(gm), 0)
+        gm.graph.lint()
+
     def test_conditional_capture_availability(self):
         with patch.object(torch.version, "cuda", None):
             self.assertFalse(_can_use_cuda_graph_conditional_nodes())
         with patch.object(torch.version, "cuda", "12.3"):
             self.assertFalse(_can_use_cuda_graph_conditional_nodes())
+        driver_module = (
+            "torch._higher_order_ops.cudagraph_conditional_nodes."
+            "_get_cuda_library"
+        )
+        driver_check = (
+            "torch._higher_order_ops.cudagraph_conditional_nodes."
+            "_check_cuda"
+        )
+        _has_cuda_graph_conditional_node_support.cache_clear()
+        try:
+            with patch.object(torch.version, "cuda", "12.5"), patch(
+                driver_module
+            ) as get_driver, patch(driver_check) as check_driver, patch.object(
+                torch._C,
+                "_accelerator_getAllocatorSettings",
+                return_value="",
+            ):
+                def return_old_driver_version(output):
+                    output._obj.value = 12030
+                    return 0
+
+                driver = get_driver.return_value
+                driver.cuDriverGetVersion.side_effect = return_old_driver_version
+                self.assertFalse(_can_use_cuda_graph_conditional_nodes())
+                driver.cuDriverGetVersion.assert_called_once()
+                check_driver.assert_called_once_with(0)
+        finally:
+            _has_cuda_graph_conditional_node_support.cache_clear()
         with patch.object(
             torch._C,
             "_accelerator_getAllocatorSettings",
@@ -340,6 +386,26 @@ class CausalAttentionPassTests(TestCase):
         self.assertEqual(len(dict(gm.named_children())), 2)
         gm.graph.lint()
 
+    def test_does_not_reuse_branches_across_input_aliasing(self):
+        def mixed(query, key, value):
+            return _attention(query, query, query) + _attention(query, key, value)
+
+        fake_mode = FakeTensorMode()
+        with fake_mode:
+            inputs = tuple(
+                torch.empty(
+                    (2, 4, 8, 16), device="cuda", dtype=torch.bfloat16
+                )
+                for _ in range(3)
+            )
+            gm = fwd_only(mixed, inputs, run_functional_passes=False)
+        gm.graph.eliminate_dead_code()
+        gm.recompile()
+
+        self.assertEqual(replace_causal_bias_with_is_causal(gm), 2)
+        self.assertEqual(len(dict(gm.named_children())), 4)
+        gm.graph.lint()
+
 
 @unittest.skipUnless(
     _can_use_cuda_graph_conditional_nodes(),
@@ -416,6 +482,45 @@ class CausalAttentionNumericsTests(TestCase):
         self.assertIsInstance(manager.current_node, CUDAGraphNode)
         self.assertEqual(counters["inductor"]["causal_bias_to_is_causal"], 1)
 
+    def test_allocator_change_after_cudagraph_warmup(self, device):
+        inputs = tuple(
+            torch.randn(
+                (1, 1, 128, 64), device=device, dtype=torch.bfloat16
+            )
+            for _ in range(3)
+        )
+
+        torch._dynamo.reset()
+        counters["inductor"].clear()
+        compiled = torch.compile(_attention, fullgraph=True)
+        original_settings = torch._C._accelerator_getAllocatorSettings()
+        setting_name = "graph_capture_record_stream_reuse"
+        restore_settings = ",".join(
+            setting
+            for setting in original_settings.split(",")
+            if not setting.strip().startswith(f"{setting_name}:")
+        )
+        restore_settings = ",".join(
+            setting for setting in (restore_settings, f"{setting_name}:False") if setting
+        )
+        try:
+            with torch.no_grad():
+                torch.compiler.cudagraph_mark_step_begin()
+                self.assertEqual(compiled(*inputs), _attention(*inputs))
+                torch._C._accelerator_setAllocatorSettings(
+                    f"{setting_name}:True"
+                )
+                torch.compiler.cudagraph_mark_step_begin()
+                self.assertEqual(compiled(*inputs), _attention(*inputs))
+        finally:
+            torch._C._accelerator_setAllocatorSettings(restore_settings)
+
+        with torch.no_grad():
+            torch.compiler.cudagraph_mark_step_begin()
+            self.assertEqual(compiled(*inputs), _attention(*inputs))
+        self.assertEqual(counters["inductor"]["causal_bias_to_is_causal"], 1)
+        self.assertEqual(counters["inductor"]["cudagraph_skips"], 1)
+
     def test_dynamic_shapes(self, device):
         torch._dynamo.reset()
         counters["inductor"].clear()
@@ -429,6 +534,54 @@ class CausalAttentionNumericsTests(TestCase):
             )
             with torch.no_grad():
                 self.assertEqual(compiled(*inputs), _attention(*inputs))
+        self.assertEqual(counters["inductor"]["causal_bias_to_is_causal"], 0)
+
+    def test_partially_dynamic_sequence_length(self, device):
+        query = torch.randn(
+            (1, 1, 96, 64), device=device, dtype=torch.bfloat16
+        )
+        torch._dynamo.mark_dynamic(query, 2)
+
+        torch._dynamo.reset()
+        counters["inductor"].clear()
+        compiled = torch.compile(_attention, fullgraph=True)
+        with torch.no_grad():
+            self.assertEqual(
+                compiled(query, query, query),
+                _attention(query, query, query),
+            )
+        self.assertEqual(counters["inductor"]["causal_bias_to_is_causal"], 0)
+
+    def test_implicit_fallbacks_disabled(self, device):
+        inputs = tuple(
+            torch.randn(
+                (1, 1, 96, 64), device=device, dtype=torch.bfloat16
+            )
+            for _ in range(3)
+        )
+
+        torch._dynamo.reset()
+        counters["inductor"].clear()
+        with torch._inductor.config.patch({"implicit_fallbacks": False}):
+            compiled = torch.compile(_attention, fullgraph=True)
+            with torch.no_grad():
+                self.assertEqual(compiled(*inputs), _attention(*inputs))
+        self.assertEqual(counters["inductor"]["causal_bias_to_is_causal"], 0)
+
+    def test_float32_overflowing_scale(self, device):
+        shape = (1, 1, 96, 64)
+        query = torch.zeros(shape, device=device, dtype=torch.bfloat16)
+        key = torch.zeros_like(query)
+        value = torch.randn_like(query)
+
+        torch._dynamo.reset()
+        counters["inductor"].clear()
+        compiled = torch.compile(_attention, fullgraph=True)
+        with torch.no_grad():
+            expected = _attention(query, key, value, scale=1e39)
+            actual = compiled(query, key, value, scale=1e39)
+        self.assertTrue(torch.isnan(expected).any())
+        self.assertEqual(actual, expected, equal_nan=True)
         self.assertEqual(counters["inductor"]["causal_bias_to_is_causal"], 0)
 
     def test_training_does_not_rewrite(self, device):

@@ -1,22 +1,41 @@
 # mypy: allow-untyped-defs
+import ctypes
 from collections.abc import Generator
 from contextlib import contextmanager
+from functools import cache
 
 import torch
 import torch.utils._pytree as pytree
+from torch.cuda._utils import _check_cuda, _get_cuda_library
 from torch.utils._python_dispatch import TorchDispatchMode
+
+
+@cache
+def _has_cuda_graph_conditional_node_support(cuda_version: str) -> bool:
+    try:
+        version = tuple(int(part) for part in cuda_version.split(".")[:2])
+    except (AttributeError, TypeError, ValueError):
+        return False
+    if version < (12, 4):
+        return False
+    try:
+        driver_version = ctypes.c_int()
+        libcuda = _get_cuda_library()
+        _check_cuda(libcuda.cuDriverGetVersion(ctypes.byref(driver_version)))
+    except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
+        return False
+    return driver_version.value >= 12040
 
 
 def _can_use_cuda_graph_conditional_nodes() -> bool:
     cuda_version = torch.version.cuda
-    if cuda_version is None:
+    if cuda_version is None or not _has_cuda_graph_conditional_node_support(
+        cuda_version
+    ):
         return False
     try:
-        version = tuple(int(part) for part in cuda_version.split(".")[:2])
         allocator_settings = torch._C._accelerator_getAllocatorSettings()
     except (AttributeError, RuntimeError, TypeError, ValueError):
-        return False
-    if version < (12, 4):
         return False
     for setting in allocator_settings.lower().replace(" ", "").split(","):
         name, separator, value = setting.partition(":")

@@ -98,6 +98,30 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 
+def _cudagraphify_if_conditional_nodes_supported(
+    cudagraphify_fn: Callable[..., Any], model: Callable[..., Any]
+) -> Callable[..., Any]:
+    captured = cudagraphify_fn(model)
+    logged_skip = False
+
+    def run(inputs: Sequence[InputType]) -> object:
+        nonlocal logged_skip
+        from torch._higher_order_ops.cudagraph_conditional_nodes import (
+            _can_use_cuda_graph_conditional_nodes,
+        )
+
+        if _can_use_cuda_graph_conditional_nodes():
+            return captured(inputs)
+        if not logged_skip:
+            log_cudagraph_skip_and_bump_counter(
+                "skipping cudagraph due to unavailable CUDA graph conditional nodes"
+            )
+            logged_skip = True
+        return model(inputs)
+
+    return run
+
+
 @dataclasses.dataclass
 class OutputCode:
     # TODO: Remove underscores here
@@ -423,6 +447,11 @@ def cudagraph_partition_post_compile(
             kernel_free_cudagraph=compiled_graph.kernel_free_cudagraph,
             user_visible_output_idxs=tuple(partition_metadata.user_visible_output_idxs),
         )
+        if partition_map.requires_cuda_graph_conditional_nodes:
+            cudagraphify_fn = partial(
+                _cudagraphify_if_conditional_nodes_supported,
+                cudagraphify_fn,
+            )
         cudagraphify_fns.append(cudagraphify_fn)
 
     compiled_graph.recursively_apply_fns(cudagraphify_fns)

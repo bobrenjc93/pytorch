@@ -530,6 +530,7 @@ def replace_causal_bias_with_is_causal(gm: torch.fx.GraphModule) -> int:
         and config.triton.cudagraphs
         and config.triton.cudagraph_trees
         and config.cudagraph_policy is None
+        and config.implicit_fallbacks
         and not config.cpp_wrapper
         and not config.fx_wrapper
     ):
@@ -570,16 +571,22 @@ def replace_causal_bias_with_is_causal(gm: torch.fx.GraphModule) -> int:
             or not (is_causal is None or _known_equal(is_causal, False))
             or not isinstance(compute_log_sumexp, bool)
             or scale is _UNRESOLVED
-            or (
-                scale is not None
-                and (
-                    not isinstance(scale, (int, float))
-                    or not math.isfinite(scale)
-                    or scale <= 0
-                )
-            )
         ):
             continue
+        attention_scale = None
+        if scale is not None:
+            if not isinstance(scale, (int, float)) or isinstance(scale, bool):
+                continue
+            try:
+                attention_scale = float(scale)
+            except OverflowError:
+                continue
+            if (
+                not math.isfinite(attention_scale)
+                or attention_scale <= 0
+                or attention_scale > torch.finfo(torch.float32).max
+            ):
+                continue
 
         query = get_arg_value(node, 0, "query")
         key = get_arg_value(node, 1, "key")
@@ -601,6 +608,12 @@ def replace_causal_bias_with_is_causal(gm: torch.fx.GraphModule) -> int:
             or key_meta is None
             or value_meta is None
             or bias_meta is None
+        ):
+            continue
+        if any(
+            not isinstance(dim, int)
+            for meta in (query_meta, key_meta, value_meta)
+            for dim in (*meta.shape, *meta.stride())
         ):
             continue
         if (
@@ -642,7 +655,7 @@ def replace_causal_bias_with_is_causal(gm: torch.fx.GraphModule) -> int:
         ):
             continue
 
-        effective_scale = head_dim**-0.5 if scale is None else float(scale)
+        effective_scale = head_dim**-0.5 if attention_scale is None else attention_scale
         accumulation_max = min(
             torch.finfo(torch.float32).max, torch.finfo(query_meta.dtype).max
         )
@@ -652,13 +665,19 @@ def replace_causal_bias_with_is_causal(gm: torch.fx.GraphModule) -> int:
             accumulation_max / (4.0 * head_dim * max(1.0, effective_scale))
         )
         threshold = min(threshold, torch.finfo(query_meta.dtype).max / 2.0)
+        input_aliases = (
+            query_meta is key_meta,
+            query_meta is value_meta,
+            key_meta is value_meta,
+        )
         branch_key = (
             *(
                 (meta.dtype, meta.device, tuple(meta.shape), tuple(meta.stride()))
                 for meta in (query_meta, key_meta, value_meta)
             ),
+            input_aliases,
             compute_log_sumexp,
-            scale,
+            attention_scale,
         )
         branch_names = branch_cache.get(branch_key)
         if branch_names is None:
@@ -667,7 +686,7 @@ def replace_causal_bias_with_is_causal(gm: torch.fx.GraphModule) -> int:
                 key_meta,
                 value_meta,
                 compute_log_sumexp,
-                None if scale is None else float(scale),
+                attention_scale,
             )
             if branches is None:
                 continue

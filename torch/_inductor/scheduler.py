@@ -9452,6 +9452,7 @@ class Scheduler:
                     input_mapping,
                     output_mapping,
                     signature.constant_names,
+                    signature.requires_cuda_graph_conditional_nodes,
                 )
             )
 
@@ -9647,6 +9648,10 @@ class Scheduler:
                 input_deallocation,
                 skip_cudagraph,
                 constant_names,
+                any(
+                    isinstance(node.node, ir.Switch) and node.node.capture_cond
+                    for node in partition
+                ),
             )
 
             signatures.append(partition_signature)
@@ -9691,6 +9696,7 @@ class Scheduler:
             input_deallocation,
             signature.skip_cudagraph,
             constant_names,
+            signature.requires_cuda_graph_conditional_nodes,
         )
 
     def reorder_for_minimizing_partition(
