@@ -658,6 +658,7 @@ class CachingAutotuner(KernelInterface):
         # Cached launcher for fast path — bypasses all preamble after first
         # successful steady-state launch.  Set to None until populated.
         self._cached_launcher: LauncherType | None = None
+        self._cached_launcher_needs_allocator: bool = False
         # Pre-compute static eligibility for launcher caching.  These flags
         # are set once in __init__ and never change, so we avoid re-checking
         # them on every kernel launch.
@@ -705,6 +706,7 @@ class CachingAutotuner(KernelInterface):
         self.compile_results = []
         self.benchmark_failure_reasons.clear()
         self._cached_launcher = None
+        self._cached_launcher_needs_allocator = False
         self._debug_call = None
 
     def is_statically_launchable(self):
@@ -1138,12 +1140,14 @@ class CachingAutotuner(KernelInterface):
         self.fn.repr = _ConstRepr(self.fn.repr(self.fn))
         self.launchers = []
         self._cached_launcher = None
+        self._cached_launcher_needs_allocator = False
         self.benchmark_failure_reasons = {}
         self.fn._hash_lock = None
         return old_values
 
     def restore_after_unpickle(self, old_values: tuple[Any, ...] | None) -> None:
         self._cached_launcher = None
+        self._cached_launcher_needs_allocator = False
         if old_values:
             (
                 self.fn.fn,
@@ -2441,6 +2445,11 @@ class CachingAutotuner(KernelInterface):
             and not autograd_profiler._is_profiler_enabled
             and not get_active_debug_mode()
         ):
+            # Triton's allocator is a ContextVar, so install it in this context.
+            if self._cached_launcher_needs_allocator and hasattr(
+                triton, "set_allocator"
+            ):
+                triton.set_allocator(self._allocate_global_scratch)
             return fast(*args, stream=stream)
 
         debug_mode = get_active_debug_mode()
@@ -2453,13 +2462,7 @@ class CachingAutotuner(KernelInterface):
             )
 
         if hasattr(triton, "set_allocator"):
-
-            def alloc_fn(size: int, align: int, stream: int | None):
-                return torch.empty(
-                    size, dtype=torch.int8, device=self.device_props.type
-                )
-
-            triton.set_allocator(alloc_fn)
+            triton.set_allocator(self._allocate_global_scratch)
 
         if self.triton_interpret:
             args, grid = self._interpret_args_grid(args, self.configs[0])
@@ -2551,8 +2554,17 @@ class CachingAutotuner(KernelInterface):
             and not autograd_profiler._is_profiler_enabled
             and len(self.launchers) == 1
         ):
+            runner = launcher.__globals__.get("runner")
+            self._cached_launcher_needs_allocator = bool(
+                getattr(runner, "global_scratch_size", 0)
+            )
             self._cached_launcher = self._build_fast_launcher(launcher) or launcher
         return result
+
+    def _allocate_global_scratch(
+        self, size: int, _align: int, _stream: int | None
+    ) -> torch.Tensor:
+        return torch.empty(size, dtype=torch.int8, device=self.device_props.type)
 
     def _check_launcher_call_args(
         self,
