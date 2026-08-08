@@ -28,6 +28,9 @@ from torch._functorch._aot_autograd.descriptors import (
     SavedForBackwardsNoVcCheckAOTOutput,
 )
 from torch._higher_order_ops.associative_scan import associative_scan_op
+from torch._higher_order_ops.cudagraph_conditional_nodes import (
+    _can_use_cuda_graph_conditional_nodes,
+)
 from torch._higher_order_ops.triton_kernel_wrap import triton_kernel_wrapper_mutation
 from torch._library.fake_class_registry import FakeScriptObject
 from torch._library.opaque_object import is_custom_class_obj
@@ -9043,9 +9046,20 @@ def triton_kernel_wrap_(
 def cond(
     pred, true_fn, false_fn, operands
 ) -> list[ir.TensorBox | ir.ShapeAsConstantBuffer]:
-    # TODO: when graph_partition is enabled, skip - partitioning handles control flow
-    # we run into memory cleanup issue
-    if any(isinstance(x, IRNode) and is_triton(x) for x in [pred, *operands]):
+    capture_cond = (
+        bool(V.graph.current_node.meta.get("inductor_cudagraphable_cond", False))
+        and _can_use_cuda_graph_conditional_nodes()
+        and config.graph_partition
+        and config.triton.cudagraphs
+        and config.triton.cudagraph_trees
+        and config.cudagraph_policy is None
+        and not V.graph.aot_mode
+        and not V.graph.cpp_wrapper
+        and not V.graph.fx_wrapper
+    )
+    if not capture_cond and any(
+        isinstance(x, IRNode) and is_triton(x) for x in [pred, *operands]
+    ):
         msg = "control flow operator: torch.cond."
         if stack_trace := V.graph.current_node.meta.get("stack_trace", None):
             msg = f"{msg} Found from : \n {stack_trace}"
@@ -9054,7 +9068,13 @@ def cond(
     # The branches are reordered to [false_fn, true_fn]
     # because during codegen the pred is converted to an integer with True -> 1 and False -> 0.
     # When iterating over the branches the false_fn is associated index 0.
-    result = ir.Switch.create(pred, [false_fn, true_fn], operands, is_cond=True)
+    result = ir.Switch.create(
+        pred,
+        [false_fn, true_fn],
+        operands,
+        is_cond=True,
+        capture_cond=capture_cond,
+    )
     return list(map(TensorBox.create, result))  # pyrefly: ignore no-matching-overload
 
 

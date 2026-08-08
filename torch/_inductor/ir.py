@@ -260,6 +260,9 @@ class GraphPartitionSignature:
     # name of constants read/written by the graph partition
     constant_names: list[str]
 
+    # whether capture needs CUDA graph conditional-node support
+    requires_cuda_graph_conditional_nodes: bool = False
+
 
 def validate_ir(node_or_nodes: _NodeOrNodes | None) -> None:
     def _check_tensorbox(nodes: _NodeOrNodes | None) -> None:
@@ -10954,6 +10957,8 @@ class Switch(ExternKernel):
         branches: Non-empty sequence of subgraphs representing the individual branches.
         operands: Input tensors passed to the individual subgraphs.
         is_cond: True when this node represents a torch.cond (boolean 2-branch select).
+        capture_cond: True when the Python wrapper must preserve the cond for
+            CUDA graph capture.
         outputs: MultiOutput nodes representing the node's outputs.
     """
 
@@ -10961,6 +10966,7 @@ class Switch(ExternKernel):
     branches: Sequence[Subgraph] | None = None
     operands: Sequence[IRNode] | None = None
     is_cond: bool = False
+    capture_cond: bool = False
     outputs: Sequence[MultiOutput] | None = None
 
     def __init__(
@@ -10971,11 +10977,13 @@ class Switch(ExternKernel):
         layout: MultiOutputLayout,
         unbacked_bindings: dict[sympy.Symbol, pytree.KeyPath] | None,
         is_cond: bool = False,
+        capture_cond: bool = False,
     ) -> None:
         self.selector = selector
         self.branches = branches
         self.operands = operands
         self.is_cond = is_cond
+        self.capture_cond = capture_cond
 
         sym_args, tensor_args = _split_by_sym_type([selector, *operands])
 
@@ -11001,6 +11009,7 @@ class Switch(ExternKernel):
         branches: list[Subgraph],
         operands: list[TensorBox],
         is_cond: bool = False,
+        capture_cond: bool = False,
     ) -> list[MultiOutput]:
         """Create a sequence of IRNodes from a switch/cond statement."""
         # pyrefly: ignore [bad-assignment]
@@ -11123,6 +11132,7 @@ class Switch(ExternKernel):
             layout=MultiOutputLayout(device=device),
             unbacked_bindings=unbacked_bindings,
             is_cond=is_cond,
+            capture_cond=capture_cond,
         )
 
         outputs = [

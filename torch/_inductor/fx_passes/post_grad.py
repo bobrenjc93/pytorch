@@ -61,6 +61,7 @@ from ..utils import (
 )
 from ..virtualized import V
 from .b2b_gemm import B2B_GEMM_PASS
+from .causal_attention import replace_causal_bias_with_is_causal
 from .control_dependencies import control_deps, preserve_node_ordering
 from .ddp_fusion import fuse_ddp_communication
 from .group_batch_fusion import group_batch_fusion_passes, POST_GRAD_FUSIONS
@@ -234,6 +235,10 @@ def post_grad_passes(gm: torch.fx.GraphModule, is_inference: bool):
         GraphTransformObserver(gm, "remove_assert_ops").apply_graph_pass(
             remove_assert_ops
         )
+        if is_inference:
+            GraphTransformObserver(
+                gm, "replace_causal_bias_with_is_causal"
+            ).apply_gm_pass(replace_causal_bias_with_is_causal)
         for i, patterns in enumerate(pass_patterns):
             GraphTransformObserver(gm, f"pass_pattern_{i}").apply_graph_pass(
                 patterns.apply

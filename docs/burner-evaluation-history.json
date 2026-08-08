@@ -12,6 +12,34 @@
     "eval_fdff0dc0": {
       "name": "Independent compiled-vs-eager numerics gate",
       "color": "#00a7a5"
+    },
+    "eval_5c411478": {
+      "name": "Speedup: inference bf16",
+      "color": "#e6a700"
+    },
+    "eval_ae71b662": {
+      "name": "Speedup: inference fp32",
+      "color": "#d94f8a"
+    },
+    "eval_9599eb83": {
+      "name": "Speedup: training amp",
+      "color": "#2589bd"
+    },
+    "eval_fa49ea88": {
+      "name": "Correctness across all axes",
+      "color": "#5b8c36"
+    },
+    "eval_fc9b2d42": {
+      "name": "Compilation latency",
+      "color": "#9c6644"
+    },
+    "eval_ea78c117": {
+      "name": "Peak memory compression",
+      "color": "#6c757d"
+    },
+    "eval_3b9d139c": {
+      "name": "Independent numerics gate",
+      "color": "#ef476f"
     }
   },
   "points": [
@@ -39,6 +67,40 @@
         "eval_9988a59a": 47.3,
         "eval_3ccb006f": 100,
         "eval_fdff0dc0": 100
+      }
+    },
+    {
+      "key": "base:638a11d688ee9d592485dd074bd82c54b4646399",
+      "commit": "638a11d688ee9d592485dd074bd82c54b4646399",
+      "recordedAt": "2026-08-08T15:25:49.937Z",
+      "label": "base 638a11d",
+      "kind": "baseline",
+      "title": "main",
+      "scores": {
+        "eval_5c411478": 46.7,
+        "eval_ae71b662": 36.1,
+        "eval_9599eb83": 46.6,
+        "eval_fa49ea88": 100,
+        "eval_fc9b2d42": 50.4,
+        "eval_ea78c117": 50,
+        "eval_3b9d139c": 100
+      }
+    },
+    {
+      "key": "pr:16",
+      "recordedAt": "2026-08-08T15:25:49.937Z",
+      "label": "PR #16",
+      "kind": "leaf",
+      "prNumber": 16,
+      "title": "Replace exact lower-triangular SDPA bias with is_causal",
+      "scores": {
+        "eval_5c411478": 47.7,
+        "eval_ae71b662": 37.8,
+        "eval_9599eb83": 47.1,
+        "eval_fa49ea88": 100,
+        "eval_fc9b2d42": 50.5,
+        "eval_ea78c117": 50,
+        "eval_3b9d139c": 100
       }
     }
   ]

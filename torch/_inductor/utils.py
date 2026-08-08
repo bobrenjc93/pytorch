@@ -244,6 +244,9 @@ class GraphPartitionMap:
     # name of constants read/written by the graph partition
     constant_names: list[str]
 
+    # whether capture needs CUDA graph conditional-node support
+    requires_cuda_graph_conditional_nodes: bool = False
+
 
 def fp8_bench(fn: Callable[[], Any], warmup: int = 25, rep: int = 100) -> float:
     """
