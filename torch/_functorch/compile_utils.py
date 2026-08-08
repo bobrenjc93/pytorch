@@ -260,8 +260,18 @@ def fx_graph_cse(
                 token_map[hash_val] = token
 
     if inplace:
-        for node, replacement in replacements.items():
-            node.replace_all_uses_with(replacement)
+        affected_users = {user for node in replacements for user in node.users}
+        replace_hooks = getattr(fx_g.owning_module, "_replace_hooks", None)
+        if replace_hooks:
+            for node, replacement in replacements.items():
+                for user in node.users:
+                    for replace_hook in replace_hooks:
+                        replace_hook(old=node, new=replacement.name, user=user)
+        for user in affected_users:
+            user.args = fx.map_arg(user.args, lambda node: replacements.get(node, node))
+            user.kwargs = fx.map_arg(
+                user.kwargs, lambda node: replacements.get(node, node)
+            )
         for node in reversed(replacements):
             fx_g.erase_node(node)
         return fx_g

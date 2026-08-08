@@ -29,7 +29,12 @@ from torch.utils._ordered_set import OrderedSet
 
 from .. import config, ir, pattern_matcher  # noqa: F401
 from ..codegen.common import custom_backend_passes
-from ..fx_utils import FakeTensorUpdater, get_fake_args_kwargs, get_node_storage
+from ..fx_utils import (
+    FakeTensorUpdater,
+    get_fake_args_kwargs,
+    get_node_storage,
+    get_storage,
+)
 from ..lowering import lowerings as L
 from ..pattern_matcher import (
     _return_true,
@@ -196,6 +201,27 @@ def _is_input_independent_factory_dag_node(
     )
 
 
+def _tensor_storages(value: Any) -> set[int]:
+    return {
+        get_storage(tensor)
+        for tensor in pytree.tree_iter(value)
+        if isinstance(tensor, torch.Tensor) and torch._C._has_storage(tensor)
+    }
+
+
+def _output_aliases_input(node: torch.fx.Node) -> bool:
+    if any(ret.alias_info is not None for ret in node.target._schema.returns):
+        return True
+    if "val" not in node.meta:
+        return True
+
+    output_storages = _tensor_storages(node.meta["val"])
+    return any(
+        not output_storages.isdisjoint(_tensor_storages(inp.meta.get("val")))
+        for inp in node.all_input_nodes
+    )
+
+
 def _is_value_only_consumer(node: torch.fx.Node) -> bool:
     if (
         node.op != "call_function"
@@ -208,7 +234,7 @@ def _is_value_only_consumer(node: torch.fx.Node) -> bool:
     return node.target not in (
         aten.is_set_to.default,
         aten._has_same_storage_numel.default,
-    ) and all(ret.alias_info is None for ret in node.target._schema.returns)
+    ) and not _output_aliases_input(node)
 
 
 def cse_static_cuda_factory_dags(gm: torch.fx.GraphModule) -> bool:
@@ -223,20 +249,26 @@ def cse_static_cuda_factory_dags(gm: torch.fx.GraphModule) -> bool:
         if _is_input_independent_factory_dag_node(node, factory_dag_nodes):
             factory_dag_nodes.add(node)
 
+    external_consumers = {
+        user
+        for node in factory_dag_nodes
+        for user in node.users
+        if user not in factory_dag_nodes
+    }
+    identity_sensitive_consumers = {
+        user for user in external_consumers if not _is_value_only_consumer(user)
+    }
     identity_sensitive_nodes = [
         node
         for node in factory_dag_nodes
-        if any(
-            user not in factory_dag_nodes and not _is_value_only_consumer(user)
-            for user in node.users
-        )
+        if any(user in identity_sensitive_consumers for user in node.users)
     ]
     while identity_sensitive_nodes:
         node = identity_sensitive_nodes.pop()
         if node not in factory_dag_nodes:
             continue
         factory_dag_nodes.remove(node)
-        if any(ret.alias_info is not None for ret in node.target._schema.returns):
+        if _output_aliases_input(node):
             identity_sensitive_nodes.extend(
                 inp for inp in node.all_input_nodes if inp in factory_dag_nodes
             )
