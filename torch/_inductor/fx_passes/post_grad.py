@@ -201,7 +201,7 @@ def cse_static_cuda_factory_dags(gm: torch.fx.GraphModule) -> bool:
     output-alias safety checks.
     """
     factory_dag_nodes = OrderedSet[torch.fx.Node]()
-    nodes_by_target: dict[fx.node.Target, list[torch.fx.Node]] = defaultdict(list)
+    buckets: dict[tuple[fx.node.Target, int], list[tuple[Any, ...]]] = defaultdict(list)
     has_duplicate = False
 
     for node in gm.graph.nodes:
@@ -209,12 +209,25 @@ def cse_static_cuda_factory_dags(gm: torch.fx.GraphModule) -> bool:
             continue
 
         factory_dag_nodes.add(node)
-        same_target_nodes = nodes_by_target[node.target]
-        has_duplicate = has_duplicate or any(
-            node.args == other.args and node.kwargs == other.kwargs
-            for other in same_target_nodes
-        )
-        same_target_nodes.append(node)
+        if not has_duplicate:
+            args, args_spec = pytree.tree_flatten(node.args)
+            kwargs, kwargs_spec = pytree.tree_flatten(node.kwargs)
+            typed_args = tuple((arg, type(arg)) for arg in args)
+            typed_kwargs = tuple((arg, type(arg)) for arg in kwargs)
+            custom = node.meta.get("custom", {})
+            token = (
+                typed_args,
+                args_spec,
+                typed_kwargs,
+                kwargs_spec,
+                custom.get("stream", 0),
+                custom.get("mempool"),
+                custom.get("mempool_device"),
+            )
+            key = (node.target, hash((typed_args, typed_kwargs)))
+            matching_tokens = buckets[key]
+            has_duplicate = token in matching_tokens
+            matching_tokens.append(token)
 
     if not has_duplicate:
         return False
@@ -394,7 +407,7 @@ def post_grad_passes(gm: torch.fx.GraphModule, is_inference: bool):
     if is_inference and GraphTransformObserver(
         gm, "cse_static_cuda_factory_dags"
     ).apply_gm_pass(cse_static_cuda_factory_dags):
-        fake_tensor_updater = FakeTensorUpdater(gm)
+        fake_tensor_updater.incremental_update()
 
     for device, custom_backend_pass in custom_backend_passes.items():
         if custom_backend_pass is not None:
