@@ -234,6 +234,8 @@ def _is_value_only_consumer(node: torch.fx.Node) -> bool:
     return node.target not in (
         aten.is_set_to.default,
         aten._has_same_storage_numel.default,
+        # Selects a different code path when query, key, and value are identical.
+        aten._native_multi_head_attention.default,
     ) and not _output_aliases_input(node)
 
 
