@@ -362,6 +362,78 @@ def is_mkldnn_conv(node: Node) -> bool:
     return False
 
 
+def _is_view_only_patch_embedding(
+    conv_nodes: Sequence[Node], *, is_inference: bool
+) -> bool:
+    if not is_inference or torch.version.hip is not None or len(conv_nodes) != 1:
+        return False
+
+    conv = conv_nodes[0]
+    if conv.target is not aten.convolution.default or len(conv.args) < 9:
+        return False
+
+    input_node, weight_node = conv.args[:2]
+    input_val = input_node.meta.get("val") if isinstance(input_node, Node) else None
+    weight_val = (
+        weight_node.meta.get("val") if isinstance(weight_node, Node) else None
+    )
+    conv_val = conv.meta.get("val")
+    if not (
+        isinstance(input_val, Tensor)
+        and isinstance(weight_val, Tensor)
+        and isinstance(conv_val, Tensor)
+    ):
+        return False
+    values = (input_val, weight_val, conv_val)
+    if any(value.device.type != "cuda" for value in values):
+        return False
+    if any(value.ndim != 4 or has_free_symbols(value) for value in values):
+        return False
+
+    if conv.args[6] or conv.args[8] != 1:
+        return False
+
+    conv_users = tuple(conv.users)
+    if len(conv_users) != 1:
+        return False
+    flatten = conv_users[0]
+    flatten_val = flatten.meta.get("val")
+    expected_flatten_shape = (
+        conv_val.shape[0],
+        conv_val.shape[1],
+        conv_val.shape[2] * conv_val.shape[3],
+    )
+    if (
+        not flatten.args
+        or flatten.args[0] is not conv
+        or flatten.target
+        not in (
+            aten.flatten.using_ints,
+            aten.reshape.default,
+            aten.view.default,
+            aten._unsafe_view.default,
+        )
+        or not isinstance(flatten_val, Tensor)
+        or has_free_symbols(flatten_val)
+        or tuple(flatten_val.shape) != expected_flatten_shape
+    ):
+        return False
+
+    flatten_users = tuple(flatten.users)
+    if len(flatten_users) != 1:
+        return False
+    transpose = flatten_users[0]
+    if not transpose.args or transpose.args[0] is not flatten:
+        return False
+    if transpose.target is aten.permute.default:
+        return len(transpose.args) > 1 and tuple(transpose.args[1]) == (0, 2, 1)
+    return (
+        transpose.target is aten.transpose.int
+        and len(transpose.args) > 2
+        and {transpose.args[1] % 3, transpose.args[2] % 3} == {1, 2}
+    )
+
+
 def _realize_efficient_zerotensor_output(r: ir.IRNode, fx_node: object) -> ir.IRNode:
     if (
         isinstance(fx_node, torch.fx.Node)
@@ -820,7 +892,9 @@ class GraphLowering(torch.fx.Interpreter):
         # Following models are skipped due to this:
         # jx_nest_base
         # volo_d1_224
-        if len(list(gm.graph.nodes)) >= 300 * nconv:
+        if len(list(gm.graph.nodes)) >= 300 * nconv and not _is_view_only_patch_embedding(
+            conv_nodes, is_inference=is_inference
+        ):
             log.debug("Skipped layout opt because only a few conv")
             return False
 
