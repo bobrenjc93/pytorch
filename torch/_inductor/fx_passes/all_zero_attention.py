@@ -4,6 +4,7 @@ from typing import Any
 import torch
 from torch._dynamo.utils import counters
 from torch._prims_common import is_float_dtype
+from torch.fx.experimental.symbolic_shapes import statically_known_true, sym_eq
 
 from ..pattern_matcher import get_arg_value
 
@@ -32,6 +33,42 @@ _IOTA_COMPARISONS = {
     aten.lt.Scalar,
     aten.ne.Scalar,
 }
+
+
+def _tensor_meta(value: Any) -> torch.Tensor | None:
+    if not isinstance(value, torch.fx.Node):
+        return None
+    meta = value.meta.get("val")
+    return meta if isinstance(meta, torch.Tensor) else None
+
+
+def _has_valid_sdpa_bias_metadata(query: Any, key: Any, bias: Any) -> bool:
+    query_meta = _tensor_meta(query)
+    key_meta = _tensor_meta(key)
+    bias_meta = _tensor_meta(bias)
+    if (
+        query_meta is None
+        or key_meta is None
+        or bias_meta is None
+        or query_meta.ndim != 4
+        or key_meta.ndim != 4
+        or bias_meta.ndim != 4
+    ):
+        return False
+
+    expected_shape = (
+        query_meta.shape[0],
+        query_meta.shape[1],
+        query_meta.shape[2],
+        key_meta.shape[2],
+    )
+    return (
+        bias_meta.dtype == query_meta.dtype
+        and bias_meta.device == query_meta.device
+        and bias_meta.layout == torch.strided
+        and statically_known_true(sym_eq(bias_meta.shape, expected_shape))
+        and statically_known_true(sym_eq(bias_meta.stride(-1), 1))
+    )
 
 
 def _unwrap_value_preserving_ops(value: Any) -> Any:
@@ -190,10 +227,13 @@ def remove_all_zero_sdpa_biases(graph: torch.fx.Graph) -> int:
             continue
 
         bias = get_arg_value(node, 3, "attn_bias")
+        query = get_arg_value(node, 0, "query")
+        key = get_arg_value(node, 1, "key")
         is_causal = get_arg_value(node, 6, "is_causal")
         if (
             not isinstance(bias, torch.fx.Node)
             or is_causal not in (None, False)
+            or not _has_valid_sdpa_bias_metadata(query, key, bias)
             or not _is_all_zero_iota_bias(bias)
         ):
             continue
