@@ -2207,6 +2207,14 @@ class triton:
     # can be satisfied, along with any existing requirements for index expressions
     use_tensor_descriptor = False
 
+    # Use device-side tensor descriptors for large 2D bfloat16 inference loads on
+    # Hopper. This is narrower than use_tensor_descriptor, which remains the
+    # opt-in switch for general tensor descriptor codegen.
+    enable_hopper_tma_layout_conversion = os.environ.get(
+        "TORCHINDUCTOR_ENABLE_HOPPER_TMA_LAYOUT_CONVERSION", "1"
+    ) == "1"
+    hopper_tma_min_bytes = 32 * 1024 * 1024
+
     # (Experimental)
     # Whether to allow reordering tensor descriptor matches with descending
     # strides, at the expense of transposing values after load / before store.

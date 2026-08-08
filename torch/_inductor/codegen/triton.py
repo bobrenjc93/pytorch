@@ -91,6 +91,7 @@ from ..utils import (
     triton_type,
     triton_version_uses_attrs_dict,
     upcast_compute_type,
+    use_auto_hopper_tma,
 )
 from ..virtualized import _ops as ops, ReductionType, StoreMode, V
 from ..wrapper_benchmark import get_kernel_category_by_source_code
@@ -2912,12 +2913,65 @@ class TMACompatibilityChecker:
     def __post_init__(self):
         self.failed_debug_prefix = "Cannot use TMA descriptor for load / store since: "
 
+    def _is_large_static_2d(self, shape: Sequence[sympy.Expr | int]) -> bool:
+        if len(shape) != 2 or not all(
+            isinstance(dim, (int, sympy.Integer)) for dim in shape
+        ):
+            return False
+        rows, cols = (int(dim) for dim in shape)
+        return (
+            rows >= 16
+            and cols >= 64
+            and rows <= 2**31 - 1
+            and cols <= 2**31 - 1
+            and rows * cols * self.dtype.itemsize
+            >= config.triton.hopper_tma_min_bytes
+        )
+
+    def _is_auto_hopper_tma_candidate(self) -> bool:
+        if (
+            not config.triton.enable_hopper_tma_layout_conversion
+            or self.dtype != torch.bfloat16
+            or not config.triton.autotune_pointwise
+            or config.max_autotune
+            or config.max_autotune_pointwise
+            or self.for_store
+            or config.triton.use_tensor_descriptor
+            or type(self.kernel) is not TritonKernel
+            or self.kernel.features.is_reduction()
+            or self.kernel.fixed_config is not None
+            or self.kernel.is_combo_kernel
+            or self.kernel.mutations
+        ):
+            return False
+
+        pointwise_numels = {
+            prefix: numel
+            for prefix, numel in self.kernel.numels.items()
+            if prefix_is_pointwise(prefix)
+        }
+        if set(pointwise_numels) != {"x", "y"} or not self._is_large_static_2d(
+            [pointwise_numels["y"], pointwise_numels["x"]]
+        ):
+            return False
+
+        nodes = tuple(self.kernel.features.scheduler_nodes())
+        return (
+            len(nodes) == 1
+            and len(nodes[0].read_writes.reads) == 1
+            and len(nodes[0].read_writes.writes) == 1
+            and self.kernel.features.op_counts().get("load", 0) == 1
+            and use_auto_hopper_tma(self.dtype)
+        )
+
     # Also see Note: TMA API Restrictions for the below
     def can_use_tma(
         self,
     ) -> bool:
         if self.force:
             return True
+
+        auto_hopper_tma = self._is_auto_hopper_tma_candidate()
 
         device_type = V.graph.get_current_device_or_throw().type
         if device_type == "cpu":
@@ -2941,11 +2995,11 @@ class TMACompatibilityChecker:
                 (
                     device_type == "cuda"
                     and torch.cuda.get_device_capability()[0] >= 9
-                    and config.assume_aligned_inputs
+                    and (config.assume_aligned_inputs or auto_hopper_tma)
                 )
                 or device_type == "xpu"
             )
-            and config.triton.use_tensor_descriptor
+            and (config.triton.use_tensor_descriptor or auto_hopper_tma)
             and has_triton_stable_tma_api()
         ):
             log.debug(
@@ -2986,6 +3040,30 @@ class TMACompatibilityChecker:
         If force, we allow relying on symbolic hints equivalent
         to what we check for Triton templates.
         """
+        auto_hopper_tma = self._is_auto_hopper_tma_candidate()
+        if auto_hopper_tma:
+            if not (
+                len(block_params.block_shape) == len(block_params.strides) == 2
+                and self._is_large_static_2d(block_params.shape)
+                and block_params.block_shape
+                == [
+                    TritonSymbols.block_sizes[SymT.YBLOCK],
+                    TritonSymbols.block_sizes[SymT.XBLOCK],
+                ]
+                and all(
+                    isinstance(dim, (int, sympy.Integer))
+                    for dim in block_params.strides
+                )
+                and V.graph.sizevars.statically_known_equals(
+                    block_params.strides[0], block_params.shape[1]
+                )
+                and V.graph.sizevars.statically_known_equals(
+                    block_params.strides[1], 1
+                )
+                and V.graph.sizevars.statically_known_equals(constant_offset, 0)
+            ):
+                return False
+
         device_type = V.graph.get_current_device_or_throw().type
         if self.force:
             strides = [
@@ -3240,6 +3318,8 @@ class TMACompatibilityChecker:
                 )
                 return False
 
+        if auto_hopper_tma:
+            self.kernel.use_hopper_tma_2d = True
         return True
 
     def can_lift(self) -> bool:
@@ -3306,6 +3386,7 @@ class TritonKernel(SIMDKernel[TritonCSEVariable]):
         self._host_tma_non_materializable: OrderedSet[str] = OrderedSet()
         self._host_tma_non_materializable_buffers: OrderedSet[str] | None = None
         self._emitted_device_tma = False
+        self.use_hopper_tma_2d = False
         self.hint_override = hint_override
         self._load_counts: collections.Counter[str] = collections.Counter()
         self._pdl_load_index = 0
@@ -4287,6 +4368,7 @@ class TritonKernel(SIMDKernel[TritonCSEVariable]):
             if (
                 has_triton_stable_tma_api()
                 and config.triton.enable_host_side_tma
+                and not self.use_hopper_tma_2d
                 and not indexing.can_lift
                 and indexing.constant_offset == 0
                 and var not in self._host_tma_non_materializable
@@ -7244,6 +7326,9 @@ class TritonKernel(SIMDKernel[TritonCSEVariable]):
         self.codegen_prologue(self.body)
         self._prescan_host_tma_materializability()
         self.codegen_body()
+
+        if self.use_hopper_tma_2d and self._emitted_device_tma:
+            self.inductor_meta["use_hopper_tma_2d"] = True
 
         # TMA probing sets tma_min_block_sizes even when the access falls back
         # to tl.load; a stale constraint regresses non-TMA kernels.

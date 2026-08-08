@@ -77,6 +77,8 @@ class PointwiseHeuristic(CodegenConfigHeuristics):
     def _configs_2d(
         self, size_hints, bs, hinted_configs, triton_config_fn, tile_hint, inductor_meta
     ):
+        if inductor_meta.get("use_hopper_tma_2d"):
+            return [triton_config_fn(size_hints, 64, 16)]
         if (
             not inductor_meta.get("autotune_pointwise", True)
             or tile_hint == TileHint.SQUARE
