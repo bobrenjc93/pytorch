@@ -239,7 +239,10 @@ def remove_all_zero_sdpa_biases(graph: torch.fx.Graph) -> int:
             continue
 
         _collect_ancestors(bias, dead_candidates)
-        node.update_arg(3, None)
+        if len(node.args) > 3:
+            node.update_arg(3, None)
+        else:
+            node.update_kwarg("attn_bias", None)
         if len(node.args) > 6:
             node.update_arg(6, False)
         else:
