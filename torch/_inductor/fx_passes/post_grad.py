@@ -15,6 +15,7 @@ import torch.utils._pytree as pytree
 from torch import fx
 from torch._decomp import register_decomposition
 from torch._dynamo.utils import counters
+from torch._functorch.compile_utils import fx_graph_cse
 from torch._higher_order_ops.flex_gemm import _PRESERVE_FLEX_GEMM_GEMM_OP
 from torch._inductor.custom_graph_pass import (
     CustomInferenceAwareGraphPass,
@@ -57,6 +58,7 @@ from ..utils import (
     get_gpu_type,
     is_gpu,
     is_pointwise_use,
+    is_view,
     OPTIMUS_EXCLUDE_POST_GRAD,
 )
 from ..virtualized import V
@@ -140,6 +142,92 @@ def _chain_random_ops_for_ordering(graph: torch.fx.Graph) -> None:
         additional_deps_map[random_nodes[i]] = OrderedSet([random_nodes[i - 1]])
 
     preserve_node_ordering(graph, additional_deps_map)
+
+
+def _is_static_cuda_tensor(node: torch.fx.Node) -> bool:
+    value = node.meta.get("val")
+    return (
+        isinstance(value, torch.Tensor)
+        and value.device.type == "cuda"
+        and all(type(dim) is int for dim in value.shape)
+    )
+
+
+def _is_input_independent_factory_dag_node(
+    node: torch.fx.Node, factory_dag_nodes: OrderedSet[torch.fx.Node]
+) -> bool:
+    if (
+        node.op != "call_function"
+        or not isinstance(node.target, torch._ops.OpOverload)
+        or node.target.namespace not in ("aten", "prims")
+        or node.target._schema.is_mutable
+        or node.is_impure()
+        or torch.Tag.nondeterministic_seeded in node.target.tags
+        or not _is_static_cuda_tensor(node)
+    ):
+        return False
+
+    if any(
+        isinstance(arg, (torch.Tensor, torch.SymBool, torch.SymFloat, torch.SymInt))
+        for arg in pytree.tree_leaves((node.args, node.kwargs))
+    ):
+        return False
+
+    inputs = node.all_input_nodes
+    is_factory = torch._subclasses.fake_tensor._is_tensor_constructor(node.target)
+    if is_factory:
+        return not inputs and "empty" not in node.target._schema.name
+
+    if not inputs or not all(inp in factory_dag_nodes for inp in inputs):
+        return False
+
+    return (
+        torch.Tag.pointwise in node.target.tags
+        or is_view(node.target)
+        or node.target
+        in (
+            aten._to_copy.default,
+            aten._unsafe_view.default,
+            aten.cat.default,
+            prims.convert_element_type.default,
+        )
+    )
+
+
+def cse_static_cuda_factory_dags(gm: torch.fx.GraphModule) -> bool:
+    """CSE exact repeats in static CUDA DAGs rooted at tensor factories.
+
+    Unique keys exclude other nodes while retaining fx_graph_cse's mutation and
+    output-alias safety checks.
+    """
+    factory_dag_nodes = OrderedSet[torch.fx.Node]()
+    nodes_by_target: dict[fx.node.Target, list[torch.fx.Node]] = defaultdict(list)
+    has_duplicate = False
+
+    for node in gm.graph.nodes:
+        if not _is_input_independent_factory_dag_node(node, factory_dag_nodes):
+            continue
+
+        factory_dag_nodes.add(node)
+        same_target_nodes = nodes_by_target[node.target]
+        has_duplicate = has_duplicate or any(
+            node.args == other.args and node.kwargs == other.kwargs
+            for other in same_target_nodes
+        )
+        same_target_nodes.append(node)
+
+    if not has_duplicate:
+        return False
+
+    graph = fx_graph_cse(
+        gm.graph,
+        extra_node_key=lambda node: None if node in factory_dag_nodes else node,
+    )
+    if len(graph.nodes) == len(gm.graph.nodes):
+        return False
+
+    gm.graph = graph
+    return True
 
 
 def reject_current_device_nodes(graph: torch.fx.Graph) -> None:
@@ -302,6 +390,11 @@ def post_grad_passes(gm: torch.fx.GraphModule, is_inference: bool):
     )
 
     fake_tensor_updater.incremental_update()
+
+    if is_inference and GraphTransformObserver(
+        gm, "cse_static_cuda_factory_dags"
+    ).apply_gm_pass(cse_static_cuda_factory_dags):
+        fake_tensor_updater = FakeTensorUpdater(gm)
 
     for device, custom_backend_pass in custom_backend_passes.items():
         if custom_backend_pass is not None:
