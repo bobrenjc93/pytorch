@@ -196,52 +196,85 @@ def _is_input_independent_factory_dag_node(
     )
 
 
+def _is_value_only_consumer(node: torch.fx.Node) -> bool:
+    if (
+        node.op != "call_function"
+        or not isinstance(node.target, torch._ops.OpOverload)
+        or node.target.namespace not in ("aten", "prims")
+        or node.target._schema.is_mutable
+        or node.is_impure()
+    ):
+        return False
+    return node.target not in (
+        aten.is_set_to.default,
+        aten._has_same_storage_numel.default,
+    ) and all(ret.alias_info is None for ret in node.target._schema.returns)
+
+
 def cse_static_cuda_factory_dags(gm: torch.fx.GraphModule) -> bool:
     """CSE exact repeats in static CUDA DAGs rooted at tensor factories.
 
-    Unique keys exclude other nodes while retaining fx_graph_cse's mutation and
-    output-alias safety checks.
+    Opaque and aliasing consumers preserve allocation identity. Other nodes are
+    excluded while retaining fx_graph_cse's mutation and output-alias checks.
     """
     factory_dag_nodes = OrderedSet[torch.fx.Node]()
-    buckets: dict[tuple[fx.node.Target, int], list[tuple[Any, ...]]] = defaultdict(list)
-    has_duplicate = False
 
     for node in gm.graph.nodes:
-        if not _is_input_independent_factory_dag_node(node, factory_dag_nodes):
-            continue
+        if _is_input_independent_factory_dag_node(node, factory_dag_nodes):
+            factory_dag_nodes.add(node)
 
-        factory_dag_nodes.add(node)
-        if not has_duplicate:
-            args, args_spec = pytree.tree_flatten(node.args)
-            kwargs, kwargs_spec = pytree.tree_flatten(node.kwargs)
-            args_key = tuple(_cse_arg_key(arg) for arg in args)
-            kwargs_key = tuple(_cse_arg_key(arg) for arg in kwargs)
-            custom = node.meta.get("custom", {})
-            token = (
-                args_key,
-                args_spec,
-                kwargs_key,
-                kwargs_spec,
-                custom.get("stream", 0),
-                custom.get("mempool"),
-                custom.get("mempool_device"),
+    identity_sensitive_nodes = [
+        node
+        for node in factory_dag_nodes
+        if any(
+            user not in factory_dag_nodes and not _is_value_only_consumer(user)
+            for user in node.users
+        )
+    ]
+    while identity_sensitive_nodes:
+        node = identity_sensitive_nodes.pop()
+        if node not in factory_dag_nodes:
+            continue
+        factory_dag_nodes.remove(node)
+        if any(ret.alias_info is not None for ret in node.target._schema.returns):
+            identity_sensitive_nodes.extend(
+                inp for inp in node.all_input_nodes if inp in factory_dag_nodes
             )
-            key = (node.target, hash((args_key, kwargs_key)))
-            matching_tokens = buckets[key]
-            has_duplicate = token in matching_tokens
-            matching_tokens.append(token)
+
+    buckets: dict[tuple[fx.node.Target, int], list[tuple[Any, ...]]] = defaultdict(list)
+    has_duplicate = False
+    for node in factory_dag_nodes:
+        args, args_spec = pytree.tree_flatten(node.args)
+        kwargs, kwargs_spec = pytree.tree_flatten(node.kwargs)
+        args_key = tuple(_cse_arg_key(arg) for arg in args)
+        kwargs_key = tuple(_cse_arg_key(arg) for arg in kwargs)
+        custom = node.meta.get("custom", {})
+        token = (
+            args_key,
+            args_spec,
+            kwargs_key,
+            kwargs_spec,
+            custom.get("stream", 0),
+            custom.get("mempool"),
+            custom.get("mempool_device"),
+        )
+        key = (node.target, hash((args_key, kwargs_key)))
+        matching_tokens = buckets[key]
+        if token in matching_tokens:
+            has_duplicate = True
+            break
+        matching_tokens.append(token)
 
     if not has_duplicate:
         return False
 
-    graph = fx_graph_cse(
-        gm.graph, skip_node_fn=lambda node: node not in factory_dag_nodes
+    num_nodes = len(gm.graph.nodes)
+    fx_graph_cse(
+        gm.graph,
+        skip_node_fn=lambda node: node not in factory_dag_nodes,
+        inplace=True,
     )
-    if len(graph.nodes) == len(gm.graph.nodes):
-        return False
-
-    gm.graph = graph
-    return True
+    return len(gm.graph.nodes) != num_nodes
 
 
 def reject_current_device_nodes(graph: torch.fx.Graph) -> None:

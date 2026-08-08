@@ -51,29 +51,37 @@ rand_ops = [
 def _cse_arg_key(arg: Any) -> tuple[type[Any], Any]:
     """Preserve scalar types and floating-point bits in CSE comparisons."""
     arg_type = type(arg)
-    if isinstance(arg, float):
+    if arg_type is float:
         arg = struct.pack("!d", arg)
-    elif isinstance(arg, complex):
+    elif arg_type is complex:
         arg = struct.pack("!dd", arg.real, arg.imag)
     return arg_type, arg
 
 
-# return a new copy of torch.fx.graph.Graph with CSE applied to the input graph
 def fx_graph_cse(
     fx_g: torch.fx.graph.Graph,
     extra_node_key: Callable[[fx.Node], Hashable] | None = None,
     skip_node_fn: Callable[[fx.Node], bool] | None = None,
+    inplace: bool = False,
 ) -> fx.Graph:
+    """Eliminate duplicate nodes, optionally rewriting ``fx_g`` in place."""
     new_graph = fx.Graph()
     env: dict[
         fx.Node, fx.Node
-    ] = {}  # map from node in the old graph to node in the new graph
+    ] = {}  # map from old nodes to canonical output nodes
     hash_env: dict[
         tuple[Any, Hashable | None, int], fx.Node
-    ] = {}  # map from hash to a node in the new graph
+    ] = {}  # map from hashes to canonical output nodes
     token_map: dict[
         tuple[Any, Hashable | None, int], dict[str, Any]
     ] = {}  # map from hash to token
+    replacements: dict[fx.Node, fx.Node] = {}
+
+    def copy_or_preserve_node(node: fx.Node) -> None:
+        if inplace:
+            env[node] = node
+        else:
+            env[node] = new_graph.node_copy(node, lambda x: env[x])
 
     from torch._inductor.pattern_matcher import (
         compute_mutation_region_ids,
@@ -194,8 +202,7 @@ def fx_graph_cse(
                 and free_unbacked_symbols(n.meta["val"])
             )
         ):
-            new_node = new_graph.node_copy(n, lambda x: env[x])
-            env[n] = new_node
+            copy_or_preserve_node(n)
         else:  # n.op == 'call_function', should never see n.op == 'call_module' or 'call_method'
             # substitute args and kwargs members to their mapping in env if exists
             # specs can be used to reconstruct nested list/dictionaries
@@ -240,16 +247,24 @@ def fx_graph_cse(
                 duplicate_n_prev = hash_env[hash_val]
                 if same_mutation_regions(n, duplicate_n_prev):
                     env[n] = duplicate_n_prev
+                    if inplace:
+                        replacements[n] = duplicate_n_prev
                     continue
                 else:
                     # any futures duplicates should replace with n, not duplicate_n_prev
                     overwrite_due_to_mutation = True
 
-            new_node = new_graph.node_copy(n, lambda x: env[x])
-            env[n] = new_node
+            copy_or_preserve_node(n)
             if overwrite_due_to_mutation or not hash_val_in_hash_env:
-                hash_env[hash_val] = new_node
+                hash_env[hash_val] = env[n]
                 token_map[hash_val] = token
+
+    if inplace:
+        for node, replacement in replacements.items():
+            node.replace_all_uses_with(replacement)
+        for node in reversed(replacements):
+            fx_g.erase_node(node)
+        return fx_g
 
     return new_graph
 
