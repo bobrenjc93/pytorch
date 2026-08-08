@@ -8030,15 +8030,20 @@ class Scheduler:
         Speculative loop mutations (reordering, reindexing) are automatically
         rolled back if the fusion decision ultimately fails.
         """
-        tracker = _LoopMutationTracker.create((node1, node2))
-        can_fuse = self._can_fuse_impl(
-            node1,
-            node2,
-            can_reorder=can_reorder,
-            allow_mix_order_reduction=allow_mix_order_reduction,
-        )
-        tracker.finish(rollback=not can_fuse)
-        return can_fuse
+        # Recursive fusion checks must not leak speculative scores to their caller.
+        previous_score = self._latest_fusion_memory_score
+        try:
+            tracker = _LoopMutationTracker.create((node1, node2))
+            can_fuse = self._can_fuse_impl(
+                node1,
+                node2,
+                can_reorder=can_reorder,
+                allow_mix_order_reduction=allow_mix_order_reduction,
+            )
+            tracker.finish(rollback=not can_fuse)
+            return can_fuse
+        finally:
+            self._latest_fusion_memory_score = previous_score
 
     def _can_fuse_impl(
         self,
