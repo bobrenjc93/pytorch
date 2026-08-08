@@ -149,6 +149,8 @@ def _is_static_cuda_tensor(node: torch.fx.Node) -> bool:
     return (
         isinstance(value, torch.Tensor)
         and value.device.type == "cuda"
+        and value.layout is torch.strided
+        and torch._C._has_storage(value)
         and all(type(dim) is int for dim in value.shape)
     )
 
@@ -233,8 +235,7 @@ def cse_static_cuda_factory_dags(gm: torch.fx.GraphModule) -> bool:
         return False
 
     graph = fx_graph_cse(
-        gm.graph,
-        extra_node_key=lambda node: None if node in factory_dag_nodes else node,
+        gm.graph, skip_node_fn=lambda node: node not in factory_dag_nodes
     )
     if len(graph.nodes) == len(gm.graph.nodes):
         return False

@@ -62,6 +62,7 @@ def _cse_arg_key(arg: Any) -> tuple[type[Any], Any]:
 def fx_graph_cse(
     fx_g: torch.fx.graph.Graph,
     extra_node_key: Callable[[fx.Node], Hashable] | None = None,
+    skip_node_fn: Callable[[fx.Node], bool] | None = None,
 ) -> fx.Graph:
     new_graph = fx.Graph()
     env: dict[
@@ -169,6 +170,7 @@ def fx_graph_cse(
             or n.op == "output"
             or n.op == "get_attr"
             or n.is_impure()
+            or (skip_node_fn is not None and skip_node_fn(n))
             or get_aten_target(n) in rand_ops
             # aten.empty is non-deterministic, so don't CSE it.
             # Also, aten.empty is almost always fusible into its consumer,
