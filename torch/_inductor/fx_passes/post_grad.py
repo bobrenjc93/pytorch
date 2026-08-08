@@ -15,7 +15,7 @@ import torch.utils._pytree as pytree
 from torch import fx
 from torch._decomp import register_decomposition
 from torch._dynamo.utils import counters
-from torch._functorch.compile_utils import fx_graph_cse
+from torch._functorch.compile_utils import _cse_arg_key, fx_graph_cse
 from torch._higher_order_ops.flex_gemm import _PRESERVE_FLEX_GEMM_GEMM_OP
 from torch._inductor.custom_graph_pass import (
     CustomInferenceAwareGraphPass,
@@ -212,19 +212,19 @@ def cse_static_cuda_factory_dags(gm: torch.fx.GraphModule) -> bool:
         if not has_duplicate:
             args, args_spec = pytree.tree_flatten(node.args)
             kwargs, kwargs_spec = pytree.tree_flatten(node.kwargs)
-            typed_args = tuple((arg, type(arg)) for arg in args)
-            typed_kwargs = tuple((arg, type(arg)) for arg in kwargs)
+            args_key = tuple(_cse_arg_key(arg) for arg in args)
+            kwargs_key = tuple(_cse_arg_key(arg) for arg in kwargs)
             custom = node.meta.get("custom", {})
             token = (
-                typed_args,
+                args_key,
                 args_spec,
-                typed_kwargs,
+                kwargs_key,
                 kwargs_spec,
                 custom.get("stream", 0),
                 custom.get("mempool"),
                 custom.get("mempool_device"),
             )
-            key = (node.target, hash((typed_args, typed_kwargs)))
+            key = (node.target, hash((args_key, kwargs_key)))
             matching_tokens = buckets[key]
             has_duplicate = token in matching_tokens
             matching_tokens.append(token)

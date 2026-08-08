@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import operator
+import struct
 from typing import Any, TYPE_CHECKING
 
 import sympy
@@ -45,6 +46,16 @@ rand_ops = [
     aten.randn,
     aten.randperm,
 ]
+
+
+def _cse_arg_key(arg: Any) -> tuple[type[Any], Any]:
+    """Preserve scalar types and floating-point bits in CSE comparisons."""
+    arg_type = type(arg)
+    if isinstance(arg, float):
+        arg = struct.pack("!d", arg)
+    elif isinstance(arg, complex):
+        arg = struct.pack("!dd", arg.real, arg.imag)
+    return arg_type, arg
 
 
 # return a new copy of torch.fx.graph.Graph with CSE applied to the input graph
@@ -200,6 +211,8 @@ def fx_graph_cse(
 
             args, args_spec = substitute(n.args)
             kwargs, kwargs_spec = substitute(n.kwargs)
+            args_key = tuple(_cse_arg_key(arg) for arg in args)
+            kwargs_key = tuple(_cse_arg_key(arg) for arg in kwargs)
 
             # each token corresponds to a unique node
             # nodes with the same token can be substituted
@@ -207,19 +220,15 @@ def fx_graph_cse(
             token = {
                 "target": n.target,
                 "extra_key": extra_key,
-                "args": args,
+                "args": args_key,
                 "args_spec": args_spec,
-                "kwargs": kwargs,
+                "kwargs": kwargs_key,
                 "kwargs_spec": kwargs_spec,
                 "custom_context": custom_context_key(n),
             }
 
             # hash substituted args to a number, do not hash specs because specs are not hashable
-            # We need to add type into hash to avoid situations like:
-            # hash((primals_2, 1.0)) == hash((primals_2, 1))
-            hash_arg = hash(
-                (tuple((a, type(a)) for a in args), tuple((a, type(a)) for a in kwargs))
-            )
+            hash_arg = hash((args_key, kwargs_key))
             hash_val = (n.target, extra_key, hash_arg)
 
             # check if a node has a substitute and can be eliminated
