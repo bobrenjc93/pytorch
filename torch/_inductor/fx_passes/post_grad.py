@@ -60,6 +60,7 @@ from ..utils import (
     OPTIMUS_EXCLUDE_POST_GRAD,
 )
 from ..virtualized import V
+from .all_zero_attention import remove_all_zero_sdpa_biases
 from .b2b_gemm import B2B_GEMM_PASS
 from .control_dependencies import control_deps, preserve_node_ordering
 from .ddp_fusion import fuse_ddp_communication
@@ -234,6 +235,10 @@ def post_grad_passes(gm: torch.fx.GraphModule, is_inference: bool):
         GraphTransformObserver(gm, "remove_assert_ops").apply_graph_pass(
             remove_assert_ops
         )
+        if is_inference:
+            GraphTransformObserver(gm, "remove_all_zero_sdpa_biases").apply_graph_pass(
+                remove_all_zero_sdpa_biases
+            )
         for i, patterns in enumerate(pass_patterns):
             GraphTransformObserver(gm, f"pass_pattern_{i}").apply_graph_pass(
                 patterns.apply
