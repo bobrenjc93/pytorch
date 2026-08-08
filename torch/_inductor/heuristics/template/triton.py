@@ -15,8 +15,6 @@ import torch
 from torch._inductor.heuristics.registry import register_template_heuristic
 from torch.utils._ordered_set import OrderedSet
 from torch.utils._sympy.functions import Min, Mod
-from torch.utils._triton import has_triton_stable_tma_api
-
 from ... import config
 from ...autows_utils import meta_ws_enabled
 from ...kernel.bmm import bmm_template
@@ -38,6 +36,7 @@ from ...utils import (
     get_default_kpack,
     get_num_sms,
     get_tma_workspace_arg,
+    has_triton_stable_tma_api,
     TMA_DESCRIPTOR_SIZE,
     triton_type,
     using_b200,

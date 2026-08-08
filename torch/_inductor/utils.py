@@ -1936,6 +1936,19 @@ def use_triton_template(
     )
 
 
+@functools.cache
+def has_triton_stable_tma_api() -> bool:
+    """Whether the installed Triton exposes the stable tensor descriptor API."""
+    if not has_triton_package():
+        return False
+    try:
+        from triton.language import make_tensor_descriptor  # noqa: F401
+
+        return True
+    except ImportError:
+        return False
+
+
 def use_auto_hopper_tma(
     dtype: torch.dtype, device: torch.device | None = None
 ) -> bool:
@@ -1945,8 +1958,6 @@ def use_auto_hopper_tma(
         or dtype != torch.bfloat16
     ):
         return False
-
-    from torch.utils._triton import has_triton_stable_tma_api
 
     from .virtualized import V
 

@@ -40,7 +40,6 @@ from torch.utils._triton import (
     get_triton_version,
     has_triton_cpu_backend,
     has_triton_package,
-    has_triton_stable_tma_api,
 )
 
 from ...utils._sympy.symbol import free_symbol_is_type, prefix_str, symbol_is_type, SymT
@@ -80,6 +79,7 @@ from ..utils import (
     get_bounds_index_expr,
     get_fused_kernel_name,
     get_kernel_metadata,
+    has_triton_stable_tma_api,
     is_welford_reduction,
     Placeholder,
     prefix_is_pointwise,
@@ -2973,7 +2973,8 @@ class TMACompatibilityChecker:
 
         auto_hopper_tma = self._is_auto_hopper_tma_candidate()
 
-        device_type = V.graph.get_current_device_or_throw().type
+        device = V.graph.get_current_device_or_throw()
+        device_type = device.type
         if device_type == "cpu":
             if not (
                 config.triton.use_tensor_descriptor
@@ -2994,7 +2995,7 @@ class TMACompatibilityChecker:
             (
                 (
                     device_type == "cuda"
-                    and torch.cuda.get_device_capability()[0] >= 9
+                    and torch.cuda.get_device_capability(device)[0] >= 9
                     and (config.assume_aligned_inputs or auto_hopper_tma)
                 )
                 or device_type == "xpu"

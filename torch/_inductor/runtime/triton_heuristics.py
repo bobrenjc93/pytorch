@@ -38,11 +38,12 @@ from torch._inductor.config import triton as inductor_triton_config
 from torch._prims_common import compute_required_storage_length
 from torch.utils._debug_mode import get_active_debug_mode
 from torch.utils._ordered_set import OrderedSet
-from torch.utils._triton import get_triton_version, has_triton_stable_tma_api
+from torch.utils._triton import get_triton_version
 
 from ..triton_bundler import TritonBundler
 from ..utils import (
     GPU_KERNEL_BIN_EXTS,
+    has_triton_stable_tma_api,
     prefix_is_reduction,
     tlx_only_cuda_options,
     TMA_ALIGNMENT,
@@ -1474,6 +1475,7 @@ class CachingAutotuner(KernelInterface):
             )
             return float("inf")
 
+        self._set_triton_allocator()
         device_interface = self.get_device_interface()
 
         cpu_copies = self.copy_args_to_cpu_if_needed(*args, **kwargs)
@@ -2446,10 +2448,8 @@ class CachingAutotuner(KernelInterface):
             and not get_active_debug_mode()
         ):
             # Triton's allocator is a ContextVar, so install it in this context.
-            if self._cached_launcher_needs_allocator and hasattr(
-                triton, "set_allocator"
-            ):
-                triton.set_allocator(self._allocate_global_scratch)
+            if self._cached_launcher_needs_allocator:
+                self._set_triton_allocator()
             return fast(*args, stream=stream)
 
         debug_mode = get_active_debug_mode()
@@ -2461,8 +2461,7 @@ class CachingAutotuner(KernelInterface):
                 kernel_name=self.fn.__name__, kwargs=kernel_kwargs
             )
 
-        if hasattr(triton, "set_allocator"):
-            triton.set_allocator(self._allocate_global_scratch)
+        self._set_triton_allocator()
 
         if self.triton_interpret:
             args, grid = self._interpret_args_grid(args, self.configs[0])
@@ -2565,6 +2564,10 @@ class CachingAutotuner(KernelInterface):
         self, size: int, _align: int, _stream: int | None
     ) -> torch.Tensor:
         return torch.empty(size, dtype=torch.int8, device=self.device_props.type)
+
+    def _set_triton_allocator(self) -> None:
+        if hasattr(triton, "set_allocator"):
+            triton.set_allocator(self._allocate_global_scratch)
 
     def _check_launcher_call_args(
         self,
