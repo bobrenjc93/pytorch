@@ -4213,6 +4213,10 @@ class Scheduler:
     optimizations such as fusion, reorder, and graph partition.
     """
 
+    _latest_fusion_memory_score: (
+        tuple[BaseSchedulerNode, BaseSchedulerNode, int] | None
+    ) = None
+
     def __init__(self, nodes: list[ir.Operation]) -> None:
         with dynamo_timed("Scheduler.__init__"):
             self._init(nodes)
@@ -4275,6 +4279,7 @@ class Scheduler:
         # mutation_renames = {"buf1" : "buf0"}
         # in codegen we only use buf0, never buf1
         self.mutation_renames: dict[str, str] = {}
+        self._latest_fusion_memory_score = None
 
         self.seen_template_fusions: OrderedSet[
             tuple[BaseSchedulerNode, BaseSchedulerNode]
@@ -7026,7 +7031,16 @@ class Scheduler:
                 # not an integer. Fallback is to fuse
                 return False
 
-        bw_saving = self.score_fusion_memory(node1, node2)
+        # can_fuse() computes the default score immediately before this heuristic.
+        cached_score = self._latest_fusion_memory_score
+        if (
+            cached_score is not None
+            and cached_score[0] is node1
+            and cached_score[1] is node2
+        ):
+            bw_saving = cached_score[2]
+        else:
+            bw_saving = self.score_fusion_memory(node1, node2)
 
         # The factor 32 here is quite arbitrary.
         if V.graph.sizevars.statically_known_gt(memory_overhead, 32 * bw_saving):
@@ -8854,8 +8868,14 @@ class Scheduler:
             score, buffer_overlap_score, is_mix_order_reduction
         ):
             if return_is_mix_order_reduction:
+                self._latest_fusion_memory_score = None
                 return (score, buffer_overlap_score, is_mix_order_reduction)
-            return score + buffer_overlap_score
+            result = score + buffer_overlap_score
+            if count_bytes and allow_mix_order_reduction:
+                self._latest_fusion_memory_score = (node1, node2, result)
+            else:
+                self._latest_fusion_memory_score = None
+            return result
 
         if allow_mix_order_reduction and MixOrderReduction.can_fuse(node1, node2):
             # The fusion score for mix order reduction only count
