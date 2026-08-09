@@ -504,6 +504,86 @@ class CausalAttentionPassTests(TestCase):
             [("FLASH_ATTENTION",), ("MATH",)],
         )
 
+    def test_sdpa_policy_trailing_setter_restores_trace_state(self):
+        policies = []
+        backend_states = []
+
+        @torch._dynamo.dont_skip_tracing
+        def fn(query):
+            result = F.scaled_dot_product_attention(query, query, query)
+            torch.backends.cuda.enable_flash_sdp(False)
+            return result
+
+        def backend(gm, _):
+            backend_states.append(torch.backends.cuda.flash_sdp_enabled())
+            policies.extend(
+                node.meta["custom"][SDPA_KERNEL_BACKENDS_META]
+                for node in gm.graph.nodes
+                if SDPA_KERNEL_BACKENDS_META in node.meta.get("custom", {})
+            )
+            return gm.forward
+
+        query = torch.randn(1, 2, 8, 16)
+        original_flash_state = torch.backends.cuda.flash_sdp_enabled()
+        torch.backends.cuda.enable_flash_sdp(True)
+        torch._dynamo.reset()
+        try:
+            expected = F.scaled_dot_product_attention(query, query, query)
+            actual = torch.compile(fn, backend=backend, fullgraph=True)(query)
+            self.assertEqual(actual, expected)
+            self.assertFalse(torch.backends.cuda.flash_sdp_enabled())
+        finally:
+            torch._dynamo.reset()
+            torch.backends.cuda.enable_flash_sdp(original_flash_state)
+
+        self.assertEqual(len(policies), 1)
+        self.assertEqual(backend_states, [True])
+        self.assertIn("FLASH_ATTENTION", policies[0])
+
+    def test_nested_region_reuse_uses_entry_sdpa_policy(self):
+        graphs = []
+
+        @torch.compiler.nested_compile_region
+        @torch._dynamo.dont_skip_tracing
+        def region(query):
+            result = F.scaled_dot_product_attention(query, query, query)
+            torch.backends.cuda.enable_flash_sdp(False)
+            return result
+
+        @torch._dynamo.dont_skip_tracing
+        def fn(query):
+            torch.backends.cuda.enable_flash_sdp(True)
+            flash = region(query)
+            no_flash = region(query)
+            torch.backends.cuda.enable_flash_sdp(True)
+            return flash + no_flash
+
+        def backend(gm, _):
+            graphs.append(gm)
+            return lambda query: query
+
+        query = torch.randn(1, 2, 8, 16)
+        original_flash_state = torch.backends.cuda.flash_sdp_enabled()
+        torch.backends.cuda.enable_flash_sdp(True)
+        torch._dynamo.reset()
+        try:
+            torch.compile(fn, backend=backend, fullgraph=True)(query)
+        finally:
+            torch._dynamo.reset()
+            torch.backends.cuda.enable_flash_sdp(original_flash_state)
+
+        self.assertEqual(len(graphs), 1)
+        subgraph_policies = [
+            node.meta["custom"][SDPA_KERNEL_BACKENDS_META]
+            for name, module in graphs[0].named_children()
+            if name.startswith("subgraph_")
+            for node in module.graph.nodes
+            if node.target is torch._C._nn.scaled_dot_product_attention
+        ]
+        self.assertEqual(len(subgraph_policies), 2)
+        self.assertIn("FLASH_ATTENTION", subgraph_policies[0])
+        self.assertNotIn("FLASH_ATTENTION", subgraph_policies[1])
+
     def test_compile_time_all_true_padding(self):
         gm = _trace_attention(indexed_padding=True)
 

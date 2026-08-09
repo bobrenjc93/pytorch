@@ -27,7 +27,8 @@ from torch._dynamo.source import SyntheticLocalSource
 from torch._dynamo.utils import (
     _make_inlined,
     get_node_sdpa_kernel_backends,
-    get_sdpa_kernel_backends,
+    get_sdpa_kernel_backend_state,
+    SDPAKernelBackendState,
     unpack_iterable,
 )
 from torch._dynamo.variables.base import VariableTracker
@@ -99,14 +100,14 @@ hc_log = torch._logging.getArtifactLogger(__name__, "hierarchical_compile")
 # Paired with an InvokeSubgraphReuseCondition containing:
 #   - input_checks: (tag, tensor_metadata) per input
 #   - guards: (source, handler, expected, guard) tuples
-#   - sdpa_kernel_backends: ordered policy for an SDPA-containing region
+#   - sdpa_kernel_backend_state: entry policy for an SDPA-containing region
 #   - treespec: pytree structure of the args
 #   - traced_sources: sources accessed during the trace
 #
 # CACHE LOOKUP (is_reusable)
 # ==========================
 # On subsequent calls:
-#   1. SDPA policy match for regions containing SDPA.
+#   1. SDPA entry-policy match for regions containing SDPA.
 #   2. Input structure match -- same treespec, tags, tensor metadata.
 #   3. Source replacement -- clone each guard's source with a replacement map
 #      (old: L['self'].layers[0].weight -> new: L['self'].layers[1].weight),
@@ -532,6 +533,7 @@ def build_reuse_condition(
     fingerprint: InputFingerprint,
     traced_sources: OrderedSet[Source],
     body_gmod: GraphModule,
+    sdpa_kernel_backend_state: SDPAKernelBackendState,
 ) -> InvokeSubgraphReuseCondition | None:
     """Build an InvokeSubgraphReuseCondition from a traced subgraph.
 
@@ -641,8 +643,8 @@ def build_reuse_condition(
     return InvokeSubgraphReuseCondition(
         input_checks=input_checks,
         guards=guard_tuples,
-        sdpa_kernel_backends=(
-            get_sdpa_kernel_backends() if policy_sensitive else None
+        sdpa_kernel_backend_state=(
+            sdpa_kernel_backend_state if policy_sensitive else None
         ),
         treespec=fingerprint.treespec,
         traced_sources=traced_sources,
@@ -670,7 +672,7 @@ def is_reusable(
     """Check if a cached subgraph can be reused for the current call.
 
     Four-phase check:
-    (1) Verify that the ordered SDPA policy still matches for an SDPA region.
+    (1) Verify that the full SDPA entry policy still matches for an SDPA region.
     (2) Verify that intermediates (tensor metadata, symnode types, constant
         values) match the cached input_checks. These are lightweight
         structural comparisons that don't require source resolution.
@@ -681,8 +683,9 @@ def is_reusable(
         re-evaluate the snapshotted guards under the new sources.
     """
     if (
-        condition.sdpa_kernel_backends is not None
-        and get_sdpa_kernel_backends() != condition.sdpa_kernel_backends
+        condition.sdpa_kernel_backend_state is not None
+        and get_sdpa_kernel_backend_state()
+        != condition.sdpa_kernel_backend_state
     ):
         hc_log.debug(
             "subgraph_reuse: reuse failed -- SDPA kernel policy mismatch",
@@ -1417,6 +1420,11 @@ class InvokeSubgraphHigherOrderVariable(WrapHigherOrderVariable):
                 with dynamo_timed("invoke_subgraph_reuse_stamp_out"):
                     return stamp_out_subgraph(tx, fingerprint, match)
 
+        sdpa_kernel_backend_state = (
+            get_sdpa_kernel_backend_state()
+            if reuse and reuse_hash_fn is None
+            else None
+        )
         if self._HOP_NAME is None:
             raise AssertionError("_HOP_NAME must not be None")
         with dynamo_timed("invoke_subgraph_trace"):
@@ -1487,11 +1495,14 @@ class InvokeSubgraphHigherOrderVariable(WrapHigherOrderVariable):
                 if is_reuse_eligible(
                     tx, body_r, fingerprint, tracing_info, traced_sources
                 ):
+                    if sdpa_kernel_backend_state is None:
+                        raise AssertionError("SDPA entry policy was not captured")
                     condition = build_reuse_condition(
                         tx,
                         fingerprint,
                         traced_sources,
                         body_gmod,
+                        sdpa_kernel_backend_state,
                     )
                     if condition is not None:
                         save_reuse_entry(

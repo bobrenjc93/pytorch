@@ -165,7 +165,9 @@ from .utils import (
     lazy_format_graph_code,
     LazyString,
     nn_module_proxy,
+    restore_sdpa_kernel_backend_state,
     same,
+    SDPAKernelBackendState,
     set_example_value,
 )
 from .variables.builder import (
@@ -757,9 +759,7 @@ class OutputGraph(OutputGraphCommon):
             self.cudagraph_annotation = _CGA(fwd=_override[0], bwd=_override[1])
 
         # In-graph SDPA policy mutations restore this frame-entry policy.
-        self.sdpa_kernel_backend_state: (
-            tuple[bool, bool, bool, bool, bool, tuple[int, ...]] | None
-        ) = None
+        self.sdpa_kernel_backend_state: SDPAKernelBackendState | None = None
         self.sdpa_kernel_backend_guard_installed = False
 
         self.region_tracker = GraphRegionTracker()
@@ -1531,7 +1531,7 @@ class OutputGraph(OutputGraphCommon):
 
     def capture_sdpa_kernel_backend_state(
         self,
-    ) -> tuple[bool, bool, bool, bool, bool, tuple[int, ...]]:
+    ) -> SDPAKernelBackendState:
         if self.sdpa_kernel_backend_state is None:
             self.sdpa_kernel_backend_state = get_sdpa_kernel_backend_state()
         return self.sdpa_kernel_backend_state
@@ -2649,20 +2649,51 @@ class OutputGraph(OutputGraphCommon):
     @contextlib.contextmanager
     def restore_global_state(self) -> Any:
         """
-        Momentarily restores the global state to what it was prior to tracing the current output
+        Momentarily restore global state to what it was before tracing.
+
+        SDPA mutations are restored after a successful compiler call so tracing
+        can continue in program order. A compiler mutation that requests a
+        restart becomes the next attempt's entry state.
         """
         prior_global_state = self.tracing_context.global_context.copy_graphstate()
         current_global_state: dict[str, tuple[Any, bool]] = {}
         self.save_global_state(out=current_global_state)
+        current_sdpa_state = (
+            get_sdpa_kernel_backend_state()
+            if self.sdpa_kernel_backend_state is not None
+            else None
+        )
+        sdpa_state_to_restore = current_sdpa_state
         try:
             # Set to state prior to tracing the graph
             self.tracing_context.global_context.restore_graphstate(prior_global_state)
+            if (
+                self.sdpa_kernel_backend_state is not None
+                and current_sdpa_state != self.sdpa_kernel_backend_state
+            ):
+                restore_sdpa_kernel_backend_state(self.sdpa_kernel_backend_state)
             yield
+        except exc.SpeculationRestartAnalysis:
+            sdpa_state_to_restore = self.sdpa_kernel_backend_state
+            if self.sdpa_kernel_backend_state is not None:
+                backend_state = get_sdpa_kernel_backend_state()
+                if backend_state != self.sdpa_kernel_backend_state:
+                    self.sdpa_kernel_backend_state = backend_state
+                    sdpa_state_to_restore = backend_state
+            raise
+        except Exception:
+            sdpa_state_to_restore = self.sdpa_kernel_backend_state
+            raise
         finally:
             # Reset to state at the current time (e.g. before calling the user compiler)
             self.tracing_context.global_context.restore_graphstate(
                 GlobalContextCheckpointState(current_global_state)
             )
+            if (
+                sdpa_state_to_restore is not None
+                and get_sdpa_kernel_backend_state() != sdpa_state_to_restore
+            ):
+                restore_sdpa_kernel_backend_state(sdpa_state_to_restore)
 
     def run_compiler_collective(self) -> None:
         tx = self.root_tx
@@ -3598,6 +3629,15 @@ class OutputGraph(OutputGraphCommon):
         return name
 
     def cleanup(self) -> None:
+        if self.sdpa_kernel_backend_state is not None:
+            # Setter execution during fake propagation must not escape tracing.
+            if (
+                get_sdpa_kernel_backend_state()
+                != self.sdpa_kernel_backend_state
+            ):
+                restore_sdpa_kernel_backend_state(self.sdpa_kernel_backend_state)
+            self.sdpa_kernel_backend_state = None
+
         # There is a reference cycle between tracer and OutputGraph, causing
         # some of the tensor objects to be held alive for longer than necessary.
         self.root_tx = None  # type: ignore[assignment]

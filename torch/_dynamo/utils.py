@@ -173,6 +173,9 @@ _P = ParamSpec("_P")
 # Generic SDPA policy is lost during decomposition. Preserve its ordered backend
 # names for post-AOT rewrites and hash the annotation in FxGraphHashDetails.
 SDPA_KERNEL_BACKENDS_META = "_dynamo_sdpa_kernel_backends"
+SDPAKernelBackendState: TypeAlias = tuple[
+    bool, bool, bool, bool, bool, tuple[int, ...]
+]
 
 
 def get_sdpa_kernel_backends() -> tuple[str, ...]:
@@ -192,7 +195,7 @@ def get_node_sdpa_kernel_backends(node: fx.Node) -> tuple[str, ...] | None:
     return backends if isinstance(backends, tuple) else None
 
 
-def get_sdpa_kernel_backend_state() -> tuple[bool, bool, bool, bool, bool, tuple[int, ...]]:
+def get_sdpa_kernel_backend_state() -> SDPAKernelBackendState:
     return (
         torch._C._get_cudnn_sdp_enabled(),
         torch._C._get_flash_sdp_enabled(),
@@ -201,6 +204,16 @@ def get_sdpa_kernel_backend_state() -> tuple[bool, bool, bool, bool, bool, tuple
         torch._C._get_overrideable_sdp_enabled(),
         tuple(torch._C._get_sdp_priority_order()),
     )
+
+
+def restore_sdpa_kernel_backend_state(state: SDPAKernelBackendState) -> None:
+    cudnn, flash, efficient, math, overrideable, priority = state
+    torch._C._set_sdp_use_cudnn(cudnn)
+    torch._C._set_sdp_use_flash(flash)
+    torch._C._set_sdp_use_mem_efficient(efficient)
+    torch._C._set_sdp_use_math(math)
+    torch._C._set_sdp_use_overrideable(overrideable)
+    torch._C._set_sdp_priority_order(list(priority))
 
 
 unpatched_nn_module_getattr = torch.nn.Module.__getattr__
