@@ -2267,9 +2267,9 @@ class triton:
     )
 
     # Programmatic Dependent Launch improves launch latency on Nvidia Hopper+ devices.
-    # An unset environment variable enables auto mode for inference on SM90. A set
-    # value preserves the previous behavior: "1" enables PDL and anything else
-    # disables it.
+    # An unset environment variable enables auto mode for JIT SM90 inference
+    # dependency chains. A set value preserves the previous behavior: "1" enables
+    # PDL and anything else disables it.
     enable_pdl: bool | None = (
         os.environ.get("TORCHINDUCTOR_ENABLE_PDL") == "1"
         if "TORCHINDUCTOR_ENABLE_PDL" in os.environ

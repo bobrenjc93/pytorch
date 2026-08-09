@@ -4520,6 +4520,71 @@ class TritonKernel(SIMDKernel[TritonCSEVariable]):
     GDC_LAUNCH = "tl.extra.cuda.gdc_launch_dependents()"
 
     @staticmethod
+    def _is_auto_pdl_node(node: BaseSchedulerNode | None) -> bool:
+        if node is None or node.is_template() or node.is_extern() or node.is_foreach():
+            return False
+        device = node.get_device()
+        return (
+            device is not None
+            and device.type == "cuda"
+            and all(isinstance(n, SchedulerNode) for n in node.get_nodes())
+        )
+
+    @classmethod
+    def _has_auto_pdl_dependency(
+        cls, previous: BaseSchedulerNode | None, current: BaseSchedulerNode | None
+    ) -> bool:
+        if not cls._is_auto_pdl_node(previous) or not cls._is_auto_pdl_node(
+            current
+        ):
+            return False
+        if previous is None or current is None:
+            raise AssertionError("PDL nodes must not be None")
+        if previous.get_device() != current.get_device():
+            return False
+        if previous.scheduler is not current.scheduler:
+            return False
+        node_to_stream = current.scheduler.node_to_stream
+        if node_to_stream.get(previous, 0) != node_to_stream.get(current, 0):
+            return False
+
+        mutation_renames = {
+            name: renamed
+            for node in current.get_nodes()
+            for name, renamed in node.mutation_renames.items()
+        }
+        rename = mutation_renames.get
+        previous_reads = {
+            rename(dep.name, dep.name) for dep in previous.read_writes.reads
+        }
+        previous_writes = {
+            rename(dep.name, dep.name) for dep in previous.read_writes.writes
+        }
+        current_reads = {dep.name for dep in current.read_writes.reads}
+        current_writes = {dep.name for dep in current.read_writes.writes}
+        return bool(
+            previous_writes & (current_reads | current_writes)
+            or previous_reads & current_writes
+        )
+
+    @classmethod
+    def _auto_pdl_role(cls) -> tuple[bool, bool]:
+        """Return whether the current node has a PDL predecessor and successor."""
+        scheduler = V.graph.scheduler
+        if scheduler is None:
+            return (False, False)
+        if scheduler.current_node_pdl_role is None:
+            scheduler.current_node_pdl_role = (
+                cls._has_auto_pdl_dependency(
+                    scheduler.previous_node, scheduler.current_node
+                ),
+                cls._has_auto_pdl_dependency(
+                    scheduler.current_node, scheduler.next_node
+                ),
+            )
+        return scheduler.current_node_pdl_role
+
+    @staticmethod
     def _enable_pdl_codegen():
         enable_pdl = torch._inductor.config.triton.enable_pdl
         if enable_pdl is False:
@@ -4533,21 +4598,37 @@ class TritonKernel(SIMDKernel[TritonCSEVariable]):
         if device.type != "cuda":
             return False
         if enable_pdl is None:
-            if not V.graph.is_inference or (
+            if V.aot_compilation or V.graph.cpp_wrapper or not V.graph.is_inference or (
                 config.use_static_triton_launcher
                 and config.strict_static_triton_launcher
             ):
                 return False
 
-        capability = DeviceProperties.create(device).cc
+        local_capability = DeviceProperties.create(device).cc
+        target_capability = local_capability
         if V.aot_compilation and config.cuda.arch is not None:
             from .cuda.compile_utils import _cuda_arch_number
 
-            capability = _cuda_arch_number(config.cuda.arch)
+            target_capability = _cuda_arch_number(str(config.cuda.arch))
 
         if enable_pdl is None:
-            return capability == 90
-        return capability >= 90
+            return (
+                local_capability == 90
+                and target_capability == 90
+                and any(TritonKernel._auto_pdl_role())
+            )
+        return local_capability >= 90 and target_capability >= 90
+
+    @classmethod
+    def _enable_pdl_launch(cls) -> bool:
+        if not cls._enable_pdl_codegen():
+            return False
+        if torch._inductor.config.triton.enable_pdl is not None:
+            return True
+        # The producer only needs to signal; the launch attribute belongs to
+        # the dependent kernel, allowing the producer to retain static launch.
+        has_predecessor, _ = cls._auto_pdl_role()
+        return has_predecessor
 
     def _handle_pdl_before_access(
         self, wait_buffer, *dependencies, consider_reads=False
@@ -6896,7 +6977,7 @@ class TritonKernel(SIMDKernel[TritonCSEVariable]):
     def triton_meta_common(cls) -> TritonMeta:
         return {
             "enable_fp_fusion": not config.emulate_precision_casts,
-            "launch_pdl": cls._enable_pdl_codegen(),
+            "launch_pdl": cls._enable_pdl_launch(),
             "disable_ftz": config.eager_numerics.disable_ftz,
         }
 

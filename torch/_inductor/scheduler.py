@@ -4238,6 +4238,8 @@ class Scheduler:
         self.nodes = [self.create_scheduler_node(n) for n in nodes]
         self.previous_node: BaseSchedulerNode | None = None
         self.current_node: BaseSchedulerNode | None = None
+        self.next_node: BaseSchedulerNode | None = None
+        self.current_node_pdl_role: tuple[bool, bool] | None = None
         self.update_zero_dim_cpu_tensor()
         # some new constants could have been created above
         self.available_buffer_names.update(V.graph.constants.keys())
@@ -10164,7 +10166,11 @@ class Scheduler:
                 if multi:
                     V.graph.wrapper_code.mark_multistream_alignment(multi)
 
-        for node in nodes:
+        for node_index, node in enumerate(nodes):
+            self.next_node = (
+                nodes[node_index + 1] if node_index + 1 < len(nodes) else None
+            )
+            self.current_node_pdl_role = None
             if log.isEnabledFor(logging.DEBUG):
                 try:
                     log.debug(
@@ -10341,6 +10347,8 @@ class Scheduler:
                 V.graph.wrapper_code.codegen_device_guard_exit()
 
         self.previous_node = None
+        self.next_node = None
+        self.current_node_pdl_role = None
         self.flush()
 
     def benchmark_combo_kernel(
