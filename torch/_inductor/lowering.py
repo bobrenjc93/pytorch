@@ -7434,16 +7434,41 @@ def use_two_step_variance(x, axis, keepdim, input_dtype):
     )
 
     ranges = kwargs["ranges"]
+    output_numel = sympy_product(ranges)
     reduction_numel = sympy_product(kwargs["reduction_ranges"])
     device = x.get_device()
     check_for_split = False
     min_numel = 0
     is_cuda_two_step_dtype = input_dtype in (torch.bfloat16, torch.float16)
+    # Normalization decompositions convert bf16 inputs to fp32 before var_mean,
+    # so use storage dtypes to keep true fp32 reductions out.
+    use_small_bf16_inference = (
+        device is not None
+        and device.type == "cuda"
+        and is_triton(x)
+        and x.get_dtype() == torch.float32
+        and getattr(V.graph, "is_inference", False)
+        and isinstance(reduction_numel, sympy.Integer)
+        and 256 <= int(reduction_numel) < 1024
+        and isinstance(output_numel, sympy.Integer)
+        and int(output_numel) >= 256
+        and (
+            {V.graph.get_dtype(name) for name in x.get_read_names()}
+            == {torch.bfloat16}
+        )
+        and torch.version.hip is None
+        and torch.cuda.get_device_properties(device).major == 9
+    )
     if device and device.type == "cpu":
         # 1024 is a default value to pass all the UTs about accuracy.
         # A larger threshold can still get performance benefits.
         threshold = config.cpp.use_two_step_variance_threshold
-    elif device and device.type == "cuda" and is_triton(x) and is_cuda_two_step_dtype:
+    elif (
+        device
+        and device.type == "cuda"
+        and is_triton(x)
+        and (is_cuda_two_step_dtype or use_small_bf16_inference)
+    ):
         min_numel = config.triton.use_two_step_variance_min_numel
         threshold = config.triton.use_two_step_variance_threshold
         check_for_split = True
@@ -7454,11 +7479,12 @@ def use_two_step_variance(x, axis, keepdim, input_dtype):
         return False
 
     reduction_numel = int(reduction_numel)
-    if reduction_numel > threshold or sympy_product(ranges) == 1:
+    if reduction_numel > threshold or output_numel == 1:
         return False
 
     if min_numel and config.unroll_reductions_threshold < reduction_numel < min_numel:
-        return False
+        if not use_small_bf16_inference:
+            return False
 
     if not check_for_split:
         return True
