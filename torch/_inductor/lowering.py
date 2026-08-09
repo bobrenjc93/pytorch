@@ -67,7 +67,7 @@ from torch.utils._sympy.functions import (
 )
 
 from .._dynamo.utils import import_submodule
-from . import config, inductor_prims, ir, test_operators  # NOQA: F401
+from . import config, dependencies, inductor_prims, ir, test_operators  # NOQA: F401
 from .decomposition import decompositions, get_decompositions
 from .ir import (
     BaseView,
@@ -7458,7 +7458,27 @@ def use_two_step_variance(x, axis, keepdim, input_dtype):
         )
         and torch.version.hip is None
         and torch.cuda.get_device_properties(device).major == 9
+        and config.triton.persistent_reductions
+        and not config.triton.multi_kernel
+        and not V.choices.should_use_cooperative_reduction(
+            device, output_numel, reduction_numel
+        )
     )
+    if use_small_bf16_inference:
+        # Non-unit reduction strides make the scheduler select nonpersistent codegen.
+        with patch.object(ir.FlexibleLayout, "allow_indexing", True):
+            reads = dependencies.extract_read_writes(
+                kwargs["inner_fn"],
+                kwargs["ranges"],
+                kwargs["reduction_ranges"],
+                normalize=True,
+            ).reads
+        use_small_bf16_inference = all(
+            not isinstance(dep, dependencies.MemoryDep)
+            or dep.is_contiguous()
+            or dep.stride1_for_last_dim()
+            for dep in reads
+        )
     if device and device.type == "cpu":
         # 1024 is a default value to pass all the UTs about accuracy.
         # A larger threshold can still get performance benefits.
