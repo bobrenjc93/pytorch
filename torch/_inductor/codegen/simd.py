@@ -49,7 +49,7 @@ from ..optimize_indexing import (
     indexing_dtype_strength_reduction,
 )
 from ..runtime.coordinate_descent_tuner import CoordescTuner
-from ..runtime.hints import DeviceProperties, InductorMeta
+from ..runtime.hints import DeviceProperties, InductorMeta, ReductionHint
 from ..runtime.runtime_utils import (
     green_text,
     last_power_of_2,
@@ -2073,6 +2073,20 @@ class SIMDScheduling(BaseScheduling):
         _, (numel1, rnumel1) = node1.group
         _, (numel2, rnumel2) = node2.group
         why = WhyNoFuse(node1, node2)
+
+        if (
+            node1.requires_persistent_reduction() is True
+            or node2.requires_persistent_reduction() is True
+        ):
+            fused_nodes = [*node1.get_nodes(), *node2.get_nodes()]
+            reduction_node = node1 if node1.is_reduction() else node2
+            if not reduction_node.is_reduction():
+                raise AssertionError("Expected a persistent reduction")
+            _, (numel, rnumel) = reduction_node.group
+            features = SIMDKernelFeatures(fused_nodes, numel, rnumel)
+            if features.get_reduction_hint() != ReductionHint.INNER:
+                why("fusion would downgrade a required persistent reduction hint")
+                return False
 
         if node1.is_split_scan() and not node2.is_split_scan():
             if node2.is_reduction():

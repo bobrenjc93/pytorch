@@ -7381,6 +7381,21 @@ class TritonKernel(SIMDKernel[TritonCSEVariable]):
     def apply_feature_required_overrides(
         kernel_features: SIMDKernelFeatures, kernel_kwargs: dict[str, Any]
     ) -> None:
+        if kernel_features.requires_persistent_reduction():
+            kernel_kwargs["override_persistent_reduction"] = True
+            kernel_kwargs["override_cooperative_reduction"] = False
+            fixed_config = kernel_kwargs.get("fixed_config")
+            if fixed_config is not None:
+                # Persistent reduction blocks are constants, not kernel arguments.
+                fixed_blocks = {
+                    key: value
+                    for key, value in fixed_config.config.items()
+                    if key != "RSPLIT"
+                    and not (key.startswith("R") and key.endswith("_BLOCK"))
+                }
+                kernel_kwargs["fixed_config"] = (
+                    FixedTritonConfig(fixed_blocks) if fixed_blocks else None
+                )
         # ops.sort only works with persistent reduction, and is not bandwidth
         # bound anyway so taking the hit of non-coalesced loads is okay.
         if kernel_features.contains_op("sort"):
@@ -8254,6 +8269,7 @@ class TritonScheduling(SIMDScheduling):
         kernel_kwargs = V.choices.triton_kernel_kwargs(
             kernel_type, kernel_features, kernel_args, kernel_kwargs
         )
+        kernel_type.apply_feature_required_overrides(kernel_features, kernel_kwargs)
         kernel = kernel_type(*kernel_args, **kernel_kwargs)
         return self.add_multi_kernel_choices(kernel, kernel_args, kernel_kwargs)
 

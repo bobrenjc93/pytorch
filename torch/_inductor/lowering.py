@@ -7316,7 +7316,10 @@ def _make_reduction_inner(
 
 
 def make_reduction(
-    reduction_type: ReductionType, override_return_dtype=None
+    reduction_type: ReductionType,
+    override_return_dtype=None,
+    *,
+    requires_persistent_reduction=False,
 ) -> Callable[..., TensorBox]:
     def inner(x, axis=None, keepdims=False, *, dtype=None) -> TensorBox:
         # For argmax/argmin on boolean tensors, cast to int32 first to ensure
@@ -7335,11 +7338,19 @@ def make_reduction(
             reduction_type=reduction_type,
         )
         result = Reduction.create(reduction_type=reduction_type, input_node=x, **kwargs)
-        if isinstance(
+        is_reduction = isinstance(
             result.data.data,  # type: ignore[attr-defined, attr-type, union-attr]
             Reduction,
-        ):  # Only realize if reduction isn't unrolled
-            result.realize()
+        )
+        if is_reduction:  # Only realize if reduction isn't unrolled
+            name = result.realize()
+            if requires_persistent_reduction:
+                if name is None:
+                    raise AssertionError("Expected reduction buffer name")
+                buffer = V.graph.get_buffer(name)
+                if not isinstance(buffer, ir.ComputedBuffer):
+                    raise AssertionError(f"Expected ComputedBuffer, got {type(buffer)}")
+                buffer.requires_persistent_reduction = True
         return result
 
     return inner
@@ -7379,7 +7390,9 @@ def _make_scan_inner(x, *, axis, dtype):
 
 
 @register_lowering(aten.mean)
-def mean(x, axis=None, keepdim=False, *, dtype=None):
+def mean(
+    x, axis=None, keepdim=False, *, dtype=None, requires_persistent_reduction=False
+):
     if dtype is not None:
         x = to_dtype(x, dtype)
     size = x.get_size()
@@ -7388,25 +7401,47 @@ def mean(x, axis=None, keepdim=False, *, dtype=None):
     output_dtype = x.get_dtype()
     if output_dtype in (torch.float16, torch.bfloat16):
         x = to_dtype(x, torch.float)
-    sum_result = sum_(x, axis, keepdim)
+    sum_result = sum_(
+        x,
+        axis,
+        keepdim,
+        requires_persistent_reduction=requires_persistent_reduction,
+    )
     denom = sympy_product(size[i] for i in axis)
     denom = ir.IndexingConstant(index=denom, dtype=x.get_dtype(), device=x.get_device())
     denom = ExpandView.create(denom, list(sum_result.get_size()))
     return to_dtype(div(sum_result, denom), output_dtype)
 
 
-def var_mean_sum_(x, axis, correction, keepdim, return_mean):
+def var_mean_sum_(
+    x,
+    axis,
+    correction,
+    keepdim,
+    return_mean,
+    requires_persistent_reduction=False,
+):
     if correction is None:
         correction = 1
 
     size = x.get_size()
     axis = _validate_reduction_axis(x, axis)
-    x_mean = mean(x, axis, keepdim=True)
+    x_mean = mean(
+        x,
+        axis,
+        keepdim=True,
+        requires_persistent_reduction=requires_persistent_reduction,
+    )
     if return_mean:
         x_mean.realize()
 
     diffs = square(sub(x, x_mean))
-    sum_result = sum_(diffs, axis, keepdim)
+    sum_result = sum_(
+        diffs,
+        axis,
+        keepdim,
+        requires_persistent_reduction=requires_persistent_reduction,
+    )
 
     denom = sympy_product(size[i] for i in axis)
     if correction:
@@ -7571,16 +7606,26 @@ def var_mean_helper_(x, *, axis, correction, keepdim, return_mean):
         keepdim=keepdim,
         return_mean=return_mean,
     )
-    output = (
-        var_mean_sum_(**kwargs)
-        if (
-            config.mtia.disable_welford_reduction
-            or use_two_step_variance(
-                x, axis=axis, keepdim=keepdim, input_dtype=out_dtype
-            )
-        )
-        else var_mean_welford_(**kwargs)
+    use_two_step = config.mtia.disable_welford_reduction or use_two_step_variance(
+        x, axis=axis, keepdim=keepdim, input_dtype=out_dtype
     )
+    if use_two_step:
+        reduction_numel = sympy_product(
+            x.get_size()[i] for i in _validate_reduction_axis(x, axis)
+        )
+        requires_persistent_reduction = (
+            not config.mtia.disable_welford_reduction
+            and x.get_device() is not None
+            and x.get_device().type == "cuda"
+            and isinstance(reduction_numel, sympy.Integer)
+            and 256 <= int(reduction_numel) < 1024
+        )
+        output = var_mean_sum_(
+            **kwargs,
+            requires_persistent_reduction=requires_persistent_reduction,
+        )
+    else:
+        output = var_mean_welford_(**kwargs)
     output = tuple(to_dtype(x, out_dtype, copy=False) for x in output)
     return output[0] if not return_mean else output
 
@@ -7906,13 +7951,19 @@ def fmod(a, b):
 
 
 @register_lowering([aten.sum, prims.sum])
-def sum_(x, axis=None, keepdims=False, *, dtype=None):
+def sum_(
+    x, axis=None, keepdims=False, *, dtype=None, requires_persistent_reduction=False
+):
     if (
         is_integer_dtype(x.get_dtype()) or is_boolean_dtype(x.get_dtype())
     ) and dtype is None:
         dtype = torch.int64
 
-    fn = make_reduction("sum", override_return_dtype=dtype)
+    fn = make_reduction(
+        "sum",
+        override_return_dtype=dtype,
+        requires_persistent_reduction=requires_persistent_reduction,
+    )
     return fn(x, axis, keepdims, dtype=dtype)
 
 

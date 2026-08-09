@@ -391,6 +391,8 @@ class MixOrderReduction:
             contiguous_node, other_node = node2, node1
         else:
             return False
+        if other_node.requires_persistent_reduction() is True:
+            return False
 
         g1 = cls.get_numel_rnumel(contiguous_node)
         nrow, ncol = g1
@@ -1464,6 +1466,14 @@ class BaseSchedulerNode:
 
     def get_nodes(self) -> Sequence[BaseSchedulerNode]:
         return [self]
+
+    @cache_on_self
+    def requires_persistent_reduction(self) -> bool:
+        return any(
+            isinstance(node.node, ir.ComputedBuffer)
+            and node.node.requires_persistent_reduction
+            for node in self.get_nodes()
+        )
 
     def get_outputs(self) -> Sequence[SchedulerBuffer]:
         return self.outputs
@@ -2982,6 +2992,8 @@ class FusedMixOrderReductions(FusedSchedulerNode):
             raise AssertionError("expected node1 to not be a FusedMixOrderReductions")
         if isinstance(node2, FusedMixOrderReductions):
             raise AssertionError("expected node2 to not be a FusedMixOrderReductions")
+        if node1 is self.node2 and node2.requires_persistent_reduction() is True:
+            return False
 
         # When we fuse extra nodes into a FusedMixOrderReductions node,
         # we should not allow recursive mix-order reduction being
@@ -8086,14 +8098,15 @@ class Scheduler:
 
         why = WhyNoFuse(node1, node2)
 
-        if node1.is_template() and self.get_backend(
-            node1.get_device()
-        ).can_fuse_multi_outputs_template(node1, node2):
-            return True
-        if node1.is_template() and self.get_backend(
-            node1.get_device()
-        ).can_fuse_reduction_epilogue(node1, node2):
-            return True
+        if node1.is_template():
+            if node2.requires_persistent_reduction() is True:
+                why("reduction requires persistent codegen")
+                return False
+            backend = self.get_backend(node1.get_device())
+            if backend.can_fuse_multi_outputs_template(node1, node2):
+                return True
+            if backend.can_fuse_reduction_epilogue(node1, node2):
+                return True
 
         if isinstance(node1, GroupedSchedulerNode) or isinstance(
             node2, GroupedSchedulerNode

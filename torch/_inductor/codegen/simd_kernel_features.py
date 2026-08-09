@@ -144,6 +144,12 @@ class SIMDKernelFeatures:
     def reduction_nodes(self) -> list[SchedulerNode]:
         return [n for n in self.scheduler_nodes() if n.is_reduction()]
 
+    def requires_persistent_reduction(self) -> bool:
+        return any(
+            node.requires_persistent_reduction() is True
+            for node in self.scheduler_nodes()
+        )
+
     @cache_on_self
     def buf_accesses(self) -> dict[str, list[Dep]]:
         """only needed for config.benchmark_kernel"""

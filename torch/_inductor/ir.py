@@ -5439,6 +5439,8 @@ class ComputedBuffer(OperationBuffer):
 
     data: Loops
     _force_realize: ClassVar[bool] = False
+    # Set by lowerings whose numerical contract requires persistent codegen.
+    requires_persistent_reduction: bool = False
 
     # fields for split reduction
     _split_size: int | None = None
