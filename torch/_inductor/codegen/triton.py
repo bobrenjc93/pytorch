@@ -66,6 +66,7 @@ from ..runtime.runtime_utils import get_max_y_grid, next_power_of_2
 from ..scheduler import (
     BaseSchedulerNode,
     FusedExternTritonKernelSchedulerNode,
+    FusedMixOrderReductions,
     FusedSchedulerNode,
     Scheduler,
     SchedulerNode,
@@ -4522,6 +4523,10 @@ class TritonKernel(SIMDKernel[TritonCSEVariable]):
     @staticmethod
     def _is_auto_pdl_node(node: BaseSchedulerNode | None) -> bool:
         if node is None or node.is_template() or node.is_extern() or node.is_foreach():
+            return False
+        # Mix-order codegen inserts an eager workspace reduction after its
+        # generated Triton launch, so scheduler adjacency is not launch adjacency.
+        if isinstance(node, FusedMixOrderReductions):
             return False
         device = node.get_device()
         return (
