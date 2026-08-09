@@ -2266,10 +2266,10 @@ class triton:
         os.environ.get("TORCHINDUCTOR_DECOMPOSE_K_THRESHOLD", "32")
     )
 
-    # Programmatic Dependent Launch improves launch latency on Nvidia Hopper+ devices
-    # If set to true, will generate PDL code on devices that support it.
-    # If set to false, will never generate PDL code.
-    enable_pdl = os.environ.get("TORCHINDUCTOR_ENABLE_PDL", "0") == "1"
+    # Programmatic Dependent Launch improves launch latency on Nvidia Hopper+ devices.
+    # None enables it automatically for inference on SM90, while explicit true/false
+    # enables/disables it on all supported devices and graphs.
+    enable_pdl: bool | None = get_tristate_env("TORCHINDUCTOR_ENABLE_PDL")
 
     mix_order_reduction = (
         os.environ.get("TORCHINDUCTOR_MIX_ORDER_REDUCTION", "0" if is_fbcode() else "1")
