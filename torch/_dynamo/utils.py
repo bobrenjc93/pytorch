@@ -170,6 +170,31 @@ T10 = TypeVar("T10")
 R = TypeVar("R")
 _P = ParamSpec("_P")
 
+# Generic SDPA policy is lost during decomposition. Preserve its ordered backend
+# names for post-AOT rewrites and hash the annotation in FxGraphHashDetails.
+SDPA_KERNEL_BACKENDS_META = "_dynamo_sdpa_kernel_backends"
+
+
+def get_sdpa_kernel_backends() -> tuple[str, ...]:
+    return tuple(
+        backend.name
+        for backend in torch.nn.attention._cur_sdpa_kernel_backends(
+            with_priority=True
+        )
+    )
+
+
+def get_sdpa_kernel_backend_state() -> tuple[bool, bool, bool, bool, bool, tuple[int, ...]]:
+    return (
+        torch._C._get_cudnn_sdp_enabled(),
+        torch._C._get_flash_sdp_enabled(),
+        torch._C._get_mem_efficient_sdp_enabled(),
+        torch._C._get_math_sdp_enabled(),
+        torch._C._get_overrideable_sdp_enabled(),
+        tuple(torch._C._get_sdp_priority_order()),
+    )
+
+
 unpatched_nn_module_getattr = torch.nn.Module.__getattr__
 unpatched_nn_module_call = torch.nn.Module.__call__
 unpatched_nn_module_call_impl = torch.nn.Module._call_impl

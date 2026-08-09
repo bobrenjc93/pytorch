@@ -4,20 +4,24 @@ import unittest
 from unittest.mock import patch
 
 import torch
-from torch._dynamo.utils import counters
+import torch.nn.functional as F
+from torch._dynamo.utils import counters, SDPA_KERNEL_BACKENDS_META
 from torch._higher_order_ops.cudagraph_conditional_nodes import (
     _can_use_cuda_graph_conditional_nodes,
     _has_cuda_graph_conditional_node_support,
 )
+from torch._inductor.codecache import FxGraphCachePickler, FxGraphHashDetails
 from torch._inductor.cudagraph_trees import CUDAGraphNode, get_container
 from torch._inductor.decomposition import select_decomp_table
 from torch._inductor.fx_passes.causal_attention import (
     replace_causal_bias_with_is_causal,
 )
 from torch._inductor.pattern_matcher import fwd_only, get_arg_value
+from torch._inductor.utils import run_and_get_code
 from torch._subclasses.fake_tensor import FakeTensorMode
 from torch.fx.experimental.proxy_tensor import make_fx
 from torch.fx.experimental.symbolic_shapes import ShapeEnv
+from torch.nn.attention import SDPBackend, sdpa_kernel
 from torch.testing._internal.common_device_type import instantiate_device_type_tests
 from torch.testing._internal.common_utils import parametrize, run_tests, TestCase
 
@@ -78,6 +82,29 @@ def _attention(
     return aten._scaled_dot_product_efficient_attention.default(
         query, key, value, bias, False, 0.0, False, scale=scale
     )[0]
+
+
+@torch._dynamo.dont_skip_tracing
+def _sdpa_attention(
+    query: torch.Tensor,
+    key: torch.Tensor,
+    value: torch.Tensor,
+) -> torch.Tensor:
+    batch, heads, q_length, _ = query.shape
+    k_length = key.shape[-2]
+    q_index = torch.arange(q_length, device=query.device).view(
+        1, 1, q_length, 1
+    )
+    k_index = torch.arange(k_length, device=query.device).view(
+        1, 1, 1, k_length
+    )
+    condition = (k_index <= q_index).expand(batch, 1, q_length, k_length)
+    zero = torch.full((), 0.0, dtype=query.dtype, device=query.device)
+    neg_inf = torch.full((), -float("inf"), dtype=query.dtype, device=query.device)
+    bias = torch.where(condition, zero, neg_inf).expand(
+        batch, heads, q_length, k_length
+    )
+    return F.scaled_dot_product_attention(query, key, value, attn_mask=bias)
 
 
 def _trace_attention(
@@ -151,6 +178,14 @@ class CausalAttentionPassTests(TestCase):
 
     def test_exact_causal_bias(self):
         gm = _trace_attention(transposed_layout=True)
+        source_attention = next(
+            node
+            for node in gm.graph.nodes
+            if node.target is aten._scaled_dot_product_efficient_attention.default
+        )
+        source_attention.meta.setdefault("custom", {})[
+            SDPA_KERNEL_BACKENDS_META
+        ] = ("FLASH_ATTENTION", "EFFICIENT_ATTENTION")
 
         with (
             patch.object(torch.version, "hip", None),
@@ -162,9 +197,6 @@ class CausalAttentionPassTests(TestCase):
                 torch.backends.cuda,
                 "is_flash_attention_available",
                 return_value=True,
-            ),
-            patch.object(
-                torch.backends.cuda, "flash_sdp_enabled", return_value=True
             ),
         ):
             self.assertEqual(replace_causal_bias_with_is_causal(gm), 1)
@@ -196,6 +228,60 @@ class CausalAttentionPassTests(TestCase):
         )
         self.assertIsNotNone(get_arg_value(fallback, 3, "attn_bias"))
         self.assertFalse(get_arg_value(fallback, 4, "compute_log_sumexp"))
+
+    def test_sdpa_policy_is_in_fx_cache_key(self):
+        gm = torch.fx.symbolic_trace(
+            lambda query: F.scaled_dot_product_attention(query, query, query)
+        )
+        node = next(node for node in gm.graph.nodes if node.op == "call_function")
+        example_inputs = (torch.randn(1, 2, 8, 16),)
+
+        def cache_key(backends):
+            node.meta["custom"] = {SDPA_KERNEL_BACKENDS_META: backends}
+            details = FxGraphHashDetails(gm, example_inputs, {}, ())
+            return FxGraphCachePickler(gm).get_key(details)
+
+        flash_key = cache_key(("FLASH_ATTENTION", "EFFICIENT_ATTENTION"))
+        efficient_key = cache_key(("EFFICIENT_ATTENTION",))
+        self.assertNotEqual(flash_key, efficient_key)
+
+    def test_sdpa_policy_change_recompiles(self):
+        policies = []
+
+        @torch._dynamo.dont_skip_tracing
+        def fn(query):
+            return F.scaled_dot_product_attention(query, query, query)
+
+        def backend(gm, _):
+            policies.extend(
+                node.meta["custom"][SDPA_KERNEL_BACKENDS_META]
+                for node in gm.graph.nodes
+                if SDPA_KERNEL_BACKENDS_META in node.meta.get("custom", {})
+            )
+            return gm.forward
+
+        all_backends = [
+            SDPBackend.FLASH_ATTENTION,
+            SDPBackend.EFFICIENT_ATTENTION,
+            SDPBackend.MATH,
+            SDPBackend.CUDNN_ATTENTION,
+            SDPBackend.OVERRIDEABLE,
+        ]
+        no_flash = all_backends[1:]
+        query = torch.randn(1, 2, 8, 16)
+        torch._dynamo.reset()
+        try:
+            compiled = torch.compile(fn, backend=backend, fullgraph=True)
+            with sdpa_kernel(all_backends, set_priority=True):
+                compiled(query)
+                with sdpa_kernel(no_flash, set_priority=True):
+                    compiled(query)
+        finally:
+            torch._dynamo.reset()
+
+        self.assertEqual(len(policies), 2)
+        self.assertEqual(policies[0][0], "FLASH_ATTENTION")
+        self.assertNotIn("FLASH_ATTENTION", policies[1])
 
     def test_compile_time_all_true_padding(self):
         gm = _trace_attention(indexed_padding=True)
@@ -450,6 +536,107 @@ class CausalAttentionNumericsTests(TestCase):
         )
         config_context.__enter__()
         self.addCleanup(config_context.__exit__, None, None, None)
+
+    def _skip_unless_hopper_flash(self, device):
+        if (
+            torch.version.hip is not None
+            or torch.cuda.get_device_capability(device) != (9, 0)
+            or not torch.backends.cuda.is_flash_attention_available()
+            or not torch.backends.cuda.flash_sdp_enabled()
+        ):
+            self.skipTest("Hopper FlashAttention is required")
+
+    def test_flash_cudagraph_branches(self, device):
+        self._skip_unless_hopper_flash(device)
+        storage_shape = (1, 128, 2, 64)
+        safe_inputs = tuple(
+            torch.randn(storage_shape, device=device, dtype=torch.bfloat16).transpose(
+                1, 2
+            )
+            for _ in range(3)
+        )
+        exceptional_inputs = tuple(tensor.clone() for tensor in safe_inputs)
+        exceptional_inputs[0].zero_()
+        exceptional_inputs[1].zero_()
+        limit = torch.finfo(torch.bfloat16).max
+        exceptional_inputs[0][:, :, 0] = limit
+        exceptional_inputs[1][:, :, 1:] = limit
+
+        torch._dynamo.reset()
+        counters["inductor"].clear()
+        compiled = torch.compile(_sdpa_attention, fullgraph=True)
+        with (
+            torch._inductor.config.patch({"force_disable_caches": True}),
+            torch.no_grad(),
+        ):
+            expected_safe = _sdpa_attention(*safe_inputs)
+            expected_exceptional = _sdpa_attention(*exceptional_inputs)
+            torch.compiler.cudagraph_mark_step_begin()
+            actual_safe, source_codes = run_and_get_code(compiled, *safe_inputs)
+            actual_safe = actual_safe.clone()
+            torch.compiler.cudagraph_mark_step_begin()
+            actual_exceptional = compiled(*exceptional_inputs).clone()
+            torch.compiler.cudagraph_mark_step_begin()
+            actual_safe_again = compiled(*safe_inputs).clone()
+
+        source = "\n".join(source_codes)
+        self.assertIn("_scaled_dot_product_flash_attention", source)
+        self.assertIn("_scaled_dot_product_efficient_attention", source)
+        self.assertTrue(torch.isnan(expected_exceptional).any())
+        self.assertEqual(actual_safe, expected_safe, atol=1e-2, rtol=1.6e-2)
+        self.assertEqual(actual_exceptional, expected_exceptional, equal_nan=True)
+        self.assertEqual(actual_safe_again, actual_safe)
+        self.assertEqual(counters["inductor"]["cudagraph_skips"], 0)
+        manager = get_container(torch.cuda.current_device()).tree_manager
+        self.assertIsNotNone(manager)
+        self.assertIsInstance(manager.current_node, CUDAGraphNode)
+        self.assertEqual(counters["inductor"]["causal_bias_to_is_causal"], 1)
+
+    @parametrize("policy", ("efficient_only", "efficient_first"))
+    def test_sdpa_backend_policy(self, device, policy):
+        self._skip_unless_hopper_flash(device)
+        inputs = tuple(
+            torch.randn(
+                (1, 128, 2, 64), device=device, dtype=torch.bfloat16
+            ).transpose(1, 2)
+            for _ in range(3)
+        )
+
+        if policy == "efficient_only":
+
+            @torch._dynamo.dont_skip_tracing
+            def fn(query, key, value):
+                with sdpa_kernel(SDPBackend.EFFICIENT_ATTENTION):
+                    return _sdpa_attention(query, key, value)
+
+        else:
+
+            @torch._dynamo.dont_skip_tracing
+            def fn(query, key, value):
+                with sdpa_kernel(
+                    [
+                        SDPBackend.EFFICIENT_ATTENTION,
+                        SDPBackend.FLASH_ATTENTION,
+                    ],
+                    set_priority=True,
+                ):
+                    return _sdpa_attention(query, key, value)
+
+        torch._dynamo.reset()
+        counters["inductor"].clear()
+        compiled = torch.compile(fn, fullgraph=True)
+        with (
+            torch._inductor.config.patch({"force_disable_caches": True}),
+            torch.no_grad(),
+        ):
+            expected = fn(*inputs)
+            actual, source_codes = run_and_get_code(compiled, *inputs)
+
+        source = "\n".join(source_codes)
+        self.assertNotIn("_scaled_dot_product_flash_attention", source)
+        self.assertIn("_scaled_dot_product_efficient_attention", source)
+        self.assertEqual(actual, expected)
+        self.assertEqual(counters["inductor"]["causal_bias_to_is_causal"], 1)
 
     @parametrize("case", ("score_overflow", "nonfinite_value"))
     @parametrize("dtype", (torch.bfloat16, torch.float32))

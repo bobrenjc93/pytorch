@@ -82,12 +82,15 @@ from ..source import (
 from ..utils import (
     _is_tensorify_enabled,
     check_unspec_or_constant_args,
+    get_sdpa_kernel_backend_state,
+    get_sdpa_kernel_backends,
     guard_if_dyn,
     has_torch_function,
     hashable,
     is_wrapper_or_member_descriptor,
     product,
     proxy_args_kwargs,
+    SDPA_KERNEL_BACKENDS_META,
     unpack_iterable,
     unwrap_if_wrapper,
 )
@@ -987,6 +990,38 @@ class TorchInGraphFunctionVariable(BaseTorchVariable):
             UserDefinedObjectVariable,
         )
         from .builder import wrap_fx_proxy, wrap_fx_proxy_cls
+
+        @register(torch._C._nn.scaled_dot_product_attention)
+        def handle_scaled_dot_product_attention(
+            self,
+            tx: "InstructionTranslatorBase",
+            *args: VariableTracker,
+            **kwargs: VariableTracker,
+        ) -> VariableTracker:
+            backends = get_sdpa_kernel_backends()
+            policy_source = CallFunctionNoArgsSource(
+                AttrSource(
+                    AttrSource(
+                        AttrSource(ImportSource("torch"), "_dynamo"), "utils"
+                    ),
+                    get_sdpa_kernel_backend_state.__name__,
+                )
+            )
+            install_guard(policy_source.make_guard(GuardBuilder.EQUALS_MATCH))
+            with (
+                torch.fx.traceback.preserve_node_meta(),
+                torch.fx.traceback.annotate(
+                    {SDPA_KERNEL_BACKENDS_META: backends}
+                ),
+            ):
+                return wrap_fx_proxy(
+                    tx=tx,
+                    proxy=tx.output.create_proxy(
+                        "call_function",
+                        self.value,
+                        *proxy_args_kwargs(args, kwargs),
+                    ),
+                )
 
         @register(*tracing_state_functions())
         def handle_tracing_state_functions(

@@ -55,6 +55,7 @@ from torch._dynamo.utils import (
     counters,
     dynamo_timed,
     get_metrics_context,
+    SDPA_KERNEL_BACKENDS_META,
 )
 from torch._inductor import config, config_comms, exc, metrics
 from torch._inductor.codegen.common import (
@@ -1485,6 +1486,19 @@ class FxGraphHashDetails:
         fx_kwargs: _CompileFxKwargs,
         inputs_to_check: Sequence[int],
     ) -> None:
+        sdpa_kernel_backends: list[tuple[str, ...]] = []
+        if gm is not None:
+            for module in gm.modules():
+                if not isinstance(module, torch.fx.GraphModule):
+                    continue
+                for node in module.graph.nodes:
+                    custom = node.meta.get("custom")
+                    if not isinstance(custom, dict):
+                        continue
+                    backends = custom.get(SDPA_KERNEL_BACKENDS_META)
+                    if isinstance(backends, tuple):
+                        sdpa_kernel_backends.append(backends)
+        self.sdpa_kernel_backends = tuple(sdpa_kernel_backends)
         self.gm = gm
         # Replace opaque references with hashable ordinals. What's important
         # is that if the same reference appears twice then it's the same hash

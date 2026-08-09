@@ -3,7 +3,11 @@ import operator
 from typing import Any
 
 import torch
-from torch._dynamo.utils import counters, detect_fake_mode
+from torch._dynamo.utils import (
+    counters,
+    detect_fake_mode,
+    SDPA_KERNEL_BACKENDS_META,
+)
 from torch._higher_order_ops.cudagraph_conditional_nodes import (
     _can_use_cuda_graph_conditional_nodes,
 )
@@ -417,6 +421,7 @@ def _make_attention_branches(
     value: torch.Tensor,
     compute_log_sumexp: bool,
     scale: float | None,
+    allow_flash: bool,
 ) -> tuple[torch.fx.GraphModule, torch.fx.GraphModule] | None:
     op = aten._scaled_dot_product_efficient_attention.default
     head_dim = query.shape[-1]
@@ -427,13 +432,13 @@ def _make_attention_branches(
         1,
     )
     use_flash = (
-        not compute_log_sumexp
+        allow_flash
+        and not compute_log_sumexp
         and query.dtype is torch.bfloat16
         and query.device.type == "cuda"
         and torch.version.hip is None
         and torch.cuda.is_available()
         and torch.backends.cuda.is_flash_attention_available()
-        and torch.backends.cuda.flash_sdp_enabled()
         and torch.cuda.get_device_capability(query.device) == (9, 0)
         and isinstance(head_dim, int)
         and 0 < head_dim <= 256
@@ -693,6 +698,17 @@ def replace_causal_bias_with_is_causal(gm: torch.fx.GraphModule) -> int:
             accumulation_max / (4.0 * head_dim * max(1.0, effective_scale))
         )
         threshold = min(threshold, torch.finfo(query_meta.dtype).max / 2.0)
+        custom = node.meta.get("custom")
+        sdpa_backends = (
+            custom.get(SDPA_KERNEL_BACKENDS_META)
+            if isinstance(custom, dict)
+            else None
+        )
+        allow_flash = (
+            isinstance(sdpa_backends, tuple)
+            and bool(sdpa_backends)
+            and sdpa_backends[0] == "FLASH_ATTENTION"
+        )
         input_aliases = (
             query_meta is key_meta,
             query_meta is value_meta,
@@ -706,6 +722,7 @@ def replace_causal_bias_with_is_causal(gm: torch.fx.GraphModule) -> int:
             input_aliases,
             compute_log_sumexp,
             attention_scale,
+            allow_flash,
         )
         branch_names = branch_cache.get(branch_key)
         if branch_names is None:
@@ -715,6 +732,7 @@ def replace_causal_bias_with_is_causal(gm: torch.fx.GraphModule) -> int:
                 value_meta,
                 compute_log_sumexp,
                 attention_scale,
+                allow_flash,
             )
             if branches is None:
                 continue
