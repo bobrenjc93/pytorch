@@ -90,6 +90,7 @@ def _trace_attention(
     diagonal_offset: int = 0,
     and_depth: int = 0,
     scale: float | None = None,
+    transposed_layout: bool = False,
 ) -> torch.fx.GraphModule:
     def fn(*args: torch.Tensor) -> torch.Tensor:
         return _attention(
@@ -105,11 +106,17 @@ def _trace_attention(
     with fake_mode:
         kv_length = shape[2] if key_length is None else key_length
         kv_shape = (*shape[:2], kv_length, shape[3])
-        inputs = [torch.empty(shape, device="cuda", dtype=torch.bfloat16)]
-        inputs.extend(
-            torch.empty(kv_shape, device="cuda", dtype=torch.bfloat16)
-            for _ in range(2)
-        )
+        inputs = []
+        for input_shape in (shape, kv_shape, kv_shape):
+            if transposed_layout:
+                input_shape = (
+                    input_shape[0],
+                    input_shape[2],
+                    input_shape[1],
+                    input_shape[3],
+                )
+            tensor = torch.empty(input_shape, device="cuda", dtype=torch.bfloat16)
+            inputs.append(tensor.transpose(1, 2) if transposed_layout else tensor)
         if padding:
             inputs.append(
                 torch.empty(
@@ -143,9 +150,24 @@ class CausalAttentionPassTests(TestCase):
         self.addCleanup(capture_context.stop)
 
     def test_exact_causal_bias(self):
-        gm = _trace_attention()
+        gm = _trace_attention(transposed_layout=True)
 
-        self.assertEqual(replace_causal_bias_with_is_causal(gm), 1)
+        with (
+            patch.object(torch.version, "hip", None),
+            patch.object(torch.cuda, "is_available", return_value=True),
+            patch.object(
+                torch.cuda, "get_device_capability", return_value=(9, 0)
+            ),
+            patch.object(
+                torch.backends.cuda,
+                "is_flash_attention_available",
+                return_value=True,
+            ),
+            patch.object(
+                torch.backends.cuda, "flash_sdp_enabled", return_value=True
+            ),
+        ):
+            self.assertEqual(replace_causal_bias_with_is_causal(gm), 1)
         gm.graph.lint()
         self.assertEqual(_target_count(gm, torch.ops.higher_order.cond), 1)
         self.assertEqual(_target_count(gm, aten.where.self), 0)
@@ -161,10 +183,19 @@ class CausalAttentionPassTests(TestCase):
         attention = next(
             node
             for node in causal.graph.nodes
+            if node.target is aten._scaled_dot_product_flash_attention.default
+        )
+        self.assertEqual(get_arg_value(attention, 3, "dropout_p"), 0.0)
+        self.assertTrue(get_arg_value(attention, 4, "is_causal"))
+
+        additive = getattr(gm, conditional.args[2].target)
+        fallback = next(
+            node
+            for node in additive.graph.nodes
             if node.target is aten._scaled_dot_product_efficient_attention.default
         )
-        self.assertIsNone(get_arg_value(attention, 3, "attn_bias"))
-        self.assertTrue(get_arg_value(attention, 6, "is_causal"))
+        self.assertIsNotNone(get_arg_value(fallback, 3, "attn_bias"))
+        self.assertFalse(get_arg_value(fallback, 4, "compute_log_sumexp"))
 
     def test_compile_time_all_true_padding(self):
         gm = _trace_attention(indexed_padding=True)

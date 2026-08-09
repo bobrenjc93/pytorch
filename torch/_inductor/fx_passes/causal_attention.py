@@ -419,8 +419,36 @@ def _make_attention_branches(
     scale: float | None,
 ) -> tuple[torch.fx.GraphModule, torch.fx.GraphModule] | None:
     op = aten._scaled_dot_product_efficient_attention.default
+    head_dim = query.shape[-1]
+    efficient_output_stride = (
+        query.shape[1] * query.shape[2] * head_dim,
+        head_dim,
+        query.shape[1] * head_dim,
+        1,
+    )
+    use_flash = (
+        not compute_log_sumexp
+        and query.dtype is torch.bfloat16
+        and query.device.type == "cuda"
+        and torch.version.hip is None
+        and torch.cuda.is_available()
+        and torch.backends.cuda.is_flash_attention_available()
+        and torch.backends.cuda.flash_sdp_enabled()
+        and torch.cuda.get_device_capability(query.device) == (9, 0)
+        and isinstance(head_dim, int)
+        and 0 < head_dim <= 256
+        and head_dim % 8 == 0
+        and all(tensor.stride(-1) == 1 for tensor in (query, key, value))
+        and query.stride() == efficient_output_stride
+    )
 
     def causal(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor) -> Any:
+        if use_flash:
+            return (
+                aten._scaled_dot_product_flash_attention.default(
+                    q, k, v, 0.0, True, scale=scale
+                )[0],
+            )
         return (op(q, k, v, None, compute_log_sumexp, 0.0, True, scale=scale)[0],)
 
     def additive(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor) -> Any:
