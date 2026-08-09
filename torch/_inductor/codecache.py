@@ -1607,6 +1607,7 @@ class FxGraphHashDetails:
         # so cached code compiled under one default dtype is not valid under another.
         self.default_dtype = torch.get_default_dtype()
         self.triton_interpret = os.environ.get("TRITON_INTERPRET", "0") == "1"
+        self.triton_override_arch = os.environ.get("TRITON_OVERRIDE_ARCH") or None
 
         # Global settings affecting matmul codegen.
         self.cuda_matmul_settings = (

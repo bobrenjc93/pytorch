@@ -49,6 +49,7 @@ from .. import config, ir, metrics, utils
 from ..async_compile import AsyncCompile
 from ..codecache import code_hash, get_path, PyCodeCache, write_atomic
 from ..debug import set_kernel_post_grad_provenance_tracing
+from ..dependencies import MemoryDep
 from ..ops_handler import DefaultHandler
 from ..runtime import triton_heuristics
 from ..runtime.benchmarking import benchmarker
@@ -4559,10 +4560,46 @@ class TritonKernel(SIMDKernel[TritonCSEVariable]):
         ):
             return False
 
-        previous_reads = {dep.name for dep in previous.read_writes.reads}
-        previous_writes = {dep.name for dep in previous.read_writes.writes}
-        current_reads = {dep.name for dep in current.read_writes.reads}
-        current_writes = {dep.name for dep in current.read_writes.writes}
+        previous_all_writes = {dep.name for dep in previous.read_writes.writes}
+        current_all_writes = {dep.name for dep in current.read_writes.writes}
+        previous_non_memory_reads = {
+            dep.name
+            for dep in previous.read_writes.reads
+            if not isinstance(dep, MemoryDep)
+        }
+        current_non_memory_reads = {
+            dep.name
+            for dep in current.read_writes.reads
+            if not isinstance(dep, MemoryDep)
+        }
+        # Auto mode requires indexed accesses where a PDL wait can be placed.
+        # Whole-buffer and ordering-only edges also disqualify a parallel data edge.
+        if (
+            previous_non_memory_reads & current_all_writes
+            or current_non_memory_reads & previous_all_writes
+        ):
+            return False
+
+        previous_reads = {
+            dep.name
+            for dep in previous.read_writes.reads
+            if isinstance(dep, MemoryDep)
+        }
+        previous_writes = {
+            dep.name
+            for dep in previous.read_writes.writes
+            if isinstance(dep, MemoryDep)
+        }
+        current_reads = {
+            dep.name
+            for dep in current.read_writes.reads
+            if isinstance(dep, MemoryDep)
+        }
+        current_writes = {
+            dep.name
+            for dep in current.read_writes.writes
+            if isinstance(dep, MemoryDep)
+        }
         return bool(
             previous_writes & (current_reads | current_writes)
             or previous_reads & current_writes
@@ -4609,7 +4646,14 @@ class TritonKernel(SIMDKernel[TritonCSEVariable]):
 
         local_capability = DeviceProperties.create(device).cc
         target_capability = local_capability
-        if V.aot_compilation and config.cuda.arch is not None:
+        triton_override_arch = os.environ.get("TRITON_OVERRIDE_ARCH")
+        if triton_override_arch:
+            from .cuda.compile_utils import _cuda_arch_number
+
+            target_capability = _cuda_arch_number(
+                triton_override_arch.removeprefix("sm")
+            )
+        elif V.aot_compilation and config.cuda.arch is not None:
             from .cuda.compile_utils import _cuda_arch_number
 
             target_capability = _cuda_arch_number(str(config.cuda.arch))
@@ -4637,6 +4681,11 @@ class TritonKernel(SIMDKernel[TritonCSEVariable]):
         self, wait_buffer, *dependencies, consider_reads=False
     ):
         if not self._enable_pdl_codegen():
+            return
+        if (
+            torch._inductor.config.triton.enable_pdl is None
+            and not self._auto_pdl_role()[0]
+        ):
             return
         current_node = V.kernel.current_node
         prev_node = (
@@ -4670,6 +4719,9 @@ class TritonKernel(SIMDKernel[TritonCSEVariable]):
     def _handle_pdl_after_load(self, launch_buffer, result_var):
         if not self._enable_pdl_codegen():
             return
+        has_predecessor = has_successor = True
+        if torch._inductor.config.triton.enable_pdl is None:
+            has_predecessor, has_successor = self._auto_pdl_role()
         if result_var.use_count > 1:  # we already went through this
             return
         # hoist after the loop
@@ -4680,8 +4732,10 @@ class TritonKernel(SIMDKernel[TritonCSEVariable]):
         # but (b) do not know if this is last yet
         # so we need to remember this (has_wait), which tells use
         # whether we would have needed it, and check if we are last
-        launch_buffer.writeline(self.GDC_WAIT)
-        launch_buffer.writeline(self.GDC_LAUNCH)
+        if has_predecessor:
+            launch_buffer.writeline(self.GDC_WAIT)
+        if has_successor:
+            launch_buffer.writeline(self.GDC_LAUNCH)
 
     def _filter_pdl(self, code: IndentedBuffer):
         new_lines = []
