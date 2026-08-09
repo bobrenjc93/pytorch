@@ -7456,7 +7456,13 @@ def var_mean_sum_(
     return x_var, x_mean
 
 
-def use_two_step_variance(x, axis, keepdim, input_dtype):
+@dataclasses.dataclass(frozen=True)
+class _VarianceAlgorithmDecision:
+    use_two_step: bool
+    requires_persistent_reduction: bool
+
+
+def _select_two_step_variance(x, axis, keepdim, input_dtype):
     # The two-step algorithm can be faster for non-split reductions because
     # Welford does more work per element. Preserve the old tiny-reduction
     # two-step path, keep Welford for the rest of the small reductions where
@@ -7514,6 +7520,12 @@ def use_two_step_variance(x, axis, keepdim, input_dtype):
             or dep.stride1_for_last_dim()
             for dep in reads
         )
+    # Track whether this exception, not an existing threshold, selected two-step.
+    selected_through_small_bf16_inference = (
+        use_small_bf16_inference
+        and not is_cuda_two_step_dtype
+        and int(reduction_numel) > config.unroll_reductions_threshold
+    )
     if device and device.type == "cpu":
         # 1024 is a default value to pass all the UTs about accuracy.
         # A larger threshold can still get performance benefits.
@@ -7531,25 +7543,36 @@ def use_two_step_variance(x, axis, keepdim, input_dtype):
         threshold = config.unroll_reductions_threshold
 
     if not isinstance(reduction_numel, sympy.Integer):
-        return False
+        return _VarianceAlgorithmDecision(False, False)
 
     reduction_numel = int(reduction_numel)
     if reduction_numel > threshold or output_numel == 1:
-        return False
+        return _VarianceAlgorithmDecision(False, False)
 
     if min_numel and config.unroll_reductions_threshold < reduction_numel < min_numel:
         if not use_small_bf16_inference:
-            return False
+            return _VarianceAlgorithmDecision(False, False)
+        selected_through_small_bf16_inference = True
 
     if not check_for_split:
-        return True
+        return _VarianceAlgorithmDecision(True, False)
 
     _, split = ir.Reduction.num_splits(
         reduction_numel=reduction_numel,
         reduction_type="sum",
         **kwargs,
     )
-    return V.graph.sizevars.statically_known_leq(split, 1)
+    use_two_step = V.graph.sizevars.statically_known_leq(split, 1)
+    return _VarianceAlgorithmDecision(
+        use_two_step,
+        use_two_step and selected_through_small_bf16_inference,
+    )
+
+
+def use_two_step_variance(x, axis, keepdim, input_dtype):
+    return _select_two_step_variance(
+        x, axis=axis, keepdim=keepdim, input_dtype=input_dtype
+    ).use_two_step
 
 
 def var_mean_welford_(x, axis, *, correction, keepdim, return_mean):
@@ -7606,23 +7629,17 @@ def var_mean_helper_(x, *, axis, correction, keepdim, return_mean):
         keepdim=keepdim,
         return_mean=return_mean,
     )
-    use_two_step = config.mtia.disable_welford_reduction or use_two_step_variance(
-        x, axis=axis, keepdim=keepdim, input_dtype=out_dtype
+    decision = (
+        _VarianceAlgorithmDecision(True, False)
+        if config.mtia.disable_welford_reduction
+        else _select_two_step_variance(
+            x, axis=axis, keepdim=keepdim, input_dtype=out_dtype
+        )
     )
-    if use_two_step:
-        reduction_numel = sympy_product(
-            x.get_size()[i] for i in _validate_reduction_axis(x, axis)
-        )
-        requires_persistent_reduction = (
-            not config.mtia.disable_welford_reduction
-            and x.get_device() is not None
-            and x.get_device().type == "cuda"
-            and isinstance(reduction_numel, sympy.Integer)
-            and 256 <= int(reduction_numel) < 1024
-        )
+    if decision.use_two_step:
         output = var_mean_sum_(
             **kwargs,
-            requires_persistent_reduction=requires_persistent_reduction,
+            requires_persistent_reduction=decision.requires_persistent_reduction,
         )
     else:
         output = var_mean_welford_(**kwargs)

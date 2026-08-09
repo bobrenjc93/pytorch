@@ -2074,10 +2074,19 @@ class SIMDScheduling(BaseScheduling):
         _, (numel2, rnumel2) = node2.group
         why = WhyNoFuse(node1, node2)
 
-        if (
+        mix_order_reduction = False
+        if node1.is_reduction() and node2.is_reduction() and not (
+            numel1 == numel2 and rnumel1 == rnumel2
+        ):
+            from torch._inductor.scheduler import MixOrderReduction
+
+            mix_order_reduction = MixOrderReduction.can_fuse(node1, node2)
+
+        requires_persistent_reduction = (
             node1.requires_persistent_reduction() is True
             or node2.requires_persistent_reduction() is True
-        ):
+        )
+        if requires_persistent_reduction and not mix_order_reduction:
             fused_nodes = [*node1.get_nodes(), *node2.get_nodes()]
             reduction_node = node1 if node1.is_reduction() else node2
             if not reduction_node.is_reduction():
@@ -2100,9 +2109,7 @@ class SIMDScheduling(BaseScheduling):
         if node1.is_reduction() and node2.is_reduction():
             reduction_can_fuse = numel1 == numel2 and rnumel1 == rnumel2
             if not reduction_can_fuse:
-                from torch._inductor.scheduler import MixOrderReduction
-
-                reduction_can_fuse = MixOrderReduction.can_fuse(node1, node2)
+                reduction_can_fuse = mix_order_reduction
 
             if not reduction_can_fuse:
                 # Scheduler legality creates the fused nested node, but SIMD
