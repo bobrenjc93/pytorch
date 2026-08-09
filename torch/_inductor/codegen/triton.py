@@ -4552,19 +4552,15 @@ class TritonKernel(SIMDKernel[TritonCSEVariable]):
         node_to_stream = current.scheduler.node_to_stream
         if node_to_stream.get(previous, 0) != node_to_stream.get(current, 0):
             return False
+        # Mutation edges can use different scheduler and codegen buffer names,
+        # so automatic mode cannot reliably place the wait before the access.
+        if current.has_aliasing_or_mutation() or any(
+            node.mutation_renames for node in current.get_nodes()
+        ):
+            return False
 
-        mutation_renames = {
-            name: renamed
-            for node in current.get_nodes()
-            for name, renamed in node.mutation_renames.items()
-        }
-        rename = mutation_renames.get
-        previous_reads = {
-            rename(dep.name, dep.name) for dep in previous.read_writes.reads
-        }
-        previous_writes = {
-            rename(dep.name, dep.name) for dep in previous.read_writes.writes
-        }
+        previous_reads = {dep.name for dep in previous.read_writes.reads}
+        previous_writes = {dep.name for dep in previous.read_writes.writes}
         current_reads = {dep.name for dep in current.read_writes.reads}
         current_writes = {dep.name for dep in current.read_writes.writes}
         return bool(
@@ -4603,6 +4599,8 @@ class TritonKernel(SIMDKernel[TritonCSEVariable]):
         if device.type != "cuda":
             return False
         if enable_pdl is None:
+            if os.environ.get("TRITON_INTERPRET", "0") == "1":
+                return False
             if V.aot_compilation or V.graph.cpp_wrapper or not V.graph.is_inference or (
                 config.use_static_triton_launcher
                 and config.strict_static_triton_launcher
