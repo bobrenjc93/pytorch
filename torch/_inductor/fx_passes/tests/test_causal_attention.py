@@ -283,6 +283,118 @@ class CausalAttentionPassTests(TestCase):
         self.assertEqual(policies[0][0], "FLASH_ATTENTION")
         self.assertNotIn("FLASH_ATTENTION", policies[1])
 
+    def test_sdpa_policy_metadata_does_not_leak(self):
+        node_metadata = []
+
+        @torch._dynamo.dont_skip_tracing
+        def fn(query):
+            with torch.fx.traceback.annotate({"outer": True}):
+                result = F.scaled_dot_product_attention(query, query, query)
+                return result + 1
+
+        def backend(gm, _):
+            node_metadata.extend(
+                dict(node.meta.get("custom", {}))
+                for node in gm.graph.nodes
+                if node.op == "call_function"
+            )
+            return gm.forward
+
+        query = torch.randn(1, 2, 8, 16)
+        torch._dynamo.reset()
+        try:
+            torch.compile(fn, backend=backend, fullgraph=True)(query)
+        finally:
+            torch._dynamo.reset()
+
+        self.assertEqual(len(node_metadata), 2)
+        self.assertTrue(node_metadata[0]["outer"])
+        self.assertIn(SDPA_KERNEL_BACKENDS_META, node_metadata[0])
+        self.assertEqual(node_metadata[1], {"outer": True})
+
+    def test_sdpa_policy_change_during_backend_recompiles(self):
+        policies = []
+
+        @torch._dynamo.dont_skip_tracing
+        def fn(query):
+            return F.scaled_dot_product_attention(query, query, query)
+
+        flash_first = [
+            SDPBackend.FLASH_ATTENTION,
+            SDPBackend.EFFICIENT_ATTENTION,
+            SDPBackend.MATH,
+            SDPBackend.CUDNN_ATTENTION,
+            SDPBackend.OVERRIDEABLE,
+        ]
+        efficient_first = [
+            SDPBackend.EFFICIENT_ATTENTION,
+            SDPBackend.FLASH_ATTENTION,
+            SDPBackend.MATH,
+            SDPBackend.CUDNN_ATTENTION,
+            SDPBackend.OVERRIDEABLE,
+        ]
+
+        def backend(gm, _):
+            policies.extend(
+                node.meta["custom"][SDPA_KERNEL_BACKENDS_META]
+                for node in gm.graph.nodes
+                if SDPA_KERNEL_BACKENDS_META in node.meta.get("custom", {})
+            )
+            if len(policies) == 1:
+                torch.nn.attention._sdpa_kernel(
+                    efficient_first, set_priority=True
+                )
+            return gm.forward
+
+        query = torch.randn(1, 2, 8, 16)
+        torch._dynamo.reset()
+        try:
+            compiled = torch.compile(fn, backend=backend, fullgraph=True)
+            with sdpa_kernel(flash_first, set_priority=True):
+                compiled(query)
+                compiled(query)
+        finally:
+            torch._dynamo.reset()
+
+        self.assertEqual(len(policies), 2)
+        self.assertEqual(policies[0][0], "FLASH_ATTENTION")
+        self.assertEqual(policies[1][0], "EFFICIENT_ATTENTION")
+
+    def test_sdpa_policy_guard_with_function_context(self):
+        policies = []
+
+        @torch._dynamo.dont_skip_tracing
+        def fn(query):
+            with sdpa_kernel(
+                [
+                    SDPBackend.EFFICIENT_ATTENTION,
+                    SDPBackend.FLASH_ATTENTION,
+                    SDPBackend.MATH,
+                ],
+                set_priority=True,
+            ):
+                return F.scaled_dot_product_attention(query, query, query)
+
+        def backend(gm, _):
+            policies.extend(
+                node.meta["custom"][SDPA_KERNEL_BACKENDS_META]
+                for node in gm.graph.nodes
+                if SDPA_KERNEL_BACKENDS_META in node.meta.get("custom", {})
+            )
+            return gm.forward
+
+        query = torch.randn(1, 2, 8, 16)
+        torch._dynamo.reset()
+        try:
+            compiled = torch.compile(fn, backend=backend, fullgraph=True)
+            compiled(query)
+            compiled(query)
+        finally:
+            torch._dynamo.reset()
+
+        self.assertEqual(len(policies), 1)
+        self.assertEqual(policies[0][0], "EFFICIENT_ATTENTION")
+
     def test_compile_time_all_true_padding(self):
         gm = _trace_attention(indexed_padding=True)
 

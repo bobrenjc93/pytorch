@@ -242,6 +242,7 @@ def _sequence_length(value: Any) -> int:
 
 
 _COW_TENSOR_UNSUPPORTED = object()
+_NO_EXPECTED_VALUE = object()
 
 
 def _try_is_cow_tensor(value: Any) -> bool | object:
@@ -1243,6 +1244,16 @@ def _guard_create_fn_keyword(guard: Guard, name: str) -> Any:
     if not isinstance(create_fn, functools.partial):
         raise TypeError(f"Guard create_fn is not a functools.partial: {create_fn}")
     return create_fn.keywords[name]
+
+
+def _equals_match_expected_value(guard: Guard, value: Any) -> Any:
+    create_fn = guard.create_fn
+    if (
+        isinstance(create_fn, functools.partial)
+        and "expected_value" in create_fn.keywords
+    ):
+        return create_fn.keywords["expected_value"]
+    return value
 
 
 def register_guard_check_spec(
@@ -2800,12 +2811,19 @@ class GuardBuilder(GuardBuilderBase):
         )
 
     @register_guard_check_spec(
-        get_metadata_fn=lambda guard, value: value,
+        get_metadata_fn=_equals_match_expected_value,
         eval_fn=lambda value, metadata: value == metadata,
     )
-    def EQUALS_MATCH(self, guard: Guard, recompile_hint: str | None = None) -> None:
+    def EQUALS_MATCH(
+        self,
+        guard: Guard,
+        recompile_hint: str | None = None,
+        expected_value: Any = _NO_EXPECTED_VALUE,
+    ) -> None:
         ref = self.arg_ref(guard)
-        val = self.get(guard)
+        val = expected_value
+        if val is _NO_EXPECTED_VALUE:
+            val = self.get(guard)
         if np:
             np_types: tuple[type[Any], ...] = (
                 np.int8,

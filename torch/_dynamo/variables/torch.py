@@ -998,21 +998,32 @@ class TorchInGraphFunctionVariable(BaseTorchVariable):
             *args: VariableTracker,
             **kwargs: VariableTracker,
         ) -> VariableTracker:
+            backend_state = tx.output.capture_sdpa_kernel_backend_state()
             backends = get_sdpa_kernel_backends()
-            policy_source = CallFunctionNoArgsSource(
-                AttrSource(
+            if not tx.output.sdpa_kernel_backend_guard_installed:
+                policy_source = CallFunctionNoArgsSource(
                     AttrSource(
-                        AttrSource(ImportSource("torch"), "_dynamo"), "utils"
-                    ),
-                    get_sdpa_kernel_backend_state.__name__,
+                        AttrSource(
+                            AttrSource(ImportSource("torch"), "_dynamo"),
+                            "utils",
+                        ),
+                        get_sdpa_kernel_backend_state.__name__,
+                    )
                 )
-            )
-            install_guard(policy_source.make_guard(GuardBuilder.EQUALS_MATCH))
+                install_guard(
+                    policy_source.make_guard(
+                        functools.partial(
+                            GuardBuilder.EQUALS_MATCH,
+                            expected_value=backend_state,
+                        )
+                    )
+                )
+                tx.output.sdpa_kernel_backend_guard_installed = True
             with (
-                torch.fx.traceback.preserve_node_meta(),
                 torch.fx.traceback.annotate(
                     {SDPA_KERNEL_BACKENDS_META: backends}
                 ),
+                torch.fx.traceback.preserve_node_meta(),
             ):
                 return wrap_fx_proxy(
                     tx=tx,

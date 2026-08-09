@@ -1543,6 +1543,7 @@ class SDPAKernelVariable(ContextWrappingVariable):
         return nodes
 
     def enter(self, tx: "InstructionTranslatorBase") -> VariableTracker:
+        tx.output.capture_sdpa_kernel_backend_state()
         self.prev_backends = torch.nn.attention._cur_sdpa_kernel_backends(
             with_priority=self.set_priority
         )

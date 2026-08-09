@@ -156,6 +156,7 @@ from .utils import (
     get_chromium_event_logger,
     get_instruction_source_311,
     get_locals_to_steal,
+    get_sdpa_kernel_backend_state,
     get_static_address_type,
     get_unique_name_wrt,
     graph_break_reasons,
@@ -754,6 +755,12 @@ class OutputGraph(OutputGraphCommon):
             from torch._inductor import _CudagraphAnnotation as _CGA
 
             self.cudagraph_annotation = _CGA(fwd=_override[0], bwd=_override[1])
+
+        # Function-local sdpa_kernel contexts restore this frame-entry policy.
+        self.sdpa_kernel_backend_state: (
+            tuple[bool, bool, bool, bool, bool, tuple[int, ...]] | None
+        ) = None
+        self.sdpa_kernel_backend_guard_installed = False
 
         self.region_tracker = GraphRegionTracker()
         self._emit_debugger_breakpoint: bool = False
@@ -1521,6 +1528,22 @@ class OutputGraph(OutputGraphCommon):
             {},
             {},  # type: ignore[arg-type]
         )
+
+    def capture_sdpa_kernel_backend_state(
+        self,
+    ) -> tuple[bool, bool, bool, bool, bool, tuple[int, ...]]:
+        if self.sdpa_kernel_backend_state is None:
+            self.sdpa_kernel_backend_state = get_sdpa_kernel_backend_state()
+        return self.sdpa_kernel_backend_state
+
+    def check_sdpa_kernel_backend_state(self) -> None:
+        if (
+            self.sdpa_kernel_backend_guard_installed
+            and get_sdpa_kernel_backend_state() != self.sdpa_kernel_backend_state
+        ):
+            raise exc.SpeculationRestartAnalysis(
+                restart_reason="SDPA kernel policy changed during compilation"
+            )
 
     def count_calls(self) -> int:
         return count_calls(self.graph)
@@ -2990,7 +3013,9 @@ class OutputGraph(OutputGraphCommon):
 
             gm.graph.lint()
             with self.restore_global_state():
+                self.check_sdpa_kernel_backend_state()
                 compiled_fn = self.call_user_compiler(gm, example_inputs)
+                self.check_sdpa_kernel_backend_state()
 
             from torch.fx._lazy_graph_module import _LazyGraphModule
 
