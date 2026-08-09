@@ -832,6 +832,9 @@ class InvokeSubgraphReuseCondition:
     # handler is a pre-resolved GuardCheckSpec from GUARD_VALUE_DISPATCH.
     guards: list[tuple[Source, GuardCheckSpec, object, Guard]]
 
+    # Ordered ambient policy for subgraphs containing SDPA, or None otherwise.
+    sdpa_kernel_backends: tuple[str, ...] | None = None
+
     # TreeSpec from pytree.tree_flatten of the (args, kwargs) structure.
     # On cache hit, we verify the new call has the same treespec.
     treespec: pytree.TreeSpec | None = None

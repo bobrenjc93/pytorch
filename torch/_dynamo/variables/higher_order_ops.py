@@ -35,7 +35,7 @@ import torch._C
 import torch.fx
 import torch.nn
 from torch._dispatch.python import enable_python_dispatcher
-from torch._dynamo.utils import get_fake_value
+from torch._dynamo.utils import get_fake_value, get_node_sdpa_kernel_backends
 from torch._dynamo.variables.constant import ConstantVariable
 from torch._dynamo.variables.ctx_manager import RepararametrizeModuleContextVariable
 from torch._dynamo.variables.functions import UserFunctionVariable
@@ -1054,6 +1054,10 @@ def are_same_graph_modules(
 
     for a_node, b_node in zip(a_mod.graph.nodes, b_mod.graph.nodes):
         if a_node.op != b_node.op:
+            return False
+        if get_node_sdpa_kernel_backends(a_node) != get_node_sdpa_kernel_backends(
+            b_node
+        ):
             return False
 
         if a_node.op == "placeholder":

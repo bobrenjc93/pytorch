@@ -756,7 +756,7 @@ class OutputGraph(OutputGraphCommon):
 
             self.cudagraph_annotation = _CGA(fwd=_override[0], bwd=_override[1])
 
-        # Function-local sdpa_kernel contexts restore this frame-entry policy.
+        # In-graph SDPA policy mutations restore this frame-entry policy.
         self.sdpa_kernel_backend_state: (
             tuple[bool, bool, bool, bool, bool, tuple[int, ...]] | None
         ) = None

@@ -991,6 +991,33 @@ class TorchInGraphFunctionVariable(BaseTorchVariable):
         )
         from .builder import wrap_fx_proxy, wrap_fx_proxy_cls
 
+        @register(
+            torch.backends.cuda.enable_cudnn_sdp,
+            torch.backends.cuda.enable_flash_sdp,
+            torch.backends.cuda.enable_math_sdp,
+            torch.backends.cuda.enable_mem_efficient_sdp,
+            torch._C._set_sdp_use_cudnn,
+            torch._C._set_sdp_use_flash,
+            torch._C._set_sdp_use_math,
+            torch._C._set_sdp_use_mem_efficient,
+            torch._C._set_sdp_use_overrideable,
+        )
+        def handle_sdpa_kernel_setter(
+            self,
+            tx: "InstructionTranslatorBase",
+            *args: VariableTracker,
+            **kwargs: VariableTracker,
+        ) -> VariableTracker:
+            tx.output.capture_sdpa_kernel_backend_state()
+            return wrap_fx_proxy(
+                tx=tx,
+                proxy=tx.output.create_proxy(
+                    "call_function",
+                    self.value,
+                    *proxy_args_kwargs(args, kwargs),
+                ),
+            )
+
         @register(torch._C._nn.scaled_dot_product_attention)
         def handle_scaled_dot_product_attention(
             self,

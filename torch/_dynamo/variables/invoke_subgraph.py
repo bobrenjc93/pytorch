@@ -24,7 +24,12 @@ from torch._dynamo.guards import (
     UnsupportedGuardCheckSpec,
 )
 from torch._dynamo.source import SyntheticLocalSource
-from torch._dynamo.utils import _make_inlined, unpack_iterable
+from torch._dynamo.utils import (
+    _make_inlined,
+    get_node_sdpa_kernel_backends,
+    get_sdpa_kernel_backends,
+    unpack_iterable,
+)
 from torch._dynamo.variables.base import VariableTracker
 from torch._dynamo.variables.constant import ConstantVariable
 from torch._dynamo.variables.functions import UserFunctionVariable
@@ -94,17 +99,19 @@ hc_log = torch._logging.getArtifactLogger(__name__, "hierarchical_compile")
 # Paired with an InvokeSubgraphReuseCondition containing:
 #   - input_checks: (tag, tensor_metadata) per input
 #   - guards: (source, handler, expected, guard) tuples
+#   - sdpa_kernel_backends: ordered policy for an SDPA-containing region
 #   - treespec: pytree structure of the args
 #   - traced_sources: sources accessed during the trace
 #
 # CACHE LOOKUP (is_reusable)
 # ==========================
 # On subsequent calls:
-#   1. Input structure match -- same treespec, tags, tensor metadata.
-#   2. Source replacement -- clone each guard's source with a replacement map
+#   1. SDPA policy match for regions containing SDPA.
+#   2. Input structure match -- same treespec, tags, tensor metadata.
+#   3. Source replacement -- clone each guard's source with a replacement map
 #      (old: L['self'].layers[0].weight -> new: L['self'].layers[1].weight),
 #      then evaluate against the new source's runtime value.
-#   3. Mutation check -- reject if the subgraph mutated any captured var.
+#   4. Mutation check -- reject if the subgraph mutated any captured var.
 #
 # A shared resolve_cache memoizes intermediate source resolution (e.g.
 # L['self'].layers is evaluated once and reused across all guards).
@@ -524,6 +531,7 @@ def build_reuse_condition(
     tx: "InstructionTranslatorBase",
     fingerprint: InputFingerprint,
     traced_sources: OrderedSet[Source],
+    body_gmod: GraphModule,
 ) -> InvokeSubgraphReuseCondition | None:
     """Build an InvokeSubgraphReuseCondition from a traced subgraph.
 
@@ -624,9 +632,18 @@ def build_reuse_condition(
 
     hc_log.debug("Number of guards %s", len(guard_tuples))
 
+    policy_sensitive = any(
+        get_node_sdpa_kernel_backends(node) is not None
+        for module in body_gmod.modules()
+        if isinstance(module, GraphModule)
+        for node in module.graph.nodes
+    )
     return InvokeSubgraphReuseCondition(
         input_checks=input_checks,
         guards=guard_tuples,
+        sdpa_kernel_backends=(
+            get_sdpa_kernel_backends() if policy_sensitive else None
+        ),
         treespec=fingerprint.treespec,
         traced_sources=traced_sources,
     )
@@ -652,16 +669,26 @@ def is_reusable(
 ) -> bool:
     """Check if a cached subgraph can be reused for the current call.
 
-    Three-phase check:
-    (1) Verify that intermediates (tensor metadata, symnode types, constant
-        values) match the cached input_checks — these are lightweight
+    Four-phase check:
+    (1) Verify that the ordered SDPA policy still matches for an SDPA region.
+    (2) Verify that intermediates (tensor metadata, symnode types, constant
+        values) match the cached input_checks. These are lightweight
         structural comparisons that don't require source resolution.
-    (2) Check for mutations on the remapped traced_sources — if any source
+    (3) Check for mutations on the remapped traced_sources. If any source
         the subgraph read has been mutated since the original trace, the
         cached guards would evaluate against stale values.
-    (3) Build a source replacement mapping (old sources → new sources) and
+    (4) Build a source replacement mapping (old sources -> new sources) and
         re-evaluate the snapshotted guards under the new sources.
     """
+    if (
+        condition.sdpa_kernel_backends is not None
+        and get_sdpa_kernel_backends() != condition.sdpa_kernel_backends
+    ):
+        hc_log.debug(
+            "subgraph_reuse: reuse failed -- SDPA kernel policy mismatch",
+        )
+        return False
+
     # Structural check: treespec must match first.
     if condition.treespec is not None and fingerprint.treespec != condition.treespec:
         hc_log.debug(
@@ -1464,6 +1491,7 @@ class InvokeSubgraphHigherOrderVariable(WrapHigherOrderVariable):
                         tx,
                         fingerprint,
                         traced_sources,
+                        body_gmod,
                     )
                     if condition is not None:
                         save_reuse_entry(

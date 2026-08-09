@@ -184,6 +184,14 @@ def get_sdpa_kernel_backends() -> tuple[str, ...]:
     )
 
 
+def get_node_sdpa_kernel_backends(node: fx.Node) -> tuple[str, ...] | None:
+    custom = node.meta.get("custom")
+    if not isinstance(custom, dict):
+        return None
+    backends = custom.get(SDPA_KERNEL_BACKENDS_META)
+    return backends if isinstance(backends, tuple) else None
+
+
 def get_sdpa_kernel_backend_state() -> tuple[bool, bool, bool, bool, bool, tuple[int, ...]]:
     return (
         torch._C._get_cudnn_sdp_enabled(),

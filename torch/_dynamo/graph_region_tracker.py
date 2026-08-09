@@ -32,6 +32,7 @@ from torch.utils._ordered_set import OrderedSet
 from torch.utils._pytree import tree_flatten
 
 from .graph_utils import _get_flat_args_unique
+from .utils import get_node_sdpa_kernel_backends
 
 
 T = TypeVar("T")
@@ -243,6 +244,7 @@ class GraphRegionTracker:
             lineno,
             instruction_pointer,
             _normalize_args(node),
+            get_node_sdpa_kernel_backends(node),
         )
         return sha256_hash(self.input_pickler.dumps(key))
 
